@@ -104,6 +104,8 @@ export function emptySessionList() {
     loadMoreFailed: false,
     loadRequest: null,
     pageRequest: null,
+    refreshRequest: null,
+    refreshQueued: null,
     version: 0
   }
 }

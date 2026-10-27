@@ -10,6 +10,7 @@ from mato_loop_backend.api.routes.browser_integrations import router as browser_
 from mato_loop_backend.api.routes.browsers import router as browsers_router
 from mato_loop_backend.api.routes.channels import router as channels_router
 from mato_loop_backend.api.routes.commands import router as commands_router
+from mato_loop_backend.api.routes.events import router as events_router
 from mato_loop_backend.api.routes.execution_agents import router as execution_agents_router
 from mato_loop_backend.api.routes.general_settings import router as general_settings_router
 from mato_loop_backend.api.routes.git import router as git_router
@@ -41,6 +42,7 @@ from mato_loop_backend.api.routes.workspace import router as workspace_router
 
 api_router = APIRouter()
 api_router.include_router(health_router, tags=["health"])
+api_router.include_router(events_router, tags=["events"])
 api_router.include_router(auth_router, tags=["auth"])
 api_router.include_router(automations_router, tags=["automations"])
 api_router.include_router(channels_router, tags=["channels"])

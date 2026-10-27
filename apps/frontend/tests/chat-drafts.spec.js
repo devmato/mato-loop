@@ -1154,6 +1154,18 @@ describe('chat drafts', () => {
     expect(chat.loadError).toBeNull()
   })
 
+  it('keeps an update received while the selected session is initially loading', async () => {
+    let finishLoad
+    api.get.mockReturnValueOnce(new Promise((resolve) => { finishLoad = resolve }))
+      .mockResolvedValue({ data: { id: 'session-1', messages: [{ id: 'new', role: 'user' }] } })
+    const chat = useChatStore()
+    const loading = chat.loadSession('session-1')
+    const refreshing = chat.refreshSession('session-1')
+    finishLoad({ data: { id: 'session-1', messages: [] } })
+    await Promise.all([loading, refreshing])
+    expect(chat.current.messages.map((message) => message.id)).toEqual(['new'])
+  })
+
   it.each([true, false])('acknowledges the session with or without an unread assistant message (%s)', async (hasMessage) => {
     api.get.mockResolvedValue({
       data: {
@@ -1300,6 +1312,22 @@ describe('chat drafts', () => {
       suppressErrorToast: true
     }))
     expect(chat.eventSource.url).toBe('/api/sessions/session-1/runs/run-1/events')
+  })
+
+  it('batches queued session refreshes without losing changes after an in-flight read', async () => {
+    let finishFirst
+    api.get.mockReturnValueOnce(new Promise((resolve) => { finishFirst = resolve }))
+      .mockResolvedValue({ data: { id: 'session-1', messages: [{ id: 'new' }] } })
+    const chat = useChatStore()
+    chat.selectedSessionId = 'session-1'
+    chat.current = { id: 'session-1', messages: [] }
+    const first = chat.refreshSession('session-1')
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledOnce())
+    const second = chat.refreshSession('session-1')
+    const third = chat.refreshSession('session-1')
+    finishFirst({ data: { id: 'session-1', messages: [] } })
+    await Promise.all([first, second, third])
+    expect([api.get.mock.calls.length, chat.current.messages.map((message) => message.id)]).toEqual([2, ['new']])
   })
 
   it('streams and promotes a canonical context summary', async () => {
@@ -1568,7 +1596,7 @@ describe('chat drafts', () => {
 
     const firstLoad = chat.loadSession('session-1')
     const secondLoad = chat.loadSession('session-2')
-    await chat.refreshSession('session-2')
+    const refreshing = chat.refreshSession('session-2')
     expect(requests['/sessions/session-2'].config.signal.aborted).toBe(false)
     requests['/sessions/session-1'].reject(new Error('aborted'))
     await firstLoad
@@ -1579,6 +1607,11 @@ describe('chat drafts', () => {
       data: { id: 'session-2', messages: [], activeRun: null }
     })
     await secondLoad
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledTimes(3))
+    requests['/sessions/session-2'].resolve({
+      data: { id: 'session-2', messages: [], activeRun: null }
+    })
+    await refreshing
 
     expect(chat.current.id).toBe('session-2')
     expect(chat.loading).toBe(false)
@@ -2044,6 +2077,7 @@ describe('chat drafts', () => {
 
     source.emit('run.phase', { phase: 'processing_tool', tool: 'write_file', toolCallId: 'call-1' })
     source.emit('tool.completed', { tool: 'write_file', toolCallId: 'call-1', metadata: {} })
+    await vi.waitFor(() => expect(sessionRefreshCalls).toBe(1))
     source.emit('message.completed', {
       message: { id: 'assistant-1', role: 'assistant', content: 'Fertig', toolCalls: [] }
     })
@@ -2274,6 +2308,52 @@ describe('chat drafts', () => {
     expect(chat.sessions).toEqual([{ id: 'session-1', title: 'Aktuell' }])
   })
 
+  it('keeps a list update when a concurrent session reload changes its version', async () => {
+    let finishList
+    const updated = sessionPage([{ id: 'session-1' }, { id: 'session-2', title: 'Neu' }])
+    let listCalls = 0
+    api.get.mockImplementation((url) => url !== '/sessions'
+      ? Promise.resolve({ data: { id: 'session-1', messages: [] } })
+      : ++listCalls === 1 ? new Promise((resolve) => { finishList = resolve }) : Promise.resolve(updated))
+    const chat = useChatStore()
+    setSessions(chat, [{ id: 'session-1' }, { id: 'session-2', title: 'Alt' }])
+    chat.current = { id: 'session-1', messages: [] }
+    chat.selectedSessionId = 'session-1'
+    const detail = chat.refreshSession('session-1')
+    const list = chat.refreshSessions()
+    await detail
+    finishList(updated)
+    await list
+    expect(chat.sessions.find((session) => session.id === 'session-2').title).toBe('Neu')
+  })
+
+  it('keeps a list update received during its initial load', async () => {
+    let finishLoad
+    api.get.mockReturnValueOnce(new Promise((resolve) => { finishLoad = resolve }))
+      .mockResolvedValue(sessionPage([{ id: 'session-1', title: 'Neu' }]))
+    const chat = useChatStore()
+    const loading = chat.fetchSessions()
+    const refreshing = chat.refreshSessions()
+    finishLoad(sessionPage([{ id: 'session-1', title: 'Alt' }]))
+    await Promise.all([loading, refreshing])
+    expect(chat.sessions[0].title).toBe('Neu')
+  })
+
+  it('batches queued list refreshes without reusing a read from before the change', async () => {
+    let finishFirst
+    api.get.mockReturnValueOnce(new Promise((resolve) => { finishFirst = resolve }))
+      .mockResolvedValue(sessionPage([{ id: 'session-1', title: 'Aktuell' }]))
+    const chat = useChatStore()
+    setSessions(chat, [{ id: 'session-1', title: 'Alt' }])
+    const first = chat.refreshSessions()
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledOnce())
+    const second = chat.refreshSessions()
+    const third = chat.refreshSessions()
+    finishFirst(sessionPage([{ id: 'session-1', title: 'Alt' }]))
+    await Promise.all([first, second, third])
+    expect([api.get.mock.calls.length, chat.sessions[0].title]).toEqual([2, 'Aktuell'])
+  })
+
   it('promotes canonical completed content before refreshing the persisted message', async () => {
     global.EventSource = EventSourceMock
     let resolveRefresh
@@ -2496,7 +2576,11 @@ describe('chat drafts', () => {
 
   it('does not let a stale destination refresh erase a moved session', async () => {
     let resolveRefresh
-    api.get.mockReturnValue(new Promise((resolve) => { resolveRefresh = resolve }))
+    api.get.mockReturnValueOnce(new Promise((resolve) => { resolveRefresh = resolve }))
+      .mockResolvedValue(sessionPage([
+        { id: 'session-1', title: 'Verschoben', projectId: 'project-2' },
+        { id: 'session-2', title: 'Vorhanden', projectId: 'project-2' }
+      ]))
     api.patch.mockResolvedValue({
       data: { id: 'session-1', title: 'Verschoben', projectId: 'project-2' }
     })
@@ -2509,6 +2593,7 @@ describe('chat drafts', () => {
     target.items = [{ id: 'session-2', title: 'Vorhanden', projectId: 'project-2' }]
 
     const refreshing = chat.refreshSessions(null, 'project-2')
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledOnce())
     await chat.moveSession('session-1', 'project-2')
     resolveRefresh(sessionPage([{ id: 'session-2', title: 'Alt', projectId: 'project-2' }]))
     await refreshing

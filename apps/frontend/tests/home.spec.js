@@ -23,6 +23,19 @@ import { useChatStore } from '../src/features/chat/store'
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.resetAllMocks() })
 
+it('reloads after a change received during the initial Home request', async () => {
+  setActivePinia(createPinia())
+  let finishLoad
+  mocks.get.mockReturnValueOnce(new Promise((resolve) => { finishLoad = resolve }))
+    .mockResolvedValue({ data: { items: [{ id: 'new' }] } })
+  const home = useHomeStore()
+  const loading = home.load()
+  const refreshing = home.load()
+  finishLoad({ data: { items: [] } })
+  await Promise.all([loading, refreshing])
+  expect(home.sessions).toEqual([{ id: 'new' }])
+})
+
 it('shows effective status, opens a session and lets failed or empty data be refreshed', async () => {
   const pinia = createPinia()
   setActivePinia(pinia)

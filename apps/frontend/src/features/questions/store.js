@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { errorDescriptor } from 'src/utils/api-errors'
-import { useApprovalStore } from 'stores/approvals'
 
 const TERMINAL_ANSWER_ERRORS = new Set([
   'question.runInactive',
@@ -68,8 +67,6 @@ export const useQuestionStore = defineStore('questions', {
     },
     async answer(id, answers, rememberForSession = []) {
       this.submittingId = id
-      const administratorGrant = this.pending.find((item) => item.id === id)?.questions
-        ?.some((question) => question.administrator && rememberForSession.includes(question.id))
       try {
         await api.post(`/questions/${id}/answers`, {
           answers,
@@ -78,9 +75,6 @@ export const useQuestionStore = defineStore('questions', {
         this.revision += 1
         this.pending = this.pending.filter((item) => item.id !== id)
         delete this.drafts[id]
-        if (administratorGrant && useApprovalStore().grantsLoaded) {
-          void useApprovalStore().fetchGrants({ suppressErrorToast: true }).catch(() => {})
-        }
       } catch (error) {
         if (TERMINAL_ANSWER_ERRORS.has(errorDescriptor(error)?.code)) {
           await this.fetchPending()

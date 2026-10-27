@@ -120,11 +120,13 @@ import { useConfirm } from 'src/composables/confirm'
 import { permissionGrantDisplay } from 'src/utils/approval-display'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'src/features/chat/store'
+import { useControlCenterStore } from 'stores/control-center'
 
 defineOptions({ name: 'SessionApp' })
 
 const approvals = useApprovalStore()
 const chat = useChatStore()
+const controlCenter = useControlCenterStore()
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const revokingId = ref(null)
@@ -135,6 +137,8 @@ const grantContext = computed(() => JSON.stringify([
   chat.current?.preferredExecutionAgentId, chat.current?.currentDirectory
 ]))
 const loadedGrantContext = ref(null)
+const visible = computed(() => controlCenter.open && controlCenter.activeContentId === 'session'
+  && (!$q.screen.lt.md || !controlCenter.restoredOpen))
 const defaultChannel = computed(() => {
   const channel = chat.current?.defaultChannel
   if (channel?.type === 'endpoint' && channel.provider === 'telegram') {
@@ -191,10 +195,10 @@ async function revokeAll() {
 }
 
 watch(
-  [grantContext, () => chat.runId, () => chat.current?.activeRun?.id],
+  [grantContext, () => chat.runId, () => chat.current?.activeRun?.id, visible],
   ([context], previous = []) => {
     if (context !== previous[0]) loadedGrantContext.value = null
-    void loadGrants()
+    if (visible.value) void loadGrants()
   },
   { immediate: true }
 )

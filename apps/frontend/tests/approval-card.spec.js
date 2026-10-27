@@ -15,6 +15,7 @@ import SessionApp from '../src/features/chat/components/SessionApp.vue'
 import MemorySettingsPage from '../src/features/memory/MemorySettingsPage.vue'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useChatStore } from '../src/features/chat/store'
+import { useControlCenterStore } from '../src/stores/control-center'
 import { api } from 'src/boot/axios'
 
 const { confirm } = vi.hoisted(() => ({ confirm: vi.fn() }))
@@ -26,6 +27,7 @@ beforeEach(() => {
   confirm.mockResolvedValue(true)
   pinia = createPinia()
   setActivePinia(pinia)
+  Object.assign(useControlCenterStore(), { open: true, activeGlobalSectionId: null, activeAppId: 'session' })
   responses = {
     '/approvals/pending': [{
       id: 'approval', sessionId: 'parent', title: 'Datei lesen', createdAt,
@@ -156,6 +158,26 @@ describe('approval card', () => {
     useChatStore().current.preferredExecutionAgentId = 'new'
     await vi.waitFor(() => expect(section.textContent).toContain('Session-Freigaben konnten nicht geladen werden.'))
     expect(section.textContent).not.toContain('/work/file')
+  })
+
+  it('loads grants on opening the session app but not while it is hidden', async () => {
+    const center = useControlCenterStore()
+    center.open = false
+    useChatStore().current = { id: 'session-1', preferredExecutionAgentId: 'old' }
+    responses['/approvals/sessions/session-1/permissions'] = []
+    await mountView(() => h(SessionApp))
+    const count = () => api.get.mock.calls.filter(([url]) => url.endsWith('/permissions')).length
+    const counts = [count()]
+    center.open = true
+    await vi.waitFor(() => expect(count()).toBe(1))
+    counts.push(count())
+    center.open = false
+    useChatStore().current.preferredExecutionAgentId = 'new'
+    await nextTick()
+    counts.push(count())
+    center.open = true
+    await vi.waitFor(() => expect(count()).toBe(2))
+    expect([...counts, count()]).toEqual([0, 1, 1, 2])
   })
 
   it.each(['run', null])('keeps loaded grants visible when the active run changes to %s', async (nextRunId) => {

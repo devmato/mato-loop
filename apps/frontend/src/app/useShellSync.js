@@ -21,10 +21,9 @@ import { terminalControlCenterState } from 'src/app/control-center/manifest'
 import { isPwaUpdateReload } from 'src/utils/pwa-update'
 import { searchShortcutAction } from 'src/utils/search-shortcut'
 import { randomUuid } from 'src/utils/random-id'
+import { notifyError } from 'src/utils/notifications'
 
-const ACTIVE_RUN_STATUSES = new Set(['queued', 'running', 'waiting_approval', 'waiting_input'])
-const SESSION_ACTIVITY_REFRESH_MS = 5000
-const BACKGROUND_NOTIFICATION_REFRESH_MS = 30_000
+const PRESENCE_REFRESH_MS = 5000
 
 export function useShellSync({ drawerOpen, controlCenterVisible }) {
   const $q = useQuasar()
@@ -58,9 +57,16 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
       '--app-visual-viewport-offset-top': `${visualViewportOffsetTop.value}px`
     }
   })
-  let sessionActivityTimer = null
-  let backgroundNotificationTimer = null
-  let sessionActivityRefreshPending = false
+  let presenceTimer = null
+  let changeSource = null
+  let heartbeatTimer = null
+  let refreshTimer = null
+  let retryDelay = 1000
+  let retryWaiting = false
+  let refreshing = false
+  let disposed = false
+  let connectionErrorShown = false
+  const pendingChanges = new Map()
   const presenceClientId = randomUuid(window.crypto)
   const focused = ref(appIsFocused())
   const visibleSessionId = computed(() => (
@@ -103,17 +109,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   function refreshSessionsWhenVisible() {
     refreshAppPresence()
     if (document.visibilityState !== 'visible') return
-    if (route.name === 'chat' && !routeSessionId.value && !Object.hasOwn(route.query, 'new')) void home.load({ suppressErrorToast: true }).catch(() => {})
-    void projects.fetchAll({ suppressErrorToast: true }).catch(() => {})
-    if (chat.current?.id && !chat.running) {
-      void chat.refreshSession(chat.current.id, { suppressErrorToast: true }).catch(() => {})
-    }
-    for (const [scope, list] of Object.entries(chat.sessionLists)) {
-      if (list.loaded) void chat.refreshSessions(null, scope === 'standalone' ? null : scope).catch(() => {})
-    }
-    void approvals.fetchPending({ suppressErrorToast: true }).catch(() => {})
-    void questions.fetchPending({ suppressErrorToast: true }).catch(() => {})
-    void notifications.fetchLatest({ suppressErrorToast: true }).catch(() => {})
+    queueChanges([{ resource: 'all' }])
   }
 
   function refreshPushState() {
@@ -122,45 +118,110 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
 
   function handlePushMessage(event) {
     if (event.data?.type !== 'matoloop:push' || event.data.version !== 1) return
-    void Promise.allSettled([
-      notifications.fetchLatest({ suppressErrorToast: true }),
-      projects.fetchAll({ suppressErrorToast: true }),
-      approvals.fetchPending({ suppressErrorToast: true }),
-      questions.fetchPending({ suppressErrorToast: true })
-    ])
+    queueChanges([{ resource: 'notifications' }, { resource: 'projects' }, { resource: 'approvals' }, { resource: 'questions' }])
   }
 
-  async function refreshActiveSessions() {
-    if (document.visibilityState !== 'visible') return
-    refreshAppPresence()
-    if (sessionActivityRefreshPending) return
-    sessionActivityRefreshPending = true
-    try {
-      const requests = [
-        automations.fetchAutomations({ suppressErrorToast: true }),
-        projects.fetchAll({ suppressErrorToast: true }),
-        approvals.fetchPending({ suppressErrorToast: true }),
-        questions.fetchPending({ suppressErrorToast: true })
-      ]
-      if (route.name === 'chat' && !routeSessionId.value && !Object.hasOwn(route.query, 'new')) requests.push(home.load({ suppressErrorToast: true }))
-      if (appIsFocused()) requests.push(notifications.fetchLatest({ suppressErrorToast: true }))
-      if (chat.current?.id && !chat.running) {
-        requests.push(chat.refreshSession(chat.current.id, { suppressErrorToast: true }))
+  function queueChanges(changes) {
+    if (disposed) return
+    if (document.visibilityState !== 'visible') {
+      changes = changes.some((change) => ['all', 'notifications'].includes(change.resource))
+        ? [{ resource: 'notifications' }] : []
+    }
+    if (!changes.length) return
+    for (const change of changes) pendingChanges.set(`${change.resource}:${change.sessionId || ''}`, change)
+    if (retryWaiting) {
+      window.clearTimeout(refreshTimer)
+      refreshTimer = null
+      retryWaiting = false
+    }
+    if (!refreshing && refreshTimer === null) refreshTimer = window.setTimeout(refreshChanges, 50)
+  }
+
+  async function refreshChanges() {
+    refreshTimer = null
+    if (disposed) return
+    const changes = [...pendingChanges.values()].filter((change) => (
+      document.visibilityState === 'visible' || change.resource === 'notifications'
+    ))
+    pendingChanges.clear()
+    const resources = new Set(changes.map((change) => change.resource))
+    const all = resources.has('all')
+    const sessionsChanged = all || resources.has('sessions') || resources.has('messages')
+    const sessionIds = new Set(changes.map((change) => change.sessionId).filter(Boolean))
+    const config = { suppressErrorToast: true }
+    const requests = []
+    const reload = (resource, request, sessionId = null) => requests.push({ resource, sessionId, request })
+    if (all || resources.has('automations')) reload('automations', automations.fetchAutomations(config))
+    if (all || sessionsChanged || resources.has('projects')) reload('projects', projects.fetchAll(config))
+    if (all || resources.has('approvals')) reload('approvals', approvals.fetchPending(config))
+    if (all || resources.has('questions')) reload('questions', questions.fetchPending(config))
+    if (all || resources.has('notifications')) reload('notifications', notifications.fetchLatest(config))
+    if (sessionsChanged) {
+      if (route.name === 'chat' && !routeSessionId.value && !Object.hasOwn(route.query, 'new')) reload('messages', home.load(config))
+      if (route.name === 'chat' && routeSessionId.value && !chat.running
+        && (all || !sessionIds.size || sessionIds.has(routeSessionId.value))) {
+        reload('messages', chat.refreshSession(routeSessionId.value, config), routeSessionId.value)
       }
       for (const [scope, list] of Object.entries(chat.sessionLists)) {
-        if (list.items.some((session) => ACTIVE_RUN_STATUSES.has(session.activeRunStatus))) {
-          requests.push(chat.refreshSessions(
-            { suppressErrorToast: true },
-            scope === 'standalone' ? null : scope
-          ))
+        if ((list.loaded || list.loadRequest) && (all || resources.has('sessions') || list.items.some((session) => sessionIds.has(session.id)))) {
+          reload('sessions', chat.refreshSessions(config, scope === 'standalone' ? null : scope))
         }
       }
-      await Promise.all(requests)
-    } catch {
-      // The next interval reconciles transient background refresh failures.
-    } finally {
-      sessionActivityRefreshPending = false
     }
+    if ((all || resources.has('permissions')) && controlCenterVisible.value && controlCenter.activeContentId === 'session'
+      && chat.current?.id && (all || sessionIds.has(chat.current.id))) reload('permissions', approvals.fetchGrants(config, chat.current.id), chat.current.id)
+    refreshing = true
+    const results = await Promise.allSettled(requests.map((item) => item.request))
+    refreshing = false
+    if (disposed) return
+    const hasNewChanges = pendingChanges.size > 0
+    const failure = results.find((result) => result.status === 'rejected')
+    if (failure && retryDelay === 1000) notifyError(failure.reason)
+    let retry = false
+    results.forEach((result, index) => {
+      if (result.status !== 'rejected') return
+      const status = result.reason?.response?.status
+      if (status == null || status === 408 || status === 429 || status >= 500) {
+        const { resource, sessionId } = requests[index]
+        pendingChanges.set(`${resource}:${sessionId || ''}`, { resource, sessionId })
+        retry = true
+      }
+    })
+    retryWaiting = retry && !hasNewChanges
+    if (pendingChanges.size) refreshTimer = window.setTimeout(refreshChanges, retryWaiting ? retryDelay : 50)
+    retryDelay = retry ? Math.min(retryDelay * 2, 30_000) : 1000
+  }
+
+  function connectChanges() {
+    if (disposed) return
+    changeSource?.close()
+    const source = new EventSource('/api/events')
+    changeSource = source
+    const heartbeat = () => {
+      if (disposed || changeSource !== source) return
+      window.clearTimeout(heartbeatTimer)
+      heartbeatTimer = window.setTimeout(() => {
+        connectionError()
+        connectChanges()
+      }, 45_000)
+    }
+    const connectionError = () => {
+      if (disposed || changeSource !== source) return
+      if (!connectionErrorShown) notifyError({ code: 'stream.connectionLost' })
+      connectionErrorShown = true
+    }
+    source.onopen = () => {
+      connectionErrorShown = false
+      heartbeat()
+    }
+    source.addEventListener('keepalive', heartbeat)
+    source.addEventListener('changed', (event) => {
+      if (disposed || changeSource !== source) return
+      heartbeat()
+      queueChanges(JSON.parse(event.data))
+    })
+    source.onerror = connectionError
+    heartbeat()
   }
 
   function preventDiscardOnUnload(event) {
@@ -238,24 +299,22 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
     window.addEventListener('matoloop:service-worker-ready', refreshPushState)
     window.navigator.serviceWorker?.addEventListener('message', handlePushMessage)
-    sessionActivityTimer = window.setInterval(refreshActiveSessions, SESSION_ACTIVITY_REFRESH_MS)
-    backgroundNotificationTimer = window.setInterval(() => {
-      if (!appIsFocused() && !notifications.loading) {
-        void notifications.fetchLatest({ suppressErrorToast: true }).catch(() => {})
-      }
-    }, BACKGROUND_NOTIFICATION_REFRESH_MS)
+    presenceTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refreshAppPresence()
+    }, PRESENCE_REFRESH_MS)
+    connectChanges()
     refreshAppPresence()
     await Promise.allSettled([
-      approvals.fetchPending(),
-      automations.fetchAutomations({ suppressErrorToast: true }),
-      questions.fetchPending(),
-      notifications.fetchLatest({ suppressErrorToast: true }),
       notifications.reconcilePush({ suppressErrorToast: true }),
       identity.fetchIdentity()
     ])
   })
 
   onBeforeUnmount(() => {
+    disposed = true
+    changeSource?.close()
+    window.clearTimeout(heartbeatTimer)
+    window.clearTimeout(refreshTimer)
     applyBranding(appearance)
     window.visualViewport?.removeEventListener('resize', updateVisualViewport)
     window.visualViewport?.removeEventListener('scroll', updateVisualViewport)
@@ -272,9 +331,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     document.removeEventListener('visibilitychange', refreshSessionsWhenVisible)
     window.removeEventListener('matoloop:service-worker-ready', refreshPushState)
     window.navigator.serviceWorker?.removeEventListener('message', handlePushMessage)
-    window.clearInterval(sessionActivityTimer)
-    window.clearInterval(backgroundNotificationTimer)
-    sessionActivityTimer = null
+    window.clearInterval(presenceTimer)
   })
 
   return { visualViewportStyle }

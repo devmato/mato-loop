@@ -139,29 +139,50 @@ export const sessionsActions = {
     },
     async refreshSessions(config = null, projectId = this.sessionsProjectId) {
       const list = this.ensureSessionList(projectId)
+      if (list.loadRequest) await list.loadRequest
+      if (this.sessionLists[sessionScopeKey(projectId)] !== list) return
       if (!list.loaded) return this.fetchSessions(config, projectId)
+      if (list.refreshQueued) return list.refreshQueued.promise
+      const queued = { promise: null }
       const version = ++list.version
-      const targetCount = Math.max(SESSION_PAGE_SIZE, list.items.length)
-      const sessions = []
-      let cursor = null
-      do {
-        const pageSize = Math.min(100, targetCount - sessions.length)
-        const response = await api.get('/sessions', {
-          ...(config || {}),
-          params: {
-            ...(config?.params || {}),
-            ...sessionScopeParams(projectId),
-            pageSize,
-            cursor: cursor || undefined
-          }
-        })
+      const request = (list.refreshRequest || Promise.resolve()).catch(() => {}).then(async () => {
+        if (list.refreshQueued === queued) list.refreshQueued = null
         if (version !== list.version) return
-        sessions.push(...response.data.items)
-        cursor = response.data.nextCursor
-      } while (cursor && sessions.length < targetCount)
-      list.items = sortSessions([...new Map(sessions.map((session) => [session.id, session])).values()])
-      list.nextCursor = cursor
-      list.loadMoreFailed = false
+        const targetCount = Math.max(SESSION_PAGE_SIZE, list.items.length)
+        const sessions = []
+        let cursor = null
+        do {
+          const pageSize = Math.min(100, targetCount - sessions.length)
+          const response = await api.get('/sessions', {
+            ...(config || {}),
+            params: {
+              ...(config?.params || {}),
+              ...sessionScopeParams(projectId),
+              pageSize,
+              cursor: cursor || undefined
+            }
+          })
+          if (version !== list.version) return
+          sessions.push(...response.data.items)
+          cursor = response.data.nextCursor
+        } while (cursor && sessions.length < targetCount)
+        list.items = sortSessions([...new Map(sessions.map((session) => [session.id, session])).values()])
+        list.nextCursor = cursor
+        list.loadMoreFailed = false
+      })
+      queued.promise = markRaw(request)
+      list.refreshQueued = markRaw(queued)
+      list.refreshRequest = markRaw(request)
+      try {
+        await request
+        if (version !== list.version && list.refreshRequest === request
+          && this.sessionLists[sessionScopeKey(projectId)] === list) {
+          list.refreshRequest = null
+          return this.refreshSessions(config, projectId)
+        }
+      } finally {
+        if (list.refreshRequest === request) list.refreshRequest = null
+      }
     },
     async fetchMoreSessions(config = null, projectId = this.sessionsProjectId) {
       const list = this.ensureSessionList(projectId)
@@ -263,6 +284,7 @@ export const sessionsActions = {
     async loadSession(id) {
       this.sessionRequestController?.abort()
       this.selectedSessionId = id
+      this.sessionLoadPromise = null
       this.sessionLoadVersion += 1
       this.scheduleQueueDrain(0)
       const loadVersion = this.sessionLoadVersion
@@ -306,7 +328,8 @@ export const sessionsActions = {
       }
       this.loading = true
       try {
-        const session = (await api.get(`/sessions/${id}`, { signal: controller.signal })).data
+        this.sessionLoadPromise = markRaw(api.get(`/sessions/${id}`, { signal: controller.signal }))
+        const session = (await this.sessionLoadPromise).data
         if (this.selectedSessionId !== id || this.sessionLoadVersion !== loadVersion) return
         if (session.readOnly && session.parentSessionId) return session
         controlCenter.syncSession(session)
@@ -322,12 +345,19 @@ export const sessionsActions = {
         throw error
       } finally {
         if (this.sessionRequestController === controller) this.sessionRequestController = null
-        if (this.sessionLoadVersion === loadVersion) this.loading = false
+        if (this.sessionLoadVersion === loadVersion) {
+          this.loading = false
+          this.sessionLoadPromise = null
+        }
       }
     },
     async refreshSession(id, { suppressErrorToast = false } = {}) {
+      if (this.selectedSessionId === id && this.sessionLoadPromise) await this.sessionLoadPromise.catch(() => {})
       if (this.selectedSessionId !== id || this.loading) return
+      if (this.sessionRefreshQueued?.id === id) return this.sessionRefreshQueued.promise
+      const queued = { id, promise: null }
       const refresh = (this.sessionRefreshPromise || Promise.resolve()).catch(() => {}).then(async () => {
+        if (this.sessionRefreshQueued === queued) this.sessionRefreshQueued = null
         if (this.selectedSessionId !== id || this.loading) return
         this.sessionRequestController?.abort()
         this.sessionLoadVersion += 1
@@ -363,6 +393,8 @@ export const sessionsActions = {
           if (this.sessionRequestController === controller) this.sessionRequestController = null
         }
       })
+      queued.promise = markRaw(refresh)
+      this.sessionRefreshQueued = markRaw(queued)
       this.sessionRefreshPromise = markRaw(refresh)
       try {
         return await refresh

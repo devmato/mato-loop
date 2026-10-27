@@ -41,7 +41,7 @@ describe('agent questions', () => {
     })
   })
 
-  it('refreshes visible grants after administrator session consent', async () => {
+  it('leaves previously loaded grants to the visible SSE consumer after administrator consent', async () => {
     api.post.mockResolvedValue({ data: { status: 'answered' } })
     api.get.mockResolvedValue({ data: [] })
     const approvals = useApprovalStore()
@@ -49,7 +49,7 @@ describe('agent questions', () => {
     const questions = useQuestionStore()
     questions.add({ id: 'admin', questions: [{ id: 'PASSWORD', administrator: { alias: 'AI-PC' } }] })
     await questions.answer('admin', { PASSWORD: ['secret'] }, ['PASSWORD'])
-    expect(api.get).toHaveBeenCalledWith('/approvals/permissions', { suppressErrorToast: true })
+    expect(api.get).not.toHaveBeenCalled()
   })
 
   it('ignores malformed pending responses', async () => {

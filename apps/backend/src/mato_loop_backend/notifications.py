@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from mato_loop_backend.db.changes import record_change
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
@@ -111,7 +112,10 @@ class NotificationService:
             .on_conflict_do_nothing(constraint="uq_notifications_user_deduplication_key")
             .returning(Notification.id)
         )
-        return await db.scalar(statement)
+        notification_id = await db.scalar(statement)
+        if notification_id is not None:
+            record_change(db, draft.user_id, "notifications")
+        return notification_id
 
     @staticmethod
     async def create_for_approval(db: AsyncSession, approval: ApprovalRequest) -> UUID | None:

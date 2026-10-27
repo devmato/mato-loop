@@ -48,6 +48,16 @@ describe('inline approvals', () => {
     expect(approvals.forSession('session-1').map((item) => item.id)).toEqual(['agent'])
   })
 
+  it('does not reload previously viewed grants when loading pending approvals', async () => {
+    api.get.mockResolvedValue({ data: [] })
+    const approvals = useApprovalStore()
+    approvals.grantsLoaded = true
+
+    await approvals.fetchPending()
+
+    expect(api.get).toHaveBeenCalledExactlyOnceWith('/approvals/pending', {})
+  })
+
   it('does not overwrite an approval added while pending approvals load', async () => {
     let resolveRequest
     api.get.mockReturnValue(new Promise((resolve) => { resolveRequest = resolve }))

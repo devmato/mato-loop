@@ -17,5 +17,6 @@ coverage/
 htmlcov/
 data/
 db/
+!apps/backend/src/mato_loop_backend/db/
 dist/
 **/build-version.txt

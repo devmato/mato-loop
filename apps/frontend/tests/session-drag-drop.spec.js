@@ -43,10 +43,12 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
       setSessionPinned: vi.fn().mockResolvedValue(),
       findCachedSession: vi.fn((id) => sessions.find((session) => session.id === id)),
       fetchSession: vi.fn(),
+      refreshSession: vi.fn().mockResolvedValue(),
+      refreshSessions: vi.fn().mockResolvedValue(),
       markSessionRead: vi.fn().mockResolvedValue()
     },
     projects: { loaded: true, items: [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }], fetchAll: vi.fn().mockResolvedValue() },
-    pending: { pending: [], forSession: () => [], fetchPending: vi.fn().mockResolvedValue() },
+    pending: { pending: [], forSession: () => [], fetchPending: vi.fn().mockResolvedValue(), fetchGrants: vi.fn().mockResolvedValue() },
     quasar: { dark: { isActive: false }, screen: { lt: { sm: false, md: false, lg: false } }, platform: { is: {} }, notify: vi.fn() }
   }
 })
@@ -144,6 +146,17 @@ beforeEach(async () => {
   workspace.sessionId = null
   workspace.fileTabDirty.mockReturnValue(false)
   vi.useFakeTimers()
+  vi.stubGlobal('EventSource', class {
+    static instances = []
+    constructor(url) {
+      this.url = url
+      this.listeners = {}
+      this.close = vi.fn()
+      this.constructor.instances.push(this)
+    }
+    addEventListener(name, callback) { this.listeners[name] = callback }
+    emit(changes) { this.listeners.changed({ data: JSON.stringify(changes) }) }
+  })
   root = document.createElement('div')
   app = createApp(MainLayout)
   app.use(createPinia())
@@ -189,19 +202,79 @@ beforeEach(async () => {
   root.querySelector('.project-list-item > button').click()
   await nextTick()
 })
-afterEach(() => { app?.unmount(); vi.useRealTimers() })
+afterEach(() => { app?.unmount(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 it('badges unread notifications received in the background until read', async () => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
   const store = useInAppNotificationStore()
   notifications.fetchLatest.mockImplementationOnce(async () => { store.unreadCount = 3 })
-  await vi.advanceTimersByTimeAsync(30_000)
+  EventSource.instances[0].emit([{ resource: 'notifications' }])
+  await vi.advanceTimersByTimeAsync(50)
   const favicon = document.querySelector('link[rel="icon"]')
   expect([document.title, favicon.getAttribute('href')]).toEqual(['(3) MatoLoop', '/icons/matoloop-unread.svg'])
 
   store.unreadCount = 0
   await nextTick()
   expect([document.title, favicon.getAttribute('href')]).toEqual(['MatoLoop', '/icons/matoloop.svg'])
+  visibility.mockRestore()
+})
+
+it('refreshes only changed data through SSE without recurring REST polling', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  const source = EventSource.instances[0]
+  pending.fetchPending.mockClear()
+  projects.fetchAll.mockClear()
+  notifications.fetchLatest.mockClear()
+  source.emit([{ resource: 'notifications' }])
+  source.emit([{ resource: 'notifications' }])
+  await vi.advanceTimersByTimeAsync(30_000)
+  expect([notifications.fetchLatest.mock.calls.length, pending.fetchPending.mock.calls.length,
+    projects.fetchAll.mock.calls.length]).toEqual([1, 0, 0])
+  visibility.mockRestore()
+})
+
+it('retries a failed notification reload without polling unrelated resources', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  notifications.fetchLatest.mockRejectedValueOnce(new Error('offline')).mockResolvedValue()
+  projects.fetchAll.mockClear()
+  pending.fetchPending.mockClear()
+  EventSource.instances[0].emit([{ resource: 'notifications' }])
+  await vi.advanceTimersByTimeAsync(50)
+  await vi.advanceTimersByTimeAsync(31_000)
+  expect([notifications.fetchLatest.mock.calls.length, projects.fetchAll.mock.calls.length,
+    pending.fetchPending.mock.calls.length]).toEqual([2, 0, 0])
+  visibility.mockRestore()
+})
+
+it('retains a session hint before its initial response has populated the current session', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  useRoute().query = { session: 'standalone' }
+  EventSource.instances[0].emit([{ resource: 'sessions', sessionId: 'standalone' }])
+  await vi.advanceTimersByTimeAsync(50)
+  expect(useChatStore().refreshSession).toHaveBeenCalledWith('standalone', { suppressErrorToast: true })
+  visibility.mockRestore()
+})
+
+it('reconciles an external run hint and reloads on reconnect', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  useChatStore().current = { id: 'standalone', messages: [] }
+  useRoute().query = { session: 'standalone' }
+  const source = EventSource.instances[0]
+  source.emit([{ resource: 'sessions', sessionId: 'standalone' }])
+  await vi.advanceTimersByTimeAsync(50)
+  source.emit([{ resource: 'all' }])
+  await vi.advanceTimersByTimeAsync(50)
+  expect(useChatStore().refreshSession).toHaveBeenCalledTimes(2)
+  visibility.mockRestore()
+})
+
+it.each([true, false])('refreshes changed grants only when the session app is visible (%s)', async (open) => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  useChatStore().current = { id: 'standalone', messages: [] }
+  Object.assign(useControlCenterStore(), { open, activeContentId: 'session' })
+  EventSource.instances[0].emit([{ resource: 'permissions', sessionId: 'standalone' }])
+  await vi.advanceTimersByTimeAsync(50)
+  expect(pending.fetchGrants.mock.calls).toEqual(open ? [[{ suppressErrorToast: true }, 'standalone']] : [])
   visibility.mockRestore()
 })
 
