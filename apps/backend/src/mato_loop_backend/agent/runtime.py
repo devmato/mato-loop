@@ -131,7 +131,7 @@ class AgentRuntime:
     _redirected_runs: set[UUID] = set()
     _continuations: dict[UUID, set[asyncio.Event]] = {}
     _pending_continuations: set[UUID] = set()
-    _waiting_approvals: dict[UUID, asyncio.Future[str | ApprovalResolution]] = {}
+    _waiting_interactions: dict[UUID, tuple[UUID | None, asyncio.Future[Any]]] = {}
     _provider_active_runs: set[UUID] = set()
     _tool_active_runs: set[UUID] = set()
     _interrupted_runs: set[UUID] = set()
@@ -606,9 +606,11 @@ class AgentRuntime:
     def finish_continuation(cls, run_id: UUID, reservation: asyncio.Event, *, accepted: bool) -> None:
         if accepted:
             cls._pending_continuations.add(run_id)
-            waiter = cls._waiting_approvals.get(run_id)
-            if waiter is not None and not waiter.done():
-                waiter.set_result("superseded")
+            for waiting_run_id, (parent_run_id, waiter) in tuple(cls._waiting_interactions.items()):
+                if waiting_run_id == run_id and not waiter.done():
+                    waiter.set_result("superseded")
+                elif parent_run_id == run_id:
+                    cls.cancel(waiting_run_id)
         cls._continuations.get(run_id, set()).discard(reservation)
         if not cls._continuations.get(run_id):
             cls._continuations.pop(run_id, None)

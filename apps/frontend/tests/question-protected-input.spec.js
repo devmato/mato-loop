@@ -4,7 +4,7 @@ import { createPinia } from 'pinia'
 import { afterEach, expect, it, vi } from 'vitest'
 import {
   Quasar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QIcon,
-  QInput, QRadio, QSeparator, QSpace, QTooltip
+  QInput, QRadio, QResizeObserver, QSeparator, QSpace, QTooltip
 } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
@@ -38,10 +38,10 @@ it('masks password questions, submits exact values, and clears failed drafts', a
   }
   root = document.createElement('div')
   document.body.append(root)
-  app = createApp({ render: () => h(QuestionDock, { request, showStop: false }) })
+  app = createApp({ render: () => h(QuestionDock, { request }) })
   app.use(createPinia()).use(Quasar, { components: {
     QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QIcon,
-    QInput, QRadio, QSeparator, QSpace, QTooltip
+    QInput, QRadio, QResizeObserver, QSeparator, QSpace, QTooltip
   } })
   app.mount(root)
   await nextTick()
@@ -92,10 +92,10 @@ it.each([[false, false], [true, false], [true, true]])('submits protected creden
   }
   root = document.createElement('div')
   document.body.append(root)
-  app = createApp({ render: () => h(QuestionDock, { request, showStop: false }) })
+  app = createApp({ render: () => h(QuestionDock, { request }) })
   app.use(createPinia()).use(Quasar, { components: {
     QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QIcon,
-    QInput, QRadio, QSeparator, QSpace, QTooltip
+    QInput, QRadio, QResizeObserver, QSeparator, QSpace, QTooltip
   } })
   app.mount(root)
   await nextTick()

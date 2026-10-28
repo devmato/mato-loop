@@ -560,7 +560,8 @@ async def test_cancel_descendants_uses_recursive_sessions_and_never_replays_orph
 
 
 @pytest.mark.parametrize("kind", ["approval", "question"])
-async def test_delegated_waits_keep_parent_active_and_expire_on_cancel(monkeypatch, delegated_runtime, kind):
+@pytest.mark.parametrize("direct_message", [False, True])
+async def test_delegated_waits_keep_parent_active_and_expire_on_cancel(monkeypatch, delegated_runtime, kind, direct_message):
     session, parent, objects, _databases, delegate = delegated_runtime
     entered = asyncio.Event()
     created = []
@@ -596,9 +597,16 @@ async def test_delegated_waits_keep_parent_active_and_expire_on_cancel(monkeypat
         assert event["runId"] != str(parent.id)
         assert event["payload"]["subagentTitle"].startswith("Task ")
         assert event["payload"]["subagentSessionId"] != str(session.id)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(task, timeout=1)
+    if direct_message:
+        try:
+            AgentRuntime.finish_continuation(parent.id, asyncio.Event(), accepted=True)
+            await asyncio.wait_for(task, timeout=1)
+        finally:
+            AgentRuntime._pending_continuations.discard(parent.id)
+    else:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
     request_type = ApprovalRequest if kind == "approval" else QuestionRequest
     requests = [obj for (model, _key), obj in objects.items() if model is request_type]
     assert len(requests) == 2 and all(request.status == "expired" for request in requests)

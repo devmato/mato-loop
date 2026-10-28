@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,7 @@ from mato_loop_backend.tools.arguments import (
     QuestionArguments,
     QuestionRequestArguments,
 )
+from mato_loop_backend.tools.contracts import ToolCallSuperseded
 
 
 async def request_question(
@@ -56,7 +58,12 @@ async def request_question(
             await enqueue_question_prompt(db, request)
     question_id, run_id = request.id, run.id
     waiter = question_coordinator.register(question_id)
+    cls._waiting_interactions[run_id] = (chat_session.spawned_by_run_id, waiter)
+    if run_id in cls._pending_continuations:
+        waiter.set_result("superseded")
     try:
+        if chat_session.spawned_by_run_id in cls._pending_continuations:
+            cls.cancel(run_id)
         await db.commit()
         await run_events.publish(
             run.id,
@@ -85,11 +92,20 @@ async def request_question(
             await run_events.publish(run_id, {"type": "question.expired", "questionId": str(question_id)})
         raise
     finally:
+        cls._waiting_interactions.pop(run_id, None)
         question_coordinator.discard(question_id)
-    await db.refresh(request)
+    await db.refresh(request, with_for_update=True)
+    superseded = answers == "superseded" or run_id in cls._pending_continuations
+    if superseded and request.status == "pending":
+        request.status = "expired"
+        request.answered_at = datetime.now(UTC)
     transition_run_status(run, "running")
     await db.commit()
+    if superseded:
+        await run_events.publish(run_id, {"type": "question.expired", "questionId": str(question_id)})
     await run_events.publish(
         run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
     )
+    if superseded:
+        raise ToolCallSuperseded
     return answers

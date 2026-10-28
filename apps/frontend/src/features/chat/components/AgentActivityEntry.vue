@@ -147,6 +147,13 @@
         class="work-history__attention"
         @open-approval-draft="emit('open-approval-draft', $event)"
       />
+      <QuestionDock
+        v-if="entry.question && !readOnly"
+        :key="entry.question.id"
+        :request="entry.question"
+        class="work-history__attention"
+        @rendered="emit('rendered')"
+      />
     </template>
     <div
       v-if="showOutput && (entry.output?.attachments.length || entry.output?.fileActions.length)"
@@ -168,6 +175,7 @@ import { computed, nextTick, useId } from 'vue'
 import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
 import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
+import QuestionDock from 'src/features/questions/QuestionDock.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
 import { parseToolResult, shellCommand, toolIdentity, toolPresentation, toolStatus } from 'src/utils/tool-display'
 

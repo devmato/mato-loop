@@ -117,9 +117,11 @@ MatoLoop zeigt Antworttext, aktuelle Aktivität, Tool-Ergebnisse, Laufzeit und g
 
 ### Während eines Laufs senden
 
-**Jetzt senden** ergänzt den aktuellen Lauf um Ihre neue Nachricht. Eine laufende Modellanfrage wird neu aufgebaut; aktive Tool-Arbeit darf zuerst enden. Eine überholte Freigabe wird geschlossen und der Agent plant mit Ihrer neuen Anweisung weiter. Das erlaubt keine zuvor gesperrte Aktion.
+**Jetzt senden** ergänzt den aktuellen Lauf um Ihre neue Nachricht. Eine laufende Modellanfrage wird neu aufgebaut; aktive Tool-Arbeit darf zuerst enden. Eine überholte Freigabe oder Rückfrage des Laufs wird geschlossen und der Agent plant mit Ihrer neuen Anweisung weiter. Das erlaubt keine zuvor gesperrte Aktion.
 
 **Nach dem Lauf senden** reiht die Nachricht für einen anschließenden Lauf ein. Der ownergebundene Browser-Postausgang bewahrt eingereihte Nachrichten und Anhänge in Reihenfolge. Fehlgeschlagene Sendungen bleiben für einen erneuten Versuch oder die Übernahme in den Entwurf erhalten. Abmelden oder ein Kontowechsel entfernt den bisherigen Postausgang dieses Browsers.
+
+Bei **Jetzt senden** werden auch Subagenten beendet, die auf eine Freigabe oder Rückfrage warten. Bereits laufende Arbeit darf zuerst enden. Danach setzt der Hauptagent mit Ihrer neuen Nachricht fort; eine spätere Rückfrage aus der alten delegierten Arbeit blockiert ihn nicht erneut.
 
 Der laufende Auftrag behält sein Startprofil und seinen Modell-/Vertrauenskontext. Neue Profilauswahlen gelten für spätere Läufe. Für Details zu wirksamen Rechten siehe [Freigaben](freigaben-und-datenfreigabe.md).
 
@@ -133,7 +135,7 @@ Delegierte Aufgaben erscheinen mit anklickbarem Titel und Status in der Aktivit�
 
 ## Rückfragen
 
-Eine strukturierte Rückfrage ersetzt vorübergehend das Eingabefeld. **Weiter** navigiert; **Fertig** sendet den bisherigen Antwortstand auch vor der letzten Frage. Fragen dürfen unbeantwortet bleiben. **Ablehnen** verwirft den Entwurf. Geschützte Felder behandeln ausgelassene Werte ausdrücklich als fehlend; siehe [Variablen und Secrets](variablen-und-secrets.md).
+Eine strukturierte Rückfrage erscheint direkt im Chat beim zugehörigen Tool-Aufruf. Das Eingabefeld bleibt verfügbar: Mit **Jetzt senden** können Sie nachfragen oder die Richtung ändern, ohne vorher **Fertig** oder **Ablehnen** zu wählen. Die offene Rückfrage des Laufs wird dabei ohne Übernahme unfertiger Antworten geschlossen; falls nötig, fragt der Agent erneut. **Weiter** navigiert; **Fertig** sendet den bisherigen Antwortstand auch vor der letzten Frage. Fragen dürfen unbeantwortet bleiben. **Ablehnen** verwirft den Entwurf. Geschützte Felder behandeln ausgelassene Werte ausdrücklich als fehlend; Geheimnisse gehören weiterhin nur in diese Felder, nicht in Chatnachrichten. Siehe [Variablen und Secrets](variablen-und-secrets.md).
 
 ## Nachrichtenaktionen
 

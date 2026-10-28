@@ -328,6 +328,13 @@
               class="q-mt-md"
               @open-approval-draft="openApprovalDraft"
             />
+            <QuestionDock
+              v-for="question in transcript.unmatchedQuestions"
+              :key="question.id"
+              :request="question"
+              class="q-mt-md"
+              @rendered="handleMessageRendered"
+            />
           </template>
         </q-virtual-scroll>
       </div>
@@ -435,16 +442,7 @@
           :saving="savingTodos"
           @update:collapsed="setTodosCollapsed"
         />
-        <QuestionDock
-          v-if="activeQuestion"
-          :key="activeQuestion.id"
-          :request="activeQuestion"
-          :stopping="chat.stopping"
-          :show-stop="chat.running"
-          @stop="chat.stop"
-        />
         <ChatComposer
-          v-else
           ref="composer"
           :autofocus="!showHome"
           :session="chat.activeContext"

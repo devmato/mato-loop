@@ -35,6 +35,7 @@ from mato_loop_backend.tools.arguments import (
 )
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.context import ToolContext
+from mato_loop_backend.tools.contracts import ToolCallSuperseded
 
 
 def _arguments() -> QuestionArguments:
@@ -170,7 +171,8 @@ def test_question_placeholder_error_preserves_nested_location() -> None:
     assert error["loc"] == ("questions", 1)
 
 
-async def test_agent_question_push_is_sent_after_commit(monkeypatch) -> None:
+@pytest.mark.parametrize("redirected", [False, True])
+async def test_agent_question_push_is_sent_after_commit(monkeypatch, redirected) -> None:
     request_id = uuid4()
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
     run = AgentRun(id=uuid4(), session_id=session.id)
@@ -179,6 +181,7 @@ async def test_agent_question_push_is_sent_after_commit(monkeypatch) -> None:
 
     async def flush() -> None:
         db.add.call_args.args[0].id = request_id
+        db.add.call_args.args[0].status = "pending"
 
     async def publish(*_args) -> None:
         created.set()
@@ -203,9 +206,18 @@ async def test_agent_question_push_is_sent_after_commit(monkeypatch) -> None:
     )
     async with asyncio.timeout(1):
         await created.wait()
-    assert AgentRuntime.claim_question_resolution(request_id) is True
-    assert AgentRuntime.resolve_question(request_id, {"format": ["Kurz"]}) is True
-    assert await task == {"format": ["Kurz"]}
+    if redirected:
+        try:
+            AgentRuntime.finish_continuation(run.id, asyncio.Event(), accepted=True)
+            with pytest.raises(ToolCallSuperseded):
+                await asyncio.wait_for(task, timeout=1)
+            assert db.add.call_args.args[0].status == "expired"
+        finally:
+            AgentRuntime._pending_continuations.discard(run.id)
+    else:
+        assert AgentRuntime.claim_question_resolution(request_id) is True
+        assert AgentRuntime.resolve_question(request_id, {"format": ["Kurz"]}) is True
+        assert await task == {"format": ["Kurz"]}
     push.assert_awaited_once_with(notification_id)
 
 

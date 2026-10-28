@@ -218,8 +218,7 @@
   }
 }
 
-.chat-input-dock--with-todos .chat-composer__card,
-.chat-input-dock--with-todos .question-dock {
+.chat-input-dock--with-todos .chat-composer__card {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }
@@ -281,7 +280,6 @@
 
 .question-dock {
   display: flex;
-  max-height: min(60dvh, 620px);
   flex-direction: column;
   border-color: color-mix(in srgb, var(--q-primary) 45%, var(--app-surface-border));
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
@@ -332,7 +330,6 @@
 
 .question-dock__body {
   min-height: 96px;
-  overflow-y: auto;
 }
 
 .question-dock__body--minimized {

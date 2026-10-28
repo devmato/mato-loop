@@ -1170,7 +1170,7 @@ describe('subagent inspector navigation and presentation', () => {
       return () => h('main', [
         h('p', { role: 'status' }, agentRunPresentation({ runId: chat.runId, running: chat.running, activity: chat.activity, transcript: transcript.value }).label),
         ...transcript.value.unmatchedApprovals.map((approval) => h(ApprovalCard, { key: approval.id, approval })),
-        ...questions.forSession('parent').slice(0, 1).map((request) => h(QuestionDock, { key: request.id, request, showStop: false }))
+        ...questions.forSession('parent').slice(0, 1).map((request) => h(QuestionDock, { key: request.id, request }))
       ])
     } })
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', name: 'chat', component: Parent }] })

@@ -2031,7 +2031,7 @@ async def test_direct_message_supersedes_approval_and_replans(monkeypatch, tmp_p
         for call_id in ("waiting", "skipped"):
             assert json.loads(results[call_id].content)["error"]["code"] == "tool.superseded"
         assert run.status == "running"
-        assert run.id not in AgentRuntime._waiting_approvals
+        assert run.id not in AgentRuntime._waiting_interactions
         assert _assistant_messages(db)[-1].content == "Updated answer"
     except TimeoutError:
         if task.done():

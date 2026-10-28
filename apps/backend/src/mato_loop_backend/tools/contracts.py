@@ -41,7 +41,7 @@ class DynamicToolArgumentsError(ValueError):
 
 
 class ToolCallSuperseded(Exception):
-    """A new user instruction supersedes an unapproved tool call."""
+    """A new user instruction supersedes a tool call awaiting user input."""
 
 
 class RepositoryInstructionsChanged(Exception):

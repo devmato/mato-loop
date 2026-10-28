@@ -185,10 +185,12 @@ async def request_approval(
             await enqueue_approval_prompt(db, approval)
     approval_id, run_id = approval.id, run.id
     waiter = approval_coordinator.register(approval_id)
-    cls._waiting_approvals[run_id] = waiter
+    cls._waiting_interactions[run_id] = (chat_session.spawned_by_run_id, waiter)
     if run_id in cls._pending_continuations:
         waiter.set_result("superseded")
     try:
+        if chat_session.spawned_by_run_id in cls._pending_continuations:
+            cls.cancel(run_id)
         await db.commit()
         await run_events.publish(
             run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
@@ -214,7 +216,7 @@ async def request_approval(
             await run_events.publish(run_id, {"type": "approval.expired", "approvalId": str(approval_id)})
         raise
     finally:
-        cls._waiting_approvals.pop(run_id, None)
+        cls._waiting_interactions.pop(run_id, None)
         approval_coordinator.discard(approval_id)
     await db.refresh(approval, with_for_update=True)
     superseded = decision == "superseded" or run_id in cls._pending_continuations

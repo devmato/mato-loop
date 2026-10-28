@@ -1,5 +1,6 @@
 <template>
   <q-card flat class="question-dock app-surface" @keydown="handleKeydown">
+    <q-resize-observer @resize="emit('rendered')" />
     <SubagentRequestLink :request="request" />
     <q-card-section class="question-dock__header row items-center no-wrap">
       <div class="row items-center no-wrap q-gutter-sm">
@@ -36,20 +37,6 @@
         :disable="busy"
         @click="draft.minimized = !draft.minimized"
       />
-      <q-btn
-        v-if="showStop"
-        flat
-        round
-        dense
-        color="negative"
-        icon="stop"
-        aria-label="Agent-Anfrage stoppen"
-        :loading="stopping"
-        :disable="busy"
-        @click="emit('stop')"
-      >
-        <q-tooltip>Agent-Anfrage stoppen</q-tooltip>
-      </q-btn>
     </q-card-section>
 
     <q-separator />
@@ -240,18 +227,16 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useQuestionStore } from 'stores/questions'
 import SubagentRequestLink from 'src/features/subagents/SubagentRequestLink.vue'
 
 defineOptions({ name: 'QuestionDock' })
 
 const props = defineProps({
-  request: { type: Object, required: true },
-  stopping: Boolean,
-  showStop: { type: Boolean, default: true }
+  request: { type: Object, required: true }
 })
-const emit = defineEmits(['stop'])
+const emit = defineEmits(['rendered'])
 const questions = useQuestionStore()
 const draft = questions.ensureDraft(props.request)
 const optionsElement = ref(null)
@@ -276,7 +261,7 @@ const rememberedQuestionIds = computed(() => props.request.questions
   .map((item) => item.id))
 const rejecting = ref(false)
 const ownSubmission = computed(() => questions.submittingId === props.request.id)
-const busy = computed(() => questions.submittingId !== null || props.stopping)
+const busy = computed(() => questions.submittingId !== null)
 const answering = computed(() => ownSubmission.value && !rejecting.value)
 const questionLabelId = computed(() => `question-${props.request.id}-${current.value.id}`)
 
@@ -430,5 +415,4 @@ function handleKeydown(event) {
   controls[nextIndex]?.click()
 }
 
-onMounted(focusCurrentQuestion)
 </script>

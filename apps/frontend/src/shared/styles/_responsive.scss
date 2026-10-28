@@ -224,14 +224,6 @@
     display: none;
   }
 
-  .question-dock {
-    max-height: min(68dvh, 620px);
-  }
-
-  .chat-input-dock--with-todos .question-dock {
-    max-height: min(48dvh, 460px);
-  }
-
   .question-dock__header {
     flex-wrap: wrap;
   }
@@ -247,7 +239,6 @@
   }
 
   .question-dock__body {
-    max-height: 42dvh;
     padding: 16px;
   }
 

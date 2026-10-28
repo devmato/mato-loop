@@ -1,6 +1,8 @@
 # Active-run continuations and elevated environments
 
-A direct message interrupts the current model request and starts a new model request in the same run. Its instruction supersedes pending approvals, but successful tool results from that run remain current evidence. Existing context budgets still shorten large tool outputs. Run-local secret references stay available only until that run ends; repeat protected-input requests reuse already answered names and ask only for missing ones. Remembering a value for later runs still requires the user's session opt-in.
+A direct parent message cancels delegated runs waiting for approval or input, including children that ask after the message arrives. Active child work may finish first. The parent joins the children and then processes the new instruction; a child never continues its old task with a silently dismissed question.
+
+A direct message interrupts the current model request and starts a new model request in the same run. Its instruction supersedes pending approvals and questions, but successful tool results from that run remain current evidence. Existing context budgets still shorten large tool outputs. Run-local secret references stay available only until that run ends; repeat protected-input requests reuse already answered names and ask only for missing ones. Remembering a value for later runs still requires the user's session opt-in.
 
 Elevated shell retry detection includes the selected agent and effective sudo reference, including automatically reused references. Newly supplied authentication allows the same command to be retried; unchanged authentication or input for another agent does not reset failed-call protection. A `process.sudoAuthFailed` response discards the matching temporary sudo reference so protected input can collect a correction. Other process errors retain it, and stored personal variables are never deleted by this recovery.
 

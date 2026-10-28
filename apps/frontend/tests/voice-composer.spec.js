@@ -45,6 +45,7 @@ import { useAgentProfileStore } from '../src/stores/agent-profiles'
 import { useProviderStore } from '../src/stores/providers'
 import { useToolSettingsStore } from '../src/stores/tool-settings'
 import { useInstanceLimitsStore } from '../src/stores/instance-limits'
+import { useQuestionStore } from '../src/stores/questions'
 
 let app, root, chat, session, stopResolve, showPage, router, sentMessages, stoppedCount
 const file = (name = 'aufnahme.wav') => new File(['wav'], name, { type: 'audio/wav' })
@@ -173,6 +174,18 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('keeps the composer available while a question is pending', async () => {
+    mocks.api.get.mockResolvedValue({ data: { items: [] } })
+    await router.push('/')
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    chat.current = { id: 'session-1', messages: [] }
+    useQuestionStore().add({ id: 'question-1', sessionId: 'session-1', questions: [] })
+    await nextTick()
+
+    expect(root.querySelector('.chat-composer__input')).not.toBeNull()
+  })
+
   it('keeps the file dropzone active across child elements and adds dropped files to the draft', async () => {
     const files = [file('notiz.txt'), file('bild.png')]
     const transfer = { types: ['Files'], files, dropEffect: 'none' }

@@ -11,9 +11,19 @@ same single-process waiter semantics as approvals. Question answers, including p
 administrator input, create no permission grants. Password entry and session retention provide
 authentication only; actions independently require effective policy or matching explicit consent.
 Users can also reject a request, which returns a controlled rejected tool result. The
-frontend loads pending requests independently of SSE and replaces the normal composer with a
-sequential question dock. Backend restarts expire pending requests and fail their active runs
+frontend loads pending requests independently of SSE and renders a sequential question card
+inline at its tool call, with unmatched requests below the transcript. The composer remains
+available and mounting a card does not move focus away from an existing draft. Backend restarts expire pending requests and fail their active runs
 through the normal recovery path.
+
+A direct message supersedes a pending question in the same run, just like an approval. The
+request expires without submitting its draft, the waiting call returns `tool.superseded`, and
+the run continues with the new instruction. This also applies to protected input: a chat
+message never submits a password or confirms storage. Queued follow-ups still wait for the run.
+When a parent receives a direct message, delegated runs paused for approval or input are
+cancelled through the normal cleanup path. Active child work finishes first; a later input
+request also cancels that child while the parent's message is pending. The parent then
+continues with the new instruction rather than leaving it blocked behind a child question.
 
 The question dock offers Next for navigation and Done on every step to submit the current draft,
 including answers to previously visited questions. Empty answers are allowed, even when all

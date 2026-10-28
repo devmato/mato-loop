@@ -422,7 +422,7 @@ _MESSAGES = {
     "tool.cursorInvalid": (
         "The session cursor is unavailable. Retry session_read with error.params.retryArguments exactly."
     ),
-    "tool.superseded": "This tool call was skipped because a new user message superseded the pending approval. Reassess the remaining work using the latest instruction.",
+    "tool.superseded": "This tool call was skipped because a new user message superseded the pending request. Reassess the remaining work using the latest instruction.",
     "tool.skippedAfterUserDenial": (
         "The tool call was not run because the user denied another action in the same batch."
     ),
