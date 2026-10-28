@@ -153,6 +153,10 @@ async def _sse_events(response: httpx.Response) -> AsyncIterator[dict[str, Any]]
         except json.JSONDecodeError:
             continue
         if isinstance(event, dict):
+            if event.get("error") is not None or event.get("type") == "error":
+                raise _failed_response_error(
+                    event if "error" in event else {"error": event}
+                )
             yield event
 
 
@@ -586,6 +590,21 @@ def _safe_provider_text(value: Any, *, limit: int) -> str | None:
     return cleaned[:limit] or None
 
 
+def _provider_error_code(error: Any) -> str | None:
+    if not isinstance(error, dict):
+        return None
+    if any(
+        error.get(key) in (
+            "context_length_exceeded", "context_window_exceeded", "exceed_context_size_error"
+        )
+        for key in ("code", "type")
+    ):
+        return "agent.contextWindowExceeded"
+    if error.get("code") == "rate_limit_exceeded":
+        return "provider.rateLimited"
+    return None
+
+
 async def _ensure_success(response: httpx.Response) -> None:
     if response.status_code < 400:
         return
@@ -628,6 +647,7 @@ async def _ensure_success(response: httpx.Response) -> None:
     raise ProviderError(
         f"Provider request failed with HTTP {response.status_code}",
         status_code=response.status_code,
+        code=_provider_error_code(error),
         retry_after=_retry_after(response),
     )
 
@@ -752,21 +772,25 @@ def _responses_finish_reason(data: dict[str, Any]) -> str | None:
 
 def _failed_response_error(data: dict[str, Any]) -> ProviderError:
     error = data.get("error")
-    raw_code = error.get("code") if isinstance(error, dict) else None
-    provider_code = (
-        raw_code
-        if isinstance(raw_code, str) and re.fullmatch(r"[a-z][a-z0-9_.-]{0,79}", raw_code)
-        else "unknown"
+    details = error if isinstance(error, dict) else {"message": error}
+    code = _provider_error_code(error)
+    raw_code = details.get("code")
+    status_code = raw_code if type(raw_code) is int and 400 <= raw_code <= 599 else None
+    logger.warning(
+        "Provider response failed (type=%r, code=%r, param=%r, message=%r)",
+        _safe_provider_text(details.get("type"), limit=80),
+        status_code or _safe_provider_text(raw_code, limit=80),
+        _safe_provider_text(details.get("param"), limit=80),
+        _safe_provider_text(details.get("message"), limit=500),
     )
-    logger.warning("Provider response failed with code %s", provider_code)
     return ProviderError(
         "Provider response failed",
-        status_code=429 if raw_code == "rate_limit_exceeded" else 503,
-        code=(
-            "provider.rateLimited"
-            if raw_code == "rate_limit_exceeded"
-            else "provider.requestFailed"
+        status_code=(
+            400 if code == "agent.contextWindowExceeded"
+            else 429 if code == "provider.rateLimited"
+            else status_code or 503
         ),
+        code=code or (None if status_code else "provider.requestFailed"),
     )
 
 

@@ -401,6 +401,42 @@ async def test_provider_non_json_http_error_logs_bounded_message(caplog) -> None
     assert "x" * 501 not in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("error", "expected_code"),
+    [
+        ({
+            "type": "exceed_context_size_error",
+            "code": 400,
+            "message": "the request exceeds the available context size",
+        }, "agent.contextWindowExceeded"),
+        ({
+            "type": "invalid_request_error",
+            "code": 401,
+            "message": "Request rejected",
+        }, "provider.authenticationFailed"),
+    ],
+)
+async def test_chat_stream_reports_provider_error(monkeypatch, error, expected_code) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=f"data: {json.dumps({'error': error})}\n\ndata: [DONE]\n\n")
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "mato_loop_backend.providers.openai_compatible.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+
+    with pytest.raises(ProviderError) as exc_info:
+        await chat_completions(
+            base_url="http://local.test/v1",
+            api_key=None,
+            request=ProviderRequest(model="local-model", messages=[], stream=True),
+            on_delta=None,
+        )
+
+    assert exc_info.value.public_code == expected_code
+
+
 def test_payloads_convert_model_options_for_each_protocol() -> None:
     request = ProviderRequest(
         model="local-model",
