@@ -1,8 +1,10 @@
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
+import mato_loop_backend.personal_variables as personal_variables
 from mato_loop_backend.models import Credential
 from mato_loop_backend.personal_variables import (
     PersonalVariableError,
@@ -46,6 +48,28 @@ def test_personal_variable_description_is_optional_and_normalized() -> None:
     )
     with pytest.raises(PersonalVariableError):
         normalize_personal_variable_description("x" * 501)
+
+
+@pytest.mark.parametrize("stored_secret", [False, True])
+async def test_variable_rename_preserves_value_without_implicitly_revealing_secrets(monkeypatch, stored_secret):
+    variable = Credential(id=uuid4(), user_id=uuid4(), label="OLD", metadata_json={"secret": stored_secret})
+    db = AsyncMock()
+    db.scalar.side_effect = [variable.user_id, variable, None]
+    monkeypatch.setattr(personal_variables, "read_credential", lambda _variable: {"value": "existing-value"})
+    store = AsyncMock()
+    monkeypatch.setattr(personal_variables, "store_credential", store)
+    if stored_secret:
+        with pytest.raises(PersonalVariableError, match="personalVariable.valueRequired"):
+            await personal_variables.update_personal_variable(
+                db, variable.user_id, variable.id, name="NEW", value=None, secret=False,
+            )
+    else:
+        await personal_variables.update_personal_variable(
+            db, variable.user_id, variable.id, name="NEW", value=None, secret=False,
+        )
+        assert (store.await_args.kwargs["label"], store.await_args.kwargs["payload"]) == (
+            "NEW", {"value": "existing-value"},
+        )
 
 
 def test_protected_answers_preserve_exact_value() -> None:

@@ -75,7 +75,7 @@ async def get_personal_variable(
     )
     if for_update:
         statement = statement.with_for_update()
-    if populate_existing:
+    if populate_existing or for_update:
         statement = statement.execution_options(populate_existing=True)
     return await db.scalar(statement)
 
@@ -166,7 +166,7 @@ async def update_personal_variable(
     if duplicate is not None and duplicate.id != variable.id:
         raise PersonalVariableError("personalVariable.duplicate", "name")
     if value is None:
-        if variable.metadata_json.get("secret") is not True or not secret:
+        if variable.metadata_json.get("secret") is True and not secret:
             raise PersonalVariableError("personalVariable.valueRequired", "value")
         value = personal_variable_value(variable)
     return await store_credential(

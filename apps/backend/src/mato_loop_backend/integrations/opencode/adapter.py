@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.integrations.contracts import IntegrationAdapterDefinition
 from mato_loop_backend.integrations.opencode.client import OpenCodeClient, canonicalize_base_url
+from mato_loop_backend.integrations.service import _load_integrations
 from mato_loop_backend.models import Project, UserAccount
 from mato_loop_backend.security import (
     delete_credential,
@@ -109,14 +110,12 @@ async def open_code_client(
 class OpenCodeIntegrationService:
     @staticmethod
     async def _settings(
-        db: AsyncSession, user_id: UUID, *, for_update: bool = False
+        db: AsyncSession, user_id: UUID, *, for_update: bool = False,
+        expected_instance: IntegrationInstance | None = None,
     ) -> UserIntegrationSettings:
-        settings = await SettingsStore.load(
-            db, UserIntegrationSettings, user_id=user_id, for_update=for_update
+        return await _load_integrations(
+            db, user_id, for_update=for_update, expected_instance=expected_instance,
         )
-        for instance in settings.instances:
-            instance.owner_id = user_id
-        return settings
 
     @staticmethod
     def _find(
@@ -201,6 +200,7 @@ class OpenCodeIntegrationService:
         password: str | None,
         remove_password: bool,
         enabled: bool,
+        expected_instance: IntegrationInstance | None = None,
     ) -> UserIntegrationSettings:
         if password is not None and remove_password:
             raise OpenCodeSettingsError("validation.invalidChoice")
@@ -240,7 +240,7 @@ class OpenCodeIntegrationService:
         if connection_changed or password is not None or remove_password or (enabled and not current.enabled):
             server_root = probe.root
             server_version = probe.version
-        settings = await cls._settings(db, user_id, for_update=True)
+        settings = await cls._settings(db, user_id, for_update=True, expected_instance=expected_instance)
         instance = cls._find(settings, integration_id)
         if instance is None or instance.config != current.config:
             raise OpenCodeSettingsError("integration.changed")

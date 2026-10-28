@@ -36,6 +36,7 @@ from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.execution.protocol import WireModel
 from mato_loop_backend.files.service import FileRoot
 from mato_loop_backend.integrations.contracts import IntegrationAdapterDefinition, ToolContribution
+from mato_loop_backend.integrations.service import _load_integrations
 from mato_loop_backend.media.attachments import validate_image
 from mato_loop_backend.models import AgentRun, ExecutionAgent
 from mato_loop_backend.settings import (
@@ -45,23 +46,26 @@ from mato_loop_backend.settings import (
     SettingsStore,
     UserIntegrationSettings,
 )
+from mato_loop_backend.settings.effective import personal_settings_allowed
 from mato_loop_backend.tools.actions import ToolAction
 
 
 async def browser_settings(
     db: AsyncSession, owner_id: UUID, *, for_update: bool = False,
     require_available: bool = True,
+    expected_instance: IntegrationInstance | None = None,
 ) -> UserIntegrationSettings:
     if require_available:
         global_settings = await SettingsStore.load(db, IntegrationSettings)
-        if global_settings.availability_for("browser") != IntegrationAdapterAvailability.FULL:
+        availability = global_settings.availability_for("browser")
+        if availability != IntegrationAdapterAvailability.FULL and not (
+            availability == IntegrationAdapterAvailability.INSTANCE_ONLY
+            and await personal_settings_allowed(db, owner_id, False)
+        ):
             raise ExecutionClientError("browser.unavailable")
-    settings = await SettingsStore.load(
-        db, UserIntegrationSettings, user_id=owner_id, for_update=for_update,
+    return await _load_integrations(
+        db, owner_id, for_update=for_update, expected_instance=expected_instance,
     )
-    for instance in settings.instances:
-        instance.owner_id = owner_id
-    return settings
 
 
 def _find(settings: UserIntegrationSettings, integration_id: UUID) -> IntegrationInstance:
@@ -122,8 +126,9 @@ class BrowserIntegrationService:
     @staticmethod
     async def update(
         db: AsyncSession, integration_id: UUID, *, owner_id: UUID, changes: dict[str, Any],
+        expected_instance: IntegrationInstance | None = None,
     ) -> UserIntegrationSettings:
-        settings = await browser_settings(db, owner_id, for_update=True)
+        settings = await browser_settings(db, owner_id, for_update=True, expected_instance=expected_instance)
         instance = _find(settings, integration_id)
         await _owned_agent(db, owner_id, instance.execution_agent_id)
         if changes.get("execution_agent_id", instance.execution_agent_id) != instance.execution_agent_id:

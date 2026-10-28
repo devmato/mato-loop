@@ -38,12 +38,20 @@ def _clear_integration_policies(instance: IntegrationInstance) -> None:
 
 
 async def _load_integrations(
-    db: AsyncSession, owner_id: UUID | None, *, for_update: bool = False
+    db: AsyncSession, owner_id: UUID | None, *, for_update: bool = False,
+    expected_instance: IntegrationInstance | None = None,
 ) -> IntegrationSettingsDocument:
     settings_type = UserIntegrationSettings if owner_id is not None else IntegrationSettings
     settings = await SettingsStore.load(
-        db, settings_type, user_id=owner_id, for_update=for_update
+        db, settings_type, user_id=owner_id,
+        for_update=for_update or expected_instance is not None,
     )
+    if expected_instance is not None and not any(
+        instance.id == expected_instance.id
+        and instance.model_dump(mode="json") == expected_instance.model_dump(mode="json")
+        for instance in settings.instances
+    ):
+        raise IntegrationSettingsError("integration.changed")
     for instance in settings.instances:
         instance.owner_id = owner_id
     return settings

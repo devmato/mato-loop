@@ -41,8 +41,9 @@ class ArcaneIntegrationService:
 
     @classmethod
     async def update(cls, db: AsyncSession, integration_id: UUID, *, name: str, base_url: str,
-                     api_key: str | None, enabled: bool, owner_id: UUID | None = None) -> IntegrationSettingsDocument:
-        settings = await _load_integrations(db, owner_id, for_update=True)
+                     api_key: str | None, enabled: bool, owner_id: UUID | None = None,
+                     expected_instance: IntegrationInstance | None = None) -> IntegrationSettingsDocument:
+        settings = await _load_integrations(db, owner_id, for_update=True, expected_instance=expected_instance)
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")

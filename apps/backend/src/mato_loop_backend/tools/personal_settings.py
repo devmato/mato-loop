@@ -291,6 +291,12 @@ async def _personal_settings(
             or not context.tool_settings.tool_availability.get("customize_matoloop", True)
             or not context.tool_settings.tool_availability.get(legacy_name, True)):
             return ToolResult.error("tool.unavailable")
+        denied = await _authorize(
+            context, action, area,
+            fields=tuple(sorted(arguments.changes)), changes=arguments.changes,
+        )
+        if denied:
+            return denied
     if area == "agent_identity":
         if action == "get":
             denied = await _authorize(context, action, area)

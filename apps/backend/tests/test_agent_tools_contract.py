@@ -2539,6 +2539,9 @@ async def test_personal_settings_exposes_one_tool_and_reuses_profile_rules(monke
         "changes": {"preferred_name": "Ada"},
     })
     context = _context(tmp_path, call)
+    context.tool_settings.private_permissions.policies.update({
+        "settings.personal.update": "ask", "settings.user_profile.update": "auto",
+    })
     update = AsyncMock(return_value=ToolResult.json({"updatedFields": ["preferred_name"]}))
     monkeypatch.setattr(mock_personal_settings, "_update_user_profile", update)
     monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
@@ -2548,6 +2551,7 @@ async def test_personal_settings_exposes_one_tool_and_reuses_profile_rules(monke
     assert not result.is_error
     assert update.await_args.args[0].preferred_name == "Ada"
     context.db.commit.assert_awaited_once()
+    assert context.ask_handler.await_args.args[0].capability == "settings.personal.update"
 
 
 @pytest.mark.parametrize("area", [None, "integrations"])
@@ -2917,7 +2921,7 @@ async def test_personal_integration_create_dispatches_to_owned_service(
     assert "protected-value" not in result.content
 
 
-async def test_personal_integration_update_keeps_existing_credential(monkeypatch, tmp_path) -> None:
+async def test_personal_integration_update_preserves_credentials_and_rechecks_changes(monkeypatch, tmp_path) -> None:
     from mato_loop_backend.tools import personal_integrations
 
     item = IntegrationInstance(
@@ -2931,9 +2935,10 @@ async def test_personal_integration_update_keeps_existing_credential(monkeypatch
     })
     context = _context(tmp_path, call)
     monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    personal = UserIntegrationSettings(instances=[item])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kw: {
         IntegrationSettings: IntegrationSettings(),
-        UserIntegrationSettings: UserIntegrationSettings(instances=[item]),
+        UserIntegrationSettings: personal,
     }[model]))
     update = AsyncMock(return_value=UserIntegrationSettings(instances=[item]))
     monkeypatch.setattr(personal_integrations.CalDavIntegrationService, "update", update)
@@ -2943,6 +2948,17 @@ async def test_personal_integration_update_keeps_existing_credential(monkeypatch
     assert not result.is_error
     assert update.await_args.kwargs["password"] is None
     assert update.await_args.kwargs["owner_id"] == context.session.user_id
+
+    async def resolve_secrets(_context, _references):
+        personal.instances = [item.model_copy(update={"config": {
+            **item.config, "base_url": "https://new-calendar.example.com",
+        }})]
+        return {"password": "new-password"}
+
+    monkeypatch.setattr(personal_integrations, "resolve_secret_refs", resolve_secrets)
+    call.arguments["changes"] = {"secret_refs": {"password": str(uuid4())}}
+    result = await tool_registry.execute(call, context)
+    assert result.metadata["errorCode"] == "integration.changed"
 
 
 async def test_personal_integration_delete_disabled_existing_entry(monkeypatch, tmp_path) -> None:

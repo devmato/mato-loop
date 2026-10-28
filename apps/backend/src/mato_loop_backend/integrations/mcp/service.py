@@ -166,6 +166,7 @@ class McpIntegrationService:
         enabled: bool,
         owner_id: UUID | None,
         remove_oauth: bool = False,
+        expected_instance: IntegrationInstance | None = None,
     ) -> IntegrationInstance:
         initial = await _load_integrations(db, owner_id)
         current = cls._find(initial, integration_id)
@@ -189,7 +190,7 @@ class McpIntegrationService:
             endpoint = cls._validate_connection(endpoint, discovery_token)
             endpoint, tools = await cls._discover(endpoint, discovery_token)
 
-        settings = await _load_integrations(db, owner_id, for_update=True)
+        settings = await _load_integrations(db, owner_id, for_update=True, expected_instance=expected_instance)
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("mcp.notFound")

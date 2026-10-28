@@ -108,6 +108,7 @@ class OpenScadIntegrationService:
         binary_path: str,
         enabled: bool,
         settings_owner_id: UUID | None = None,
+        expected_instance: IntegrationInstance | None = None,
     ) -> IntegrationSettings:
         initial = await _load_integrations(db, settings_owner_id)
         current = cls._find(initial, integration_id)
@@ -117,7 +118,7 @@ class OpenScadIntegrationService:
             raise IntegrationSettingsError("executionAgent.notFound")
         for agent_id in sorted({current.execution_agent_id, execution_agent_id}, key=str):
             await cls._owned_agent(db, user_id, agent_id)
-        settings = await _load_integrations(db, settings_owner_id, for_update=True)
+        settings = await _load_integrations(db, settings_owner_id, for_update=True, expected_instance=expected_instance)
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")

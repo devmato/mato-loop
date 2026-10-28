@@ -1,8 +1,9 @@
 import asyncio
 import json
 from collections import Counter
-from contextlib import aclosing
+from contextlib import aclosing, asynccontextmanager
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
@@ -17,6 +18,7 @@ import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.agent.summarization as mock_agent_summarization
 import mato_loop_backend.agent.titles as mock_agent_titles
 import mato_loop_backend.notifications as mock_notifications
+import mato_loop_backend.tools.personal_integrations as personal_integrations
 import mato_loop_backend.tools.web as mock_tools_web
 import mato_loop_backend.web_push as mock_web_push
 from mato_loop_backend.agent import subagents
@@ -34,6 +36,7 @@ from mato_loop_backend.execution import (
     execution_agent_connections,
 )
 from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.integrations.caldav.service import CalDavIntegrationService
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
@@ -44,6 +47,11 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.permissions.decisions import decide_agent_action
+from mato_loop_backend.personal_variables import (
+    create_personal_variable,
+    personal_variable_value,
+    update_personal_variable,
+)
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.security import require_user
@@ -56,6 +64,7 @@ from mato_loop_backend.settings.models import (
     ToolExecutionPolicy,
     UserAgentProfilesSettings,
 )
+from mato_loop_backend.tools.arguments import PersonalSettingsArguments
 from mato_loop_backend.web.fetch import WebFetchResult
 
 
@@ -163,6 +172,54 @@ async def test_admission_account_lock_allows_first_personal_settings_insert(nati
         await settings.execute(text("SET LOCAL lock_timeout = '2s'"))
         record = await SettingsStore.save(settings, UserAgentProfilesSettings(), user_id=fixture.user.id)
         assert record.user_id == fixture.user.id
+
+
+async def test_personal_variable_rename_keeps_concurrent_value(native_database):
+    fixture = native_database
+    async with fixture.factory() as stale, fixture.factory() as editor:
+        variable = await create_personal_variable(
+            stale, fixture.user.id, name="OLD", value="old-value", secret=False,
+        )
+        await stale.commit()
+        await update_personal_variable(
+            editor, fixture.user.id, variable.id, name="OLD", value="new-value", secret=False,
+        )
+        await editor.commit()
+        renamed = await update_personal_variable(
+            stale, fixture.user.id, variable.id, name="NEW", value=None, secret=False,
+        )
+        await stale.commit()
+        assert personal_variable_value(renamed) == "new-value"
+
+
+async def test_customize_rejects_connection_changed_before_service_save(native_database, monkeypatch):
+    fixture = native_database
+    async with fixture.factory() as db, fixture.factory() as editor:
+        saved = await CalDavIntegrationService.create(
+            db, owner_id=fixture.user.id, name="Calendar", enabled=True,
+            base_url="https://old.example.com", username="ada", password="password",
+        )
+        item = saved.instances[0]
+
+        @asynccontextmanager
+        async def changed_service_session():
+            await CalDavIntegrationService.update(
+                editor, item.id, owner_id=fixture.user.id, name=item.name, enabled=True,
+                base_url="https://new.example.com", username="ada", password=None,
+                expected_instance=item,
+            )
+            yield editor
+
+        monkeypatch.setattr(personal_integrations, "AsyncSessionFactory", changed_service_session)
+        result = await personal_integrations.manage_integrations(
+            PersonalSettingsArguments(
+                action="update", area="integrations", integration_id=item.id,
+                changes={"name": "Renamed calendar"},
+            ),
+            SimpleNamespace(db=db, session=SimpleNamespace(user_id=fixture.user.id)),
+            AsyncMock(return_value=None),
+        )
+        assert result.metadata["errorCode"] == "integration.changed"
 
 
 @pytest.mark.parametrize("command_name", ["git-merge", "git_merge"])

@@ -1025,6 +1025,17 @@ def test_browser_crud_owner_scoped_empty_config_one_per_agent_and_no_rebind(brow
     assert case.client.delete(url).json() == {"configured": False, "instances": []}
 
 
+@pytest.mark.parametrize("availability,is_admin,status", [
+    ("instance_only", True, 201), ("instance_only", False, 503), ("disabled", True, 503),
+])
+def test_browser_setup_matches_personal_admin_availability(browser_api, availability, is_admin, status):
+    case = browser_api
+    case.documents[IntegrationSettings, None] = IntegrationSettings(adapter_availability={"browser": availability})
+    case.db.get.return_value = SimpleNamespace(is_admin=is_admin)
+    response = case.client.post("/api/integrations/browser", json={"executionAgentId": str(case.agent)})
+    assert response.status_code == status
+
+
 def test_global_disable_blocks_use_but_allows_deletion(browser_api):
     case = browser_api
     base = "/api/integrations/browser"

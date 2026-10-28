@@ -121,10 +121,11 @@ class MailIntegrationService:
         password: str | None,
         enabled: bool,
         owner_id: UUID | None = None,
+        expected_instance: IntegrationInstance | None = None,
     ) -> IntegrationSettings:
         if password == "":
             raise IntegrationSettingsError("validation.required")
-        settings = await _load_integrations(db, owner_id, for_update=True)
+        settings = await _load_integrations(db, owner_id, for_update=True, expected_instance=expected_instance)
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")

@@ -14,6 +14,7 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationContributions,
     ToolContribution,
 )
+from mato_loop_backend.integrations.service import _load_integrations
 from mato_loop_backend.integrations.tbs_desk.client import (
     TbsDeskClient,
     TbsDeskError,
@@ -524,9 +525,10 @@ class TbsDeskIntegrationService:
 
     @classmethod
     async def update(cls, db, integration_id: UUID, *, owner_id: UUID, name: str,
-                     base_url: str, username: str, password: str | None, enabled: bool):
-        settings = await SettingsStore.load(
-            db, UserIntegrationSettings, user_id=owner_id, for_update=True
+                     base_url: str, username: str, password: str | None, enabled: bool,
+                     expected_instance: IntegrationInstance | None = None):
+        settings = await _load_integrations(
+            db, owner_id, for_update=True, expected_instance=expected_instance,
         )
         instance = cls.find(settings, integration_id)
         if instance is None:

@@ -363,6 +363,9 @@ async def manage_integrations(
     )
     if denied:
         return denied
+    credential_values = await resolve_secret_refs(context, changes.secret_refs) if changes else {}
+    if isinstance(credential_values, ToolResult):
+        return credential_values
     latest_global, latest_personal = await _settings(context)
     if action != "delete" and latest_global.availability_for(adapter_type) != IntegrationAdapterAvailability.FULL:
         return ToolResult.error("integration.personalAdapterDisabled")
@@ -371,9 +374,6 @@ async def manage_integrations(
         for item in latest_personal.instances
     ):
         return ToolResult.error("integration.changed")
-    credential_values = await resolve_secret_refs(context, changes.secret_refs) if changes else {}
-    if isinstance(credential_values, ToolResult):
-        return credential_values
     if any(
         not value or len(value) > (4_096 if adapter_type == "opencode" else 10_000)
         for value in credential_values.values()
@@ -451,6 +451,8 @@ async def manage_integrations(
                     key: getattr(changes, key) for key in changes.model_fields_set if key in {"name", "enabled", "execution_agent_id"}
                 }}
         # Product services commit or roll back their own transaction, never the agent's state.
+        if action == "update":
+            kwargs["expected_instance"] = current
         async with AsyncSessionFactory() as service_db:
             result = await getattr(service, operation)(service_db, *identifier, **kwargs)
     except (IntegrationSettingsError, McpClientError, OpenCodeSettingsError, OpenCodeError, ExecutionClientError, TbsDeskError) as exc:
