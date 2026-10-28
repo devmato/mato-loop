@@ -65,7 +65,6 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   let retryWaiting = false
   let refreshing = false
   let disposed = false
-  let connectionErrorShown = false
   const pendingChanges = new Map()
   const presenceClientId = randomUuid(window.crypto)
   const focused = ref(appIsFocused())
@@ -200,27 +199,15 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     const heartbeat = () => {
       if (disposed || changeSource !== source) return
       window.clearTimeout(heartbeatTimer)
-      heartbeatTimer = window.setTimeout(() => {
-        connectionError()
-        connectChanges()
-      }, 45_000)
+      heartbeatTimer = window.setTimeout(connectChanges, 45_000)
     }
-    const connectionError = () => {
-      if (disposed || changeSource !== source) return
-      if (!connectionErrorShown) notifyError({ code: 'stream.connectionLost' })
-      connectionErrorShown = true
-    }
-    source.onopen = () => {
-      connectionErrorShown = false
-      heartbeat()
-    }
+    source.onopen = heartbeat
     source.addEventListener('keepalive', heartbeat)
     source.addEventListener('changed', (event) => {
       if (disposed || changeSource !== source) return
       heartbeat()
       queueChanges(JSON.parse(event.data))
     })
-    source.onerror = connectionError
     heartbeat()
   }
 
