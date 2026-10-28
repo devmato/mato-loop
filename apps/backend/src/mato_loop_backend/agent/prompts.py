@@ -410,8 +410,7 @@ def general_system_prompt(
                 "model codes, and qualify or omit absent claims.",
                 "Reuse fetched evidence; follow toolResultReference for omitted sections when possible. "
                 "Refetch only for new or updated evidence.",
-                "For missing dynamic content, request webfetch with javascript=true. "
-                "HTTP errors and consent pages alone do not imply a JavaScript requirement. "
+                "Webfetch does not execute JavaScript. "
                 "For general research, prefer another suitable source over a blocked page.",
                 "Never invent image URLs. Fetch the exact URL, prefer its attachment as research input, and "
                 "do not repeat the remote URL. Request pdf_pages for PDF layouts.",

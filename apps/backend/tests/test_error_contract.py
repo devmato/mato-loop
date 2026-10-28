@@ -82,10 +82,6 @@ def test_execution_and_output_limits_have_controlled_fallbacks() -> None:
     assert describe_error("process.unsupportedTargetQuoting").message == "The shell path target uses unsupported quoting. Use a literal path with ordinary quotes."
 
 
-def test_disabled_webfetch_javascript_has_a_controlled_fallback() -> None:
-    assert describe_error("webfetch.javascriptDisabled").message == "JavaScript web fetching is disabled by the administrator."
-
-
 def test_provider_context_capacity_error_preserves_controlled_code() -> None:
     from mato_loop_backend.providers.base import ProviderError
 

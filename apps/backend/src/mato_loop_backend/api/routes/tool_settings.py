@@ -21,7 +21,6 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolSettings,
     WebAccessSettings,
-    WebFetchSettings,
     load_effective_tools,
 )
 from mato_loop_backend.settings.models import (
@@ -63,9 +62,6 @@ class ToolConfigurationRequest(BaseModel):
 
     tool_availability: dict[str, StrictBool] = Field(
         validation_alias=AliasChoices("toolAvailability", "tool_availability")
-    )
-    web_fetch: WebFetchSettings = Field(
-        validation_alias=AliasChoices("webFetch", "web_fetch")
     )
     web_access: WebAccessSettings = Field(
         default_factory=WebAccessSettings,
@@ -116,7 +112,6 @@ def tool_configuration_payload(settings: ToolSettings) -> dict:
         "privatePermissions": _tool_permissions_payload(settings.private_permissions, tool_registry.catalog(defaults, IntegrationSettings())),
         "publicPermissions": _tool_permissions_payload(settings.public_permissions, tool_registry.catalog(defaults, IntegrationSettings())),
         "shellPrefixes": settings.shell_prefixes.model_dump(),
-        "webFetch": settings.web_fetch.model_dump(mode="json", by_alias=True),
         "webAccess": settings.web_access.model_dump(mode="json", by_alias=True),
         **{alias: {"timeoutSeconds": getattr(settings, field).timeout_seconds} for field, alias in MEDIA_FIELDS.items()},
         "privateGroups": tool_registry.catalog(defaults.model_copy(deep=True).select_trust(TrustLevel.PRIVATE), IntegrationSettings()),
@@ -186,7 +181,6 @@ async def update_tool_configuration(
     for field in ("personal_settings_enabled", "shell_prefixes"):
         if field in payload.model_fields_set:
             setattr(settings, field, getattr(payload, field))
-    settings.web_fetch = payload.web_fetch
     if "web_access" in payload.model_fields_set:
         settings.web_access = payload.web_access
     for field in MEDIA_FIELDS:

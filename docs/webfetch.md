@@ -1,58 +1,25 @@
-# Webfetch and JavaScript
+# Webfetch
 
-`webfetch` has one optional `javascript` argument. Omitted or `null` uses the global
-`web_fetch.javascript_hosts` setting (`javascriptHosts` in the administration API).
-Administrators open **JavaScript-Konfiguration** on the enabled Webfetch tool
-under **Administration > Tools > Tool-Einstellungen > Globaler Standard**. The dialog's **JavaScript aktivieren**
-switch controls `web_fetch.javascript_enabled` (`javascriptEnabled` in the API),
-defaulting to true for existing settings. When disabled, omitted/null defaults use HTTP
-and an explicit `javascript=true` fails with `webfetch.javascriptDisabled` before
-network access or approval; there is no silent fallback. The host list remains saved
-but is hidden in the dialog. When enabled, **Websites mit automatischem JavaScript**
-edits the list below; it is a default-selection list, not an access allowlist.
-**Übernehmen** updates
-the settings form; **Speichern** on the page persists it. Closing or cancelling the
-dialog discards its draft. Use one exact DNS hostname per line, without
-URLs, IP addresses, ports or wildcards. The default list is `reddit.com` and `www.reddit.com`;
-existing settings receive that default. Entries are trimmed, normalized to lowercase
-IDNA ASCII without trailing dots, and deduplicated. At most 100 entries are accepted.
-An empty list defaults all hosts to HTTP. Only the normalized requested hostname is
-matched, not subdomains or redirect destinations. While JavaScript is enabled,
-explicit `true` or `false` overrides this choice. The list is neither model-facing
-nor learned automatically.
-Selection happens once, before authorization, with no automatic retries or engine fallback.
+Webfetch uses `curl_cffi` with Chrome transport impersonation for HTTP and HTTPS.
+It does not execute JavaScript or load page dependencies. There is no browser
+process, additional service, engine selection, or automatic transport fallback.
+Impersonation improves compatibility with some sites but does not guarantee access
+through bot challenges. For research, prefer another suitable source when needed;
+browser control is appropriate for page interaction or browser-authenticated access.
 
-There is no administrator engine selection. Webfetch-specific settings contain only
-`javascript_enabled` and `javascript_hosts`. The shared `ToolSettings.web_access`
-group owns `public_addresses_only`, `user_agent`, and `max_response_mib`, exposed as
-`webAccess` in the configuration API. These settings are under
-**Administration > Tools > Einstellungen > Webabrufe und Downloads** and apply to
-Webfetch, downloads, transcripts, and integration URL imports through that pipeline.
-They are not a network-wide filter for shell, computer browser, search providers,
-or configured integration connections. Availability and JavaScript remain in
-**Tool-Einstellungen**. Neither fetch mode requires a computer or personal integration.
-The existing computer browser is independent.
+The shared `ToolSettings.web_access` group owns `public_addresses_only`,
+`user_agent`, and `max_response_mib`, exposed as `webAccess` in the configuration
+API. These settings are under **Administration > Tools > Einstellungen > Webabrufe
+und Downloads** and apply to Webfetch, downloads, transcripts, and integration URL
+imports through that pipeline. They are not a network-wide filter for shell,
+computer browser, search providers, or configured integration connections.
+Tool availability remains under **Tool-Einstellungen**. Old JavaScript settings
+are ignored and are no longer returned or saved; there is no `javascript` argument.
 
-Migration `65ff25cc3202` deliberately resets the three shared values to their defaults:
-public addresses only, User-Agent `MatoLoop/1.0`, and 64 MiB per response. It removes
-the old fields and obsolete `engine` key while retaining JavaScript and other tool
-settings. Downgrade does not restore discarded values. Runtime models reject the
-removed fields; there is no legacy read fallback.
-
-An initial bounded HTTP request determines the content type. PDFs, images,
-structured data, plain text, and Markdown keep their existing processing.
-HTTP requests prefer the requested Markdown, text, or HTML format using weighted
-Accept headers. The actual response content type determines processing. With
-JavaScript enabled for HTML, Lightpanda loads the original URL itself, including scripts, cookies,
-binary request bodies, redirects, and hash routes. This means HTML is requested
-again after the content-type check. The resulting DOM is sanitized and converted
-by the existing extraction code. Native browser subrequests retain Lightpanda's
-own Accept headers rather than overriding scripts and API requests with a page-format preference.
-
-For missing dynamic content, the model can explicitly request JavaScript. An HTTP
-error or consent page alone does not establish that need. General research should
-prefer another suitable source; browser control is appropriate when the task requires
-interaction with a specific page or browser-authenticated access.
+HTTP requests use the configured User-Agent (`MatoLoop/1.0` by default) and prefer
+the requested Markdown, text, or HTML format using weighted Accept headers. The
+actual response content type determines processing. HTML is sanitized and converted;
+PDFs, images, structured data, plain text, and Markdown retain their existing processing.
 
 ## Model result size
 
@@ -79,60 +46,19 @@ normal precedence; download writes are authorized separately. Tool availability 
 the configured address restriction remain enforced, including when internal targets
 have been explicitly enabled.
 
-With JavaScript enabled, `network.fetch` authorizes the initial canonical URL
-once. That page authorization includes its scripts, data requests, and redirects;
-there are no separate approvals for subresources. The initial transport still
-validates and pins addresses, including after approval. The browser uses its own
-native transport, not CDP interception or replacement HTTP responses.
+Every redirect is authorized separately. DNS is resolved and validated again after
+approval; libcurl connects only to those pinned addresses while retaining the
+original hostname for TLS verification, SNI, and Host. Environment proxies are not
+used. Requests have no shared cookies or authenticated browser state.
+**Nur öffentliche Zieladressen zulassen** blocks private and special-use addresses;
+disabling it deliberately permits targets reachable from the backend.
 
-**Nur öffentliche Zieladressen zulassen** enables Lightpanda's native
-`--block-private-networks` plus explicit `--block-cidrs` enforcement after DNS
-resolution. The CIDR policy matches MatoLoop's public-address classification,
-including CGNAT/metadata, documentation, multicast, reserved IPv4/IPv6, and IPv6
-site-local ranges, while retaining the IANA public exceptions. A boundary test
-checks parity with the Python runtime; mapped IPv6 addresses use IPv4 rules.
-The final URL is also
-validated before returning content. Disabling the setting deliberately permits
-targets reachable from the backend. Without JavaScript, HTTP retains exact-URL
-authorization and DNS pinning on every redirect.
+The configured response limit applies to declared and received sizes, including
+decompressed bytes. Redirect and error bodies are not downloaded. Network requests
+and conversion share the remaining timeout; approval waits do not consume it.
+Cancellation closes the request session. Transport failures use controlled error
+codes rather than external error text.
 
-Fragments are preserved in browsing URLs, results, source identities, saved tool
-arguments, and displayed citations. Network requests and permission matchers
-remain fragment-free. A page's own network actions are part of loading it; no
-public POST or browser-interaction arguments are added to webfetch.
-
-## Runtime
-
-The backend copies the finished binary from official Lightpanda 1.0.0, pinned to
-`sha256:5b84708cb3d9bef841aba4a4cd299f4de0609ac1bd7d4c6fbfcbf168d56b685e`.
-Lightpanda is AGPL-3.0 licensed; source: <https://github.com/lightpanda-io/browser>.
-There is no local engine patch, compiler, Node, Playwright, or additional service.
-
-Each render runs `lightpanda fetch --json --dump html` in a fresh process with a
-minimal environment, disabled telemetry and core dumps, and no shared profile or
-disk cache. Cookies last only for that process. Two renders may run concurrently
-per backend process. Queue time and execution consume the remaining tool timeout;
-approval wait does not. Cancellation, errors, and timeouts kill and reap the process.
-
-The configured response-size limit applies to each native HTTP response and to
-the final DOM output, not the aggregate of all resources. Captured JSON output is
-bounded with an allowance for JSON escaping. V8 heap is limited to 128 MiB (not the
-whole process), and a five-second watchdog limits stalled JavaScript. Native
-network-idle waiting explicitly uses the remaining tool budget (`--wait-ms`),
-alongside the native HTTP and termination deadlines; it does not use the
-engine's five-second page-wait default. Stylesheets and workers
-are enabled; images and iframes use the engine's disabled defaults.
-
-Both engines use the shared configured User-Agent, default `MatoLoop/1.0`.
-Lightpanda rejects User-Agents containing `Mozilla`; this is reported only when an
-HTML JavaScript fetch needs it. HTTP and non-HTML fetches accept those values. Web search
-is separate and its clients manage their own headers.
-
-## Compatibility
-
-Native redirects work without the former CDP redirect workaround. Lightpanda
-1.0.0 still has an upstream issue with relative imports in redirected ES modules;
-an explicit expected-failure regression records it for future binary upgrades.
-The engine may return partial page content when a script or subresource fails.
-It does not guarantee Chromium compatibility, passage through bot challenges,
-or support for every layout-dependent application.
+Fragments remain in result and citation identity, but are excluded from network
+requests and permission matching. Webfetch exposes no POST or browser-interaction
+argument; internal callers can use the shared bounded transport for binary POSTs.

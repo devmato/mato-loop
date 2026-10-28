@@ -10,14 +10,18 @@ import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from email.message import Message
+from email.parser import BytesHeaderParser
+from email.policy import HTTP
 from pathlib import PurePosixPath
 from typing import Literal
 from urllib.parse import quote, unquote
 
-import aiohttp
-from aiohttp.abc import AbstractResolver
 from bs4 import BeautifulSoup
 from bs4.element import Tag
+from curl_cffi import AsyncSession, CurlECode, CurlOpt
+from curl_cffi.curl import CURL_WRITEFUNC_ERROR
+from curl_cffi.requests.exceptions import RequestException, SSLError
+from curl_cffi.requests.exceptions import Timeout as CurlTimeout
 from markdownify import markdownify
 from yarl import URL
 
@@ -31,10 +35,7 @@ from mato_loop_backend.media.processing import (
     extract_pdf_pages,
     format_pdf_pages,
 )
-from mato_loop_backend.settings.models import (
-    DEFAULT_WEB_ACCESS_USER_AGENT,
-    DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS,
-)
+from mato_loop_backend.settings.models import DEFAULT_WEB_ACCESS_USER_AGENT
 
 logger = logging.getLogger("mato_loop_backend.integrations.webfetch")
 
@@ -203,37 +204,6 @@ class _Response:
     body: bytes
 
 
-class _PinnedResolver(AbstractResolver):
-    def __init__(
-        self,
-        host: str,
-        addresses: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...],
-    ) -> None:
-        self._host = host
-        self._addresses = addresses
-
-    async def resolve(
-        self, host: str, port: int = 0, family: socket.AddressFamily = socket.AF_UNSPEC
-    ) -> list[dict[str, object]]:
-        if host.rstrip(".").lower() != self._host:
-            raise OSError("resolver host mismatch")
-        return [
-            {
-                "hostname": host,
-                "host": str(address),
-                "port": port,
-                "family": socket.AF_INET6 if address.version == 6 else socket.AF_INET,
-                "proto": socket.IPPROTO_TCP,
-                "flags": 0,
-            }
-            for address in self._addresses
-            if family in {socket.AF_UNSPEC, socket.AF_INET6 if address.version == 6 else socket.AF_INET}
-        ]
-
-    async def close(self) -> None:
-        return None
-
-
 def _error(code: str, **params: object) -> WebFetchError:
     return WebFetchError(f"webfetch.{code}", params=params or None)
 
@@ -255,7 +225,8 @@ def _canonical_host(host: str) -> str:
             canonical = host.rstrip(".").encode("idna").decode("ascii").lower()
         except UnicodeError as exc:
             raise _error("invalidUrl") from exc
-        if not canonical:
+        # libcurl interprets leading +/- as DNS-cache commands.
+        if not canonical or canonical.startswith(("+", "-")):
             raise _error("invalidUrl") from None
         return canonical
     return str(address.ipv4_mapped or address) if address.version == 6 else str(address)
@@ -374,19 +345,6 @@ async def _validate_target(
     return _Target(url=url, host=host, port=port, addresses=addresses)
 
 
-async def _read_limited(
-    response: aiohttp.ClientResponse, max_response_bytes: int,
-) -> bytes:
-    if response.content_length is not None and response.content_length > max_response_bytes:
-        raise _error("responseTooLarge")
-    body = bytearray()
-    async for chunk in response.content.iter_chunked(64 * 1024):
-        if len(body) + len(chunk) > max_response_bytes:
-            raise _error("responseTooLarge")
-        body.extend(chunk)
-    return bytes(body)
-
-
 async def _request_once(
     target: _Target,
     timeout: float,
@@ -398,12 +356,42 @@ async def _request_once(
     body: bytes | None = None,
     request_content_type: str | None = None,
 ) -> _Response:
-    resolver = _PinnedResolver(target.host, target.addresses)
-    connector = aiohttp.TCPConnector(
-        resolver=resolver,
-        use_dns_cache=True,
-        ttl_dns_cache=None,
-        limit=1,
+    status = 0
+    header_buffer = bytearray()
+    response_body = bytearray()
+    too_large = False
+
+    def receive_header(line: bytes) -> int:
+        nonlocal status, too_large
+        if line.startswith(b"HTTP/"):
+            status = int(line.split()[1])
+            header_buffer.clear()
+        else:
+            header_buffer.extend(line)
+        if line.lower().startswith(b"content-length:") and 200 <= status < 300 and status != 202:
+            try:
+                too_large = int(line.partition(b":")[2]) > max_response_bytes
+            except ValueError:
+                return CURL_WRITEFUNC_ERROR
+            if too_large:
+                return CURL_WRITEFUNC_ERROR
+        # Redirects and errors need headers only, never an external response body.
+        if line == b"\r\n" and (status in {101, 202} or status >= 300):
+            return CURL_WRITEFUNC_ERROR
+        return len(line)
+
+    def receive_body(chunk: bytes) -> int:
+        nonlocal too_large
+        if len(response_body) + len(chunk) > max_response_bytes:
+            too_large = True
+            return CURL_WRITEFUNC_ERROR
+        response_body.extend(chunk)
+        return len(chunk)
+
+    host = f"[{target.host}]" if ":" in target.host else target.host
+    addresses = ",".join(
+        f"[{address}]" if address.version == 6 else str(address)
+        for address in target.addresses
     )
     headers = {
         "Accept": accept,
@@ -414,62 +402,44 @@ async def _request_once(
     if request_content_type is not None:
         headers["Content-Type"] = request_content_type
     try:
-        async with aiohttp.ClientSession(
-            connector=connector,
-            cookie_jar=aiohttp.DummyCookieJar(),
-            headers=headers,
-            skip_auto_headers={"Cookie"},
-            timeout=aiohttp.ClientTimeout(total=timeout),
+        async with AsyncSession(
+            impersonate="chrome",
+            allow_redirects=False,
+            discard_cookies=True,
+            timeout=timeout,
             trust_env=False,
+            curl_options={
+                CurlOpt.RESOLVE: [f"{host}:{target.port}:{addresses}"],
+                CurlOpt.HEADERFUNCTION: receive_header,
+            },
         ) as session:
-            request = (
-                session.get(target.url, allow_redirects=False)
-                if method == "GET"
-                else session.post(target.url, data=body, allow_redirects=False)
+            await session.request(
+                method, str(target.url), headers=headers, content=body,
+                content_callback=receive_body, accept_encoding="gzip, deflate", quote=False,
             )
-            async with request as response:
-                if response.status in _REDIRECT_STATUSES:
-                    return _Response(
-                        status=response.status,
-                        location=response.headers.get("Location"),
-                        content_type="",
-                        charset=None,
-                        content_disposition=None,
-                        body=b"",
-                    )
-                if not 200 <= response.status < 300:
-                    return _Response(
-                        status=response.status,
-                        location=None,
-                        content_type="",
-                        charset=None,
-                        content_disposition=None,
-                        body=b"",
-                    )
-                if (
-                    response.content_length is not None
-                    and response.content_length > max_response_bytes
-                ):
-                    raise _error("responseTooLarge")
-                body = await _read_limited(response, max_response_bytes)
-                content_type = response.headers.get("Content-Type", "").split(";", 1)[0]
-                return _Response(
-                    status=response.status,
-                    location=None,
-                    content_type=content_type.strip().lower(),
-                    charset=response.charset,
-                    content_disposition=response.headers.get("Content-Disposition"),
-                    body=body,
-                )
-    except WebFetchError:
-        raise
-    except TimeoutError as exc:
+    except (TimeoutError, CurlTimeout) as exc:
         raise _error("timeout") from exc
-    except aiohttp.ClientSSLError as exc:
+    except SSLError as exc:
         logger.warning("Web fetch TLS verification failed for host %s", target.host)
         raise _error("tlsFailed") from exc
-    except (aiohttp.ClientError, OSError) as exc:
+    except RequestException as exc:
+        if exc.code == CurlECode.WRITE_ERROR and (status in {101, 202} or status >= 300):
+            pass
+        elif too_large:
+            raise _error("responseTooLarge") from exc
+        else:
+            raise _error("connectionFailed") from exc
+    except OSError as exc:
         raise _error("connectionFailed") from exc
+    response_headers = BytesHeaderParser(policy=HTTP).parsebytes(bytes(header_buffer))
+    return _Response(
+        status=status,
+        location=response_headers.get("Location"),
+        content_type=response_headers.get("Content-Type", "").split(";", 1)[0].strip().lower(),
+        charset=response_headers.get_content_charset(),
+        content_disposition=response_headers.get("Content-Disposition"),
+        body=bytes(response_body),
+    )
 
 
 def _decode_text(body: bytes, charset: str | None, *, html_content: bool) -> str:
@@ -1045,9 +1015,6 @@ async def fetch_web(
     pdf_vision_handler: PdfVisionHandler | None = None,
     pdf_pages: tuple[int, ...] | list[int] = (),
     user_agent: str = DEFAULT_WEB_ACCESS_USER_AGENT,
-    javascript: bool | None = None,
-    javascript_enabled: bool = True,
-    javascript_hosts: list[str] | tuple[str, ...] = DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS,
 ) -> WebFetchResult:
     if format not in {"html", "markdown", "text"}:
         raise _error("formatUnsupported")
@@ -1061,40 +1028,17 @@ async def fetch_web(
         raise ValueError("pdf_pages must contain at most eight positive integers")
     normalized_pdf_pages = tuple(sorted(set(pdf_pages)))
     _validate_fetch_limits(timeout, max_response_bytes)
-    _, host, _ = _parse_url(url)
-    if javascript is True and not javascript_enabled:
-        raise _error("javascriptDisabled")
-    use_javascript = javascript_enabled and host in javascript_hosts if javascript is None else javascript
-    authorized = False
-
-    async def authorize_page(value: str) -> None:
-        nonlocal authorized
-        if authorize_url is not None and not authorized:
-            await authorize_url(value)
-            authorized = True
-
     try:
         target, response, remaining = await _follow_redirects(
             url,
             timeout,
             public_addresses_only,
-            authorize_page if use_javascript else authorize_url,
+            authorize_url,
             max_response_bytes,
             user_agent,
             _PAGE_ACCEPT[format],
         )
         try:
-            if use_javascript and response.content_type in {"text/html", "application/xhtml+xml"}:
-                from mato_loop_backend.web.lightpanda import render_html
-
-                if "mozilla" in user_agent.lower():
-                    raise _error("userAgentUnsupported")
-                target, response, remaining = await render_html(
-                    replace(target, browsing_url=URL(canonicalize_url(url, preserve_fragment=True), encoded=True)), timeout=remaining,
-                    public_addresses_only=public_addresses_only,
-                    max_response_bytes=max_response_bytes,
-                    user_agent=user_agent,
-                )
             async with asyncio.timeout(max(remaining, 0.001)):
                 result = await _build_result(
                     target,

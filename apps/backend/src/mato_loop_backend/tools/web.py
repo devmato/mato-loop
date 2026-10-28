@@ -123,12 +123,11 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
 
 async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolResult:
     await web_access.ensure_webfetch_binding_is_current(context)
-    settings = context.tool_settings.web_fetch.model_copy(deep=True)
     access = context.tool_settings.web_access.model_copy(deep=True)
 
     async def authorize_url(url: str) -> None:
         await web_access.authorize_webfetch_target(context, url)
-        if context.tool_settings.web_fetch != settings or context.tool_settings.web_access != access:
+        if context.tool_settings.web_access != access:
             raise WebFetchError("tool.unavailable")
 
     result = await fetch_web(
@@ -141,9 +140,6 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
         pdf_vision_handler=context.pdf_vision_handler,
         pdf_pages=arguments.pdf_pages,
         user_agent=access.user_agent,
-        javascript=arguments.javascript,
-        javascript_enabled=settings.javascript_enabled,
-        javascript_hosts=settings.javascript_hosts,
     )
     if not result.content.strip() and not result.images:
         return ToolResult.error(

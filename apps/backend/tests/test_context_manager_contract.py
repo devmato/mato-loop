@@ -2115,7 +2115,7 @@ def test_webfetch_browser_fallback_prompt_matches_available_tools() -> None:
     assert "attached browser" not in unavailable
     assert "request browser control" not in unavailable
     assert "prefer another suitable source" in requestable
-    assert "webfetch with javascript=true" in unavailable
+    assert "Webfetch does not execute JavaScript." in unavailable
 
 
 def test_agent_profile_uses_one_persona_before_task_instructions() -> None:

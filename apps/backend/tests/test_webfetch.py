@@ -12,9 +12,7 @@ from contextlib import asynccontextmanager
 from io import BytesIO
 from unittest.mock import AsyncMock, Mock
 
-import aiohttp
 import pytest
-from aiohttp import web
 from PIL import Image
 from pypdf import PdfWriter
 from yarl import URL
@@ -80,43 +78,6 @@ def _origin(port: int, host: str = "127.0.0.1") -> str:
     return f"http://{host}:{port}"
 
 
-@pytest.mark.parametrize(("host", "hosts", "javascript", "enabled", "expected"), [
-    ("reddit.com", ["reddit.com", "www.reddit.com"], None, True, "Rendered"),
-    ("WWW.Reddit.COM.", ["reddit.com", "www.reddit.com"], None, True, "Rendered"),
-    ("www.reddit.com", ["www.reddit.com"], False, True, "HTTP"),
-    ("reddit.com.example.test", ["reddit.com"], None, True, "HTTP"),
-    ("example.test", ["reddit.com"], None, True, "HTTP"),
-    ("example.test", [], True, True, "Rendered"),
-    ("example.test", ["example.test"], None, True, "Rendered"),
-    ("sub.example.test", ["example.test"], None, True, "HTTP"),
-    ("reddit.com", [], None, True, "HTTP"),
-    ("reddit.com", ["reddit.com"], None, False, "HTTP"),
-])
-async def test_javascript_host_defaults_and_explicit_overrides(monkeypatch, host, hosts, javascript, enabled, expected):
-    monkeypatch.setattr(web_fetch, "_resolve_addresses", AsyncMock(return_value=(ipaddress.ip_address("127.0.0.1"),)))
-
-    async def render(target, **_kwargs):
-        return target, web_fetch._Response(200, None, "text/html", "utf-8", None, b"Rendered"), 30
-
-    monkeypatch.setattr("mato_loop_backend.web.lightpanda.render_html", render)
-
-    async def responder(_path, _headers):
-        return _response(b"<main>HTTP</main>", headers={"Content-Type": "text/html"})
-
-    async with _server(responder) as port:
-        result = await fetch_web(_origin(port, host), javascript_hosts=hosts, javascript=javascript,
-                                 javascript_enabled=enabled, public_addresses_only=False)
-    assert result.content == expected
-
-
-async def test_disabled_javascript_cannot_be_requested_explicitly(monkeypatch):
-    fetch = AsyncMock(side_effect=AssertionError("Disabled JavaScript must fail before fetching"))
-    monkeypatch.setattr(web_fetch, "_follow_redirects", fetch)
-    assert await _error_code(fetch_web(
-        "https://example.com", javascript=True, javascript_enabled=False,
-    )) == "webfetch.javascriptDisabled"
-
-
 @pytest.mark.parametrize(("format", "preferred"), [
     ("markdown", "text/markdown"), ("text", "text/plain"), ("html", "text/html"),
 ])
@@ -128,297 +89,6 @@ async def test_format_accept_header_selects_page_instead_of_interstitial(format,
     async with _server(responder) as port:
         result = await fetch_web(_origin(port), format=format, public_addresses_only=False)
     assert result.content == "Article"
-
-
-async def test_javascript_html_rejects_incompatible_user_agent():
-    async def responder(_path, _headers):
-        return _response(b"<main>Page</main>", headers={"Content-Type": "text/html"})
-
-    async with _server(responder) as port:
-        assert await _error_code(fetch_web(
-            _origin(port), javascript=True, user_agent="Mozilla/5.0", public_addresses_only=False,
-        )) == "webfetch.userAgentUnsupported"
-
-
-@pytest.mark.parametrize(("navigation", "approval_wait"), [(False, 0), (True, 0), (False, 3)])
-async def test_lightpanda_executes_javascript_and_fetches_with_configured_user_agent(navigation, approval_wait) -> None:
-    headers_seen = []
-
-    async def responder(path, headers):
-        headers_seen.append(headers["user-agent"])
-        if navigation and path == "/":
-            return _response(b"<html><body><script>location.href='/redirect'</script></body></html>", headers={"Content-Type": "text/html"})
-        if path == "/redirect":
-            return _response(status=302, headers={"Location": "/final"})
-        if path == "/data":
-            return _response(b"Dynamic page content", headers={"Content-Type": "text/plain"})
-        return _response(b"""<html><head><title>Dynamic test</title></head><body><main>Loading</main>
-            <script>fetch('/data').then(r=>r.text()).then(t=>{
-                document.querySelector('main').textContent=t+' '+navigator.userAgent;
-            });</script></body></html>""", headers={"Content-Type": "text/html"})
-
-    async def authorize(url):
-        if approval_wait:
-            await asyncio.sleep(approval_wait)
-
-    async with _server(responder) as port:
-        pending = fetch_web(_origin(port), javascript=True, public_addresses_only=False,
-            user_agent="MatoLoop-Test/1.0", authorize_url=authorize, timeout=2 if approval_wait else 5)
-        result = await pending
-    assert result.content == "Dynamic page content MatoLoop-Test/1.0"
-    assert headers_seen and set(headers_seen) == {"MatoLoop-Test/1.0"}
-    assert result.title == "Dynamic test"
-    assert result.final_url == _origin(port) + ("/final" if navigation else "/")
-
-
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="Official Lightpanda 1.0.0 loses the base URL for relative imports in redirected ES modules")
-async def test_lightpanda_loads_redirected_module() -> None:
-    async def responder(path, _headers):
-        if path == "/bundle.js":
-            return _response(status=302, headers={"Location": "/assets/main.js"})
-        if path == "/assets/main.js":
-            return _response(b"import value from './chunk.js'; document.querySelector('main').textContent=value;", headers={"Content-Type": "text/javascript"})
-        if path == "/assets/chunk.js":
-            return _response(b"export default 'Redirected module loaded';", headers={"Content-Type": "text/javascript"})
-        return _response(b"<html><body><main>Loading</main><script type='module' src='/bundle.js'></script></body></html>", headers={"Content-Type": "text/html"})
-
-    async with _server(responder) as port:
-        result = await fetch_web(_origin(port), javascript=True, public_addresses_only=False, timeout=10)
-    assert result.content == "Redirected module loaded"
-
-
-@pytest.mark.parametrize("redirect", [False, True])
-async def test_lightpanda_page_approval_includes_subrequests(redirect) -> None:
-    paths = []
-
-    async def responder(path, _headers):
-        paths.append(path)
-        if path == "/redirect":
-            return _response(status=302, headers={"Location": "/secret"})
-        if path == "/secret":
-            return _response(b"Loaded", headers={"Content-Type": "text/plain"})
-        destination = "/redirect" if redirect else "/secret"
-        return _response(f"<html><body><script>fetch('{destination}')</script>Public</body></html>".encode(), headers={"Content-Type": "text/html"})
-
-    authorize = AsyncMock()
-
-    async with _server(responder) as port:
-        await fetch_web(_origin(port), javascript=True, public_addresses_only=False, authorize_url=authorize)
-    authorize.assert_awaited_once_with(_origin(port) + "/")
-    assert "/secret" in paths
-
-
-async def test_lightpanda_native_private_address_block() -> None:
-    from mato_loop_backend.web.lightpanda import render_html
-
-    paths = []
-
-    async def responder(path, _headers):
-        paths.append(path)
-        return _response(b"Unexpected private request")
-
-    async with _server(responder) as port:
-        target = await web_fetch._validate_target(_origin(port), False)
-        assert await _error_code(render_html(target, timeout=5, public_addresses_only=True,
-            max_response_bytes=1024, user_agent="MatoLoop/1.0")) in {"webfetch.addressBlocked", "webfetch.renderFailed"}
-    assert paths == []
-
-
-def test_lightpanda_cidrs_match_public_address_policy_boundaries() -> None:
-    from mato_loop_backend.web.lightpanda import _PUBLIC_ADDRESS_CIDRS
-
-    blocked = [ipaddress.ip_network(value) for value in _PUBLIC_ADDRESS_CIDRS if not value.startswith("-")]
-    allowed = [ipaddress.ip_network(value[1:]) for value in _PUBLIC_ADDRESS_CIDRS if value.startswith("-")]
-    networks = [*blocked, *allowed, *web_fetch._PRIVATE_NETWORKS]
-    # Inspect stdlib registry boundaries only in this test, so runtime upgrades
-    # cannot silently weaken the native filter when is_global/is_reserved change.
-    for address in (ipaddress.IPv4Address("0.0.0.0"), ipaddress.IPv6Address("::")):
-        for value in vars(address._constants).values():
-            networks.extend(item for item in (value if isinstance(value, list) else [value])
-                            if isinstance(item, (ipaddress.IPv4Network, ipaddress.IPv6Network)))
-    addresses = set(web_fetch._METADATA_ADDRESSES)
-    for network in networks:
-        for boundary in (int(network.network_address), int(network.broadcast_address)):
-            for value in (boundary - 1, boundary, boundary + 1):
-                if 0 <= value < 2 ** network.max_prefixlen:
-                    addresses.add(type(network.network_address)(value))
-    addresses.update(ipaddress.IPv6Address(f"::ffff:{address}") for address in list(addresses) if address.version == 4)
-    mismatches = []
-    for raw in addresses:
-        address = web_fetch._normalized_address(str(raw))
-        native_public = any(address in net for net in allowed) or not any(address in net for net in blocked)
-        if native_public != web_fetch._address_is_public(address):
-            mismatches.append(str(raw))
-    assert mismatches == []
-
-
-async def test_lightpanda_waits_for_data_beyond_five_seconds() -> None:
-    async def responder(path, _headers):
-        if path == "/data":
-            await asyncio.sleep(6)
-            return _response(b"Delayed content", headers={"Content-Type": "text/plain"})
-        return _response(b"<html><body><main>Loading</main><script>fetch('/data').then(r=>r.text()).then(t=>document.querySelector('main').textContent=t)</script></body></html>", headers={"Content-Type": "text/html"})
-
-    async with _server(responder) as port:
-        result = await fetch_web(_origin(port), javascript=True, public_addresses_only=False, timeout=12)
-    assert result.content == "Delayed content"
-
-
-async def test_lightpanda_native_filter_blocks_additional_address_classes(monkeypatch) -> None:
-    import mato_loop_backend.web.lightpanda as lightpanda
-
-    addresses = ("100.100.100.200", "192.0.2.1", "fec0::1", "2001:db8::1", "::ffff:100.100.100.200")
-    urls = [f"http://[{address}]/data" if ":" in address else f"http://{address}/data" for address in addresses]
-    readers = []
-    spawn = asyncio.create_subprocess_exec
-
-    async def capture(*args, **kwargs):
-        process = await spawn(*args[:-1], "--block-cidrs", "-127.0.0.1/32", "--log-level", "debug", args[-1],
-                              **{**kwargs, "stderr": asyncio.subprocess.PIPE})
-        readers.append(asyncio.create_task(process.stderr.read()))
-        return process
-
-    async def responder(_path, _headers):
-        script = f"Promise.all({urls!r}.map(url=>fetch(url).catch(()=>null)))"
-        return _response(f"<html><body><script>{script}</script>Page</body></html>".encode(), headers={"Content-Type": "text/html"})
-
-    async with _server(responder) as port:
-        target = await web_fetch._validate_target(_origin(port), False)
-        # Only the local fixture page is exempted; the real engine checks all subrequests.
-        monkeypatch.setattr(lightpanda, "_validate_target", AsyncMock(return_value=target))
-        monkeypatch.setattr(asyncio, "create_subprocess_exec", capture)
-        await lightpanda.render_html(target, timeout=10, public_addresses_only=True,
-                                    max_response_bytes=4096, user_agent="MatoLoop/1.0")
-    logs = b"".join(await asyncio.gather(*readers)).decode()
-    blocked_lines = [line for line in logs.splitlines() if "blocked by IP filter" in line]
-    assert all(any(address in line for line in blocked_lines) for address in addresses[:-1]), logs
-
-
-@pytest.mark.parametrize("transport", ["fetch", "websocket", "redirect"])
-async def test_lightpanda_native_blocks_private_dependencies(monkeypatch, transport) -> None:
-    # Exempt only the fixture page; the second loopback address remains private.
-    spawn = asyncio.create_subprocess_exec
-
-    async def restricted(*args, **kwargs):
-        return await spawn(*args[:-1], "--block-private-networks", "--block-cidrs", "-127.0.0.1/32", args[-1], **kwargs)
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", restricted)
-    paths = []
-
-    async def responder(path, _headers):
-        paths.append(path)
-        target = _origin(port, "127.0.0.2") + "/private"
-        if transport == "websocket":
-            script = f"new WebSocket('{target.replace('http:', 'ws:')}').onerror=()=>document.querySelector('main').textContent='Blocked'"
-        elif transport == "redirect":
-            script = f"location.href='{target}'"
-        else:
-            script = f"fetch('{target}').catch(()=>document.querySelector('main').textContent='Blocked')"
-        return _response(f"<html><body><main>Waiting</main><script>{script}</script></body></html>".encode(), headers={"Content-Type": "text/html"})
-
-    async with _server(responder, host="0.0.0.0") as port:
-        result = await fetch_web(_origin(port), javascript=True, public_addresses_only=False, timeout=5)
-        if transport != "redirect":
-            assert result.content == "Blocked"
-    assert "/private" not in paths
-
-
-async def test_lightpanda_native_cookie_session() -> None:
-    async def responder(path, headers):
-        if path == "/data":
-            return _response(b"Cookie accepted" if "session=native" in headers.get("cookie", "") else b"Cookie missing", headers={"Content-Type": "text/plain"})
-        return _response(b"<html><body><main>Waiting</main><script>fetch('/data').then(r=>r.text()).then(t=>document.querySelector('main').textContent=t)</script></body></html>",
-                         headers={"Content-Type": "text/html", "Set-Cookie": "session=native; Path=/; HttpOnly; SameSite=Lax"})
-
-    async with _server(responder) as port:
-        result = await fetch_web(_origin(port), javascript=True, public_addresses_only=False)
-    assert result.content == "Cookie accepted"
-
-
-async def test_lightpanda_native_binary_post() -> None:
-    received = []
-
-    async def respond(request):
-        if request.method == "POST":
-            received.append(await request.read())
-            return web.Response(text="Posted")
-        return web.Response(content_type="text/html", text="""<html><body><main>Waiting</main><script>
-            fetch('/data', {method:'POST',body:new Uint8Array([0,255,128,65])})
-            .then(r=>r.text()).then(t=>document.querySelector('main').textContent=t);
-            </script></body></html>""")
-
-    app = web.Application()
-    app.router.add_route("*", "/{path:.*}", respond)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    try:
-        await fetch_web(_origin(runner.addresses[0][1]), javascript=True, public_addresses_only=False)
-        assert received == [b"\x00\xff\x80A"]
-    finally:
-        await runner.cleanup()
-
-
-async def test_lightpanda_timeout_reaps_its_process(monkeypatch) -> None:
-    import mato_loop_backend.web.lightpanda as lightpanda
-
-    processes = []
-    spawn = asyncio.create_subprocess_exec
-
-    async def capture(*args, **kwargs):
-        process = await spawn(*args, **kwargs)
-        processes.append(process)
-        return process
-
-    monkeypatch.setattr(lightpanda.asyncio, "create_subprocess_exec", capture)
-
-    async def responder(_path, _headers):
-        return _response(b"<html><body><script>while(true){}</script></body></html>", headers={"Content-Type": "text/html"})
-
-    async with _server(responder) as port:
-        assert await _error_code(fetch_web(_origin(port), javascript=True, public_addresses_only=False, timeout=1)) == "webfetch.timeout"
-    assert len(processes) == 1 and processes[0].returncode is not None
-
-
-async def test_lightpanda_limits_rendered_output() -> None:
-    async def responder(path, _headers):
-        return _response(b"<html><body><main>Loading</main><script>document.querySelector('main').textContent='x'.repeat(2000)</script></body></html>", headers={"Content-Type": "text/html"})
-
-    async with _server(responder) as port:
-        assert await _error_code(fetch_web(_origin(port), javascript=True, public_addresses_only=False,
-            max_response_bytes=850)) == "webfetch.responseTooLarge"
-
-
-async def test_lightpanda_propagates_superseded_page_approval() -> None:
-    from mato_loop_backend.tools.contracts import ToolCallSuperseded
-
-    async def responder(_path, _headers):
-        return _response(b"<html><body><main>Stale content</main><script src='/script.js'></script></body></html>", headers={"Content-Type": "text/html"})
-
-    async def authorize(url):
-        raise ToolCallSuperseded
-
-    async with _server(responder) as port:
-        with pytest.raises(ToolCallSuperseded):
-            await fetch_web(_origin(port), javascript=True, public_addresses_only=False, authorize_url=authorize, timeout=5)
-
-
-@pytest.mark.parametrize(("location", "expected"), [
-    (None, "#/article%2F123"),
-    ("/final", "#/article%2F123"),
-    ("/final#/other", "#/other"),
-])
-async def test_lightpanda_preserves_browsing_fragment(location, expected) -> None:
-    async def responder(path, _headers):
-        if location and path == "/":
-            return _response(status=302, headers={"Location": location})
-        return _response(b"<html><body><main>Default route</main><script>document.querySelector('main').textContent=location.hash;</script></body></html>", headers={"Content-Type": "text/html"})
-
-    async with _server(responder) as port:
-        result = await fetch_web(_origin(port) + "/#/article%2F123", javascript=True, format="text", public_addresses_only=False, timeout=5)
-    assert result.content == expected
-    assert result.final_url == _origin(port) + ("/final" if location else "/") + expected
 
 
 async def _error_code(awaitable: Awaitable[object]) -> str:
@@ -449,6 +119,7 @@ def _scan_pdf() -> bytes:
         ("https://user:secret@example.com/", "webfetch.userinfoForbidden"),
         ("/relative", "webfetch.unsupportedScheme"),
         ("http://./", "webfetch.invalidUrl"),
+        ("http://-pin.attacker.test/", "webfetch.invalidUrl"),
         ("https://[::1", "webfetch.invalidUrl"),
     ],
 )
@@ -603,6 +274,9 @@ async def test_dns_answers_are_validated_as_a_set(monkeypatch) -> None:
 
 
 async def test_dns_is_pinned_and_request_headers_are_safe(monkeypatch) -> None:
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
+    monkeypatch.setenv("all_proxy", "http://127.0.0.1:1")
+    monkeypatch.setenv("no_proxy", "")
     seen_headers: dict[str, str] = {}
 
     async def responder(target: str, headers: dict[str, str]) -> bytes:
@@ -634,23 +308,20 @@ async def test_tls_failure_has_a_specific_safe_error(monkeypatch, caplog) -> Non
         return (ipaddress.ip_address("8.8.8.8"),)
 
     class FailingSession:
-        def __init__(self, *, connector, **kwargs) -> None:
-            del kwargs
-            self.connector = connector
+        def __init__(self, **kwargs) -> None:
+            pass
 
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, exc_type, exc, traceback) -> None:
-            del exc_type, exc, traceback
-            await self.connector.close()
+            pass
 
-        def get(self, *args, **kwargs):
-            del args, kwargs
-            raise aiohttp.ClientSSLError(None, OSError("certificate mismatch"))
+        async def request(self, *args, **kwargs):
+            raise web_fetch.SSLError("certificate mismatch", web_fetch.CurlECode.PEER_FAILED_VERIFICATION)
 
     monkeypatch.setattr(web_fetch, "_resolve_addresses", resolve)
-    monkeypatch.setattr(web_fetch.aiohttp, "ClientSession", FailingSession)
+    monkeypatch.setattr(web_fetch, "AsyncSession", FailingSession)
 
     with caplog.at_level(logging.WARNING, logger=web_fetch.__name__):
         code = await _error_code(fetch_web("https://tls.example/private?token=secret"))
@@ -849,7 +520,6 @@ async def test_structured_text_preserves_source_without_parsing(
     async with _server(responder) as port:
         result = await fetch_web(
             f"{_origin(port)}/data", public_addresses_only=False,
-            javascript=True,
             **({"format": format} if format is not None else {}),
         )
 
@@ -928,7 +598,7 @@ async def test_supported_image_returns_bytes_and_safe_filename() -> None:
     async with _server(responder) as port:
         result = await fetch_web(
             f"{_origin(port)}/fallback.png", public_addresses_only=False,
-            javascript=True, user_agent="Mozilla/5.0",
+            user_agent="Mozilla/5.0",
         )
 
     assert result.content_type == "image/png"
@@ -955,7 +625,6 @@ async def test_text_pdf_is_extracted_without_vision(monkeypatch) -> None:
             f"{_origin(port)}/manual.pdf",
             public_addresses_only=False,
             pdf_vision_handler=vision,
-            javascript=True,
         )
 
     assert result.content_type == "application/pdf"

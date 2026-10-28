@@ -22,7 +22,6 @@ from mato_loop_backend.settings import (
     ToolSettings,
     TrustLevel,
     WebAccessSettings,
-    WebFetchSettings,
     build_profile,
     core_profiles,
     plan_profile,
@@ -499,7 +498,6 @@ async def test_get_tool_configuration_returns_defaults(monkeypatch) -> None:
     assert {
         key: result[key]
         for key in (
-            "webFetch",
             "webAccess",
             "generateImage",
             "editImage",
@@ -509,10 +507,6 @@ async def test_get_tool_configuration_returns_defaults(monkeypatch) -> None:
             "analyzeVideo",
         )
     } == {
-        "webFetch": {
-            "javascriptEnabled": True,
-            "javascriptHosts": ["reddit.com", "www.reddit.com"],
-        },
         "webAccess": {
             "userAgent": "MatoLoop/1.0",
             "maxResponseMiB": 64,
@@ -570,13 +564,9 @@ async def test_get_tool_configuration_returns_defaults(monkeypatch) -> None:
     }
 
 
-def test_tool_configuration_separates_shared_and_webfetch_settings() -> None:
+def test_tool_configuration_exposes_shared_web_access_settings() -> None:
     result = tool_configuration_payload(
         ToolSettings(
-            web_fetch={
-                "javascriptEnabled": False,
-                "javascriptHosts": [" Example.COM. ", "example.com", "bücher.de"],
-            },
             web_access={
                 "userAgent": "MatoLoop/1.0",
                 "maxResponseMiB": 32,
@@ -585,26 +575,11 @@ def test_tool_configuration_separates_shared_and_webfetch_settings() -> None:
         )
     )
 
-    assert result["webFetch"] == {
-        "javascriptEnabled": False,
-        "javascriptHosts": ["example.com", "xn--bcher-kva.de"],
-    }
     assert result["webAccess"] == {
         "userAgent": "MatoLoop/1.0",
         "maxResponseMiB": 32,
         "publicAddressesOnly": False,
     }
-
-
-def test_webfetch_empty_javascript_host_list_survives_settings_round_trip() -> None:
-    settings = ToolSettings(web_fetch={"javascriptHosts": []})
-    assert ToolSettings.model_validate(settings.model_dump()).web_fetch.javascript_hosts == []
-
-
-@pytest.mark.parametrize("host", ["", "https://example.com", "example.com/path", "example.com:443", "*.example.com", "a b.com", "-example.com", "127.0.0.1", "a" * 64 + ".com"])
-def test_webfetch_rejects_non_host_javascript_entries(host) -> None:
-    with pytest.raises(ValidationError):
-        WebFetchSettings(javascriptHosts=[host])
 
 
 async def test_tool_availability_exposes_hard_caps(monkeypatch) -> None:
@@ -660,9 +635,3 @@ def test_tool_settings_reject_invalid_web_access_limit(limit: float) -> None:
 def test_tool_settings_reject_invalid_web_access_user_agent(user_agent: str) -> None:
     with pytest.raises(ValidationError):
         WebAccessSettings.model_validate({"userAgent": user_agent})
-
-
-@pytest.mark.parametrize("removed", [{"enabled": True}, {"engine": "http"}, {"publicAddressesOnly": False}, {"userAgent": "Custom/1.0"}, {"maxResponseMiB": 32}])
-def test_removed_webfetch_settings_are_rejected(removed) -> None:
-    with pytest.raises(ValidationError):
-        WebFetchSettings.model_validate(removed)

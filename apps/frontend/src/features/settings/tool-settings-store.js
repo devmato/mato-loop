@@ -3,10 +3,6 @@ import { api } from 'src/boot/axios'
 
 const defaultMediaSettings = () => ({ timeoutSeconds: 300 })
 const defaultAnalysisSettings = () => ({ timeoutSeconds: 1800 })
-const defaultConfigurationWebFetch = () => ({
-  javascriptEnabled: true,
-  javascriptHosts: ['reddit.com', 'www.reddit.com']
-})
 const defaultConfigurationWebAccess = () => ({
   userAgent: '',
   maxResponseMiB: 64,
@@ -32,7 +28,6 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     loadVersion: 0,
     configurationGroups: [],
     presetOptions: [],
-    configurationWebFetch: defaultConfigurationWebFetch(),
     configurationWebAccess: defaultConfigurationWebAccess(),
     configurationLoaded: false,
     configurationLoadFailed: false,
@@ -103,10 +98,6 @@ export const useToolSettingsStore = defineStore('tool-settings', {
             tools: (group.tools || []).map((tool) => ({ ...tool }))
           }))
         : []
-      this.configurationWebFetch = {
-        ...defaultConfigurationWebFetch(),
-        ...data?.webFetch
-      }
       this.configurationWebAccess = {
         ...defaultConfigurationWebAccess(),
         ...data?.webAccess

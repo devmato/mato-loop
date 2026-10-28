@@ -42,12 +42,6 @@ jobs:
           sudo apt-get install -y ffmpeg git poppler-utils ripgrep
           python -m pip install uv==0.10.9
           uv sync --frozen --group docs
-      - name: Install pinned Lightpanda
-        run: |
-          container="$(docker create lightpanda/browser@sha256:5b84708cb3d9bef841aba4a4cd299f4de0609ac1bd7d4c6fbfcbf168d56b685e)"
-          trap 'docker rm "$container" >/dev/null' EXIT
-          docker cp "$container:/bin/lightpanda" - | sudo tar -x -C /usr/local/bin
-          /usr/local/bin/lightpanda version
       - name: Check backend
         working-directory: apps/backend
         run: |

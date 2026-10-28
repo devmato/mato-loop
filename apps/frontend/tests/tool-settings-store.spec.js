@@ -38,7 +38,6 @@ const configuration = {
     }]
   }],
   toolAvailability: { webfetch: true },
-  webFetch: { javascriptEnabled: false, javascriptHosts: ['example.com'] },
   webAccess: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32, publicAddressesOnly: false },
   transcribeAudio: { timeoutSeconds: 180 }
 }
@@ -65,7 +64,6 @@ describe('tool settings store', () => {
     expect(api.get).toHaveBeenCalledWith('/tools/configuration')
     expect(api.put).toHaveBeenCalledWith('/tools/configuration', payload)
     expect(store.configurationGroups).toEqual(configuration.groups)
-    expect(store.configurationWebFetch).toEqual(configuration.webFetch)
     expect(store.configurationWebAccess).toEqual(configuration.webAccess)
   })
 
@@ -74,19 +72,10 @@ describe('tool settings store', () => {
 
     store.assignConfiguration({
       ...configuration,
-      webFetch: {},
       webAccess: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32 }
     })
 
     expect(store.configurationWebAccess.publicAddressesOnly).toBe(true)
-    expect(store.configurationWebFetch.javascriptEnabled).toBe(true)
-    expect(store.configurationWebFetch.javascriptHosts).toEqual(['reddit.com', 'www.reddit.com'])
-  })
-
-  it('preserves an explicitly empty JavaScript host list', () => {
-    const store = useToolSettingsStore()
-    store.assignConfiguration({ ...configuration, webFetch: { ...configuration.webFetch, javascriptHosts: [] } })
-    expect(store.configurationWebFetch.javascriptHosts).toEqual([])
   })
 
   it('updates loaded tools after technical availability changes', () => {

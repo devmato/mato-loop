@@ -600,10 +600,6 @@ class WebSearchArguments(ToolArguments):
 class WebFetchArguments(ToolArguments):
     url: str = Field(min_length=1, max_length=1_200)
     format: Literal["markdown", "text", "html"] = "markdown"
-    javascript: bool | None = Field(
-        default=None,
-        description="HTML only: null/omitted = host default; true = JavaScript; false = HTTP.",
-    )
     timeout: int = Field(default=30, ge=1, le=120)
     pdf_pages: list[Annotated[int, Field(ge=1)]] = Field(
         default_factory=list,

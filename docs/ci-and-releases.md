@@ -33,7 +33,7 @@ Pull requests run the complete test and production-image build path, but registr
 
 ## Runner Requirements
 
-GitHub workflows use GitHub-hosted `ubuntu-latest` runners. Native test jobs keep the same pinned toolchains, system packages, and Lightpanda binary as the Forgejo jobs. The migration job publishes its PostgreSQL service port and connects through `localhost`; Forgejo job containers use the `db` hostname.
+GitHub workflows use GitHub-hosted `ubuntu-latest` runners. Native test jobs keep the same pinned toolchains and system packages as the Forgejo jobs. The migration job publishes its PostgreSQL service port and connects through `localhost`; Forgejo job containers use the `db` hostname.
 
 The GitHub Agent test step runs its installed virtual-environment Python as root, matching the development container and supporting device-node and ownership fixtures. Image builds and publication copy the caller's Docker `config.json` into a private temporary directory so existing runner authentication remains available; cleanup removes only the temporary copy. No personal Docker Hub token is required by these workflows, and Docker Hub transport or rate-limit failures can still occur.
 
@@ -60,9 +60,9 @@ Develop and release publication workflows share one serialized concurrency group
 
 ## Test Environment Parity
 
-The backend, frontend, and agent test jobs run directly in the runner environment, not in the application images. System dependency changes must update both Dockerfiles and the corresponding CI installation. The backend job copies Lightpanda from the same digest-pinned official image used by its development and production Dockerfiles and runs `lightpanda version` before testing. Update all three image references together when upgrading it.
+The backend, frontend, and agent test jobs run directly in the runner environment, not in the application images. System dependency changes must update both Dockerfiles and the corresponding CI installation. Webfetch's `curl_cffi` transport is installed from the backend Python lockfile; no separate browser binary is required.
 
-Local backend checks and tests also verify that Lightpanda starts before installing Python dependencies. After a Dockerfile change, run `./scripts/dev.sh compose build backend` (or the affected service) before validation: `dev.sh check` and `dev.sh test` reuse existing images. Bind-mounted source changes do not install new system dependencies.
+After a Dockerfile change, run `./scripts/dev.sh compose build backend` (or the affected service) before validation: `dev.sh check` and `dev.sh test` reuse existing images. Bind-mounted source changes do not install new system dependencies.
 
 For shared prompt, tool schema, settings default, and error contract changes, run the complete affected target test suite and update its expectations in the same change. Prefer focused behavior assertions over a digest of all prompt text and schemas; a digest also fails on unrelated, intentional wording changes and cannot explain which contract changed.
 

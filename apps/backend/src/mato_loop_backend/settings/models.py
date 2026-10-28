@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ipaddress
 import re
 from datetime import datetime
 from enum import StrEnum
@@ -44,7 +43,6 @@ _MODEL_RUNTIME_KEYS = {
 }
 
 DEFAULT_WEB_ACCESS_USER_AGENT = "MatoLoop/1.0"
-DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS = ("reddit.com", "www.reddit.com")
 
 
 def _camel_case(value: str) -> str:
@@ -905,38 +903,6 @@ class WebAccessSettings(BaseModel):
         return value.strip()
 
 
-class WebFetchSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    javascript_enabled: StrictBool = Field(default=True, alias="javascriptEnabled")
-    javascript_hosts: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS),
-        max_length=100,
-        alias="javascriptHosts",
-    )
-
-    @field_validator("javascript_hosts")
-    @classmethod
-    def normalize_javascript_hosts(cls, value: list[str]) -> list[str]:
-        hosts = []
-        for host in value:
-            try:
-                host = host.strip().rstrip(".").encode("idna").decode("ascii").lower()
-            except UnicodeError as exc:
-                raise ValueError("Invalid JavaScript hostname") from exc
-            if len(host) > 253 or not re.fullmatch(
-                r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*",
-                host,
-            ):
-                raise ValueError("JavaScript hosts must be exact hostnames without URLs, ports or wildcards")
-            try:
-                ipaddress.ip_address(host)
-            except ValueError:
-                hosts.append(host)
-            else:
-                raise ValueError("JavaScript hosts must be DNS hostnames, not IP addresses")
-        return list(dict.fromkeys(hosts))
-
 class WebSearchToolSettings(BaseModel):
     primary_provider: str = Field(
         default="no_key",
@@ -1045,10 +1011,6 @@ class ToolSettings(IntegrationToolSettings):
     web_access: WebAccessSettings = Field(
         default_factory=WebAccessSettings,
         validation_alias=AliasChoices("web_access", "webAccess"),
-    )
-    web_fetch: WebFetchSettings = Field(
-        default_factory=WebFetchSettings,
-        validation_alias=AliasChoices("web_fetch", "webFetch"),
     )
     generate_image: MediaToolSettings = Field(
         default_factory=MediaToolSettings,

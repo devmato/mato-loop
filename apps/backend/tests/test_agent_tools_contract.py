@@ -5418,9 +5418,8 @@ def test_tool_schemas_remove_annotative_titles_recursively() -> None:
         (ToolExecutionPolicy.AUTO, False, 0),
     ],
 )
-@pytest.mark.parametrize("javascript", [None, False, True])
 async def test_webfetch_applies_the_effective_policy(
-    tmp_path, monkeypatch, policy, public_addresses_only, expected_asks, javascript,
+    tmp_path, monkeypatch, policy, public_addresses_only, expected_asks,
 ) -> None:
     fetch_kwargs = {}
 
@@ -5440,7 +5439,7 @@ async def test_webfetch_applies_the_effective_policy(
     call = ToolCall(
         id="fetch",
         name="webfetch",
-        arguments={"url": "https://example.com/page?token=secret", **({"javascript": javascript} if javascript is not None else {})},
+        arguments={"url": "https://example.com/page?token=secret"},
     )
     context = _context(
         tmp_path,
@@ -5454,8 +5453,6 @@ async def test_webfetch_applies_the_effective_policy(
         context.tool_settings.select_trust(TrustLevel.PUBLIC)
         for branch in (context.tool_settings.private_permissions, context.tool_settings.public_permissions):
             branch.policies.pop("network.fetch")
-    context.tool_settings.web_fetch.javascript_enabled = False
-    context.tool_settings.web_fetch.javascript_hosts = ["example.com"]
     context.db.scalar.return_value.data = _settings_record(context.tool_settings)
 
     result = await tool_registry.execute(call, context)
@@ -5490,9 +5487,6 @@ async def test_webfetch_applies_the_effective_policy(
     assert fetch_kwargs["pdf_vision_handler"] is None
     assert fetch_kwargs["pdf_pages"] == []
     assert fetch_kwargs["user_agent"] == "ConfiguredBrowser/1.0"
-    assert fetch_kwargs["javascript"] is javascript
-    assert fetch_kwargs["javascript_enabled"] is False
-    assert fetch_kwargs["javascript_hosts"] == ["example.com"]
     assert fetch_kwargs["public_addresses_only"] is public_addresses_only
     if expected_asks:
         request = context.ask_handler.await_args.args[0]

@@ -189,24 +189,16 @@ it('lets administration remove built-in overrides and save inheritance', async (
   expect(api.put).toHaveBeenCalledWith(`/tools/profiles/${builtinId}/permissions`, expect.objectContaining({ privatePermissions: expect.objectContaining({ policies: {} }) }), { params: { scope: 'instance' } })
 })
 
-it('edits JavaScript hosts in a cancellable dialog before saving the settings', async () => {
+it('edits webfetch availability separately from permissions', async () => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   const catalog = [{ id: 'web', label: 'Web', tools: [{ name: 'webfetch', label: 'Webseite abrufen', icon: 'language', available: true, actions: [action('network.fetch')] }] }]
   api.get.mockImplementation(async (url) => ({ data: url === '/agent-profiles' ? { agents: [] } : {
     ...rights(), privateGroups: catalog, publicGroups: catalog, shellPrefixes: { read: [], write: [] },
     groups: catalog,
-    webFetch: { javascriptEnabled: true, javascriptHosts: ['reddit.com', 'www.reddit.com'] },
     webAccess: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 64 },
   } }))
   const { page } = await mount(ToolPage, { admin: true }, '/tools', 'settings-tools')
   await vi.waitFor(() => expect(page().saved).toBeTruthy())
-  const button = (label) => [...document.querySelectorAll('button')].find((item) => item.textContent.includes(label))
-  const input = (value) => {
-    const textarea = document.querySelector('.q-dialog textarea')
-    textarea.value = value
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
-  }
-  expect(root.textContent).not.toContain('JavaScript-Konfiguration')
   await page().selectSection('management')
   await nextTick()
   expect(root.querySelector('[aria-label="Webseite abrufen: verfügbar"]')).toBeNull()
@@ -216,22 +208,6 @@ it('edits JavaScript hosts in a cancellable dialog before saving the settings', 
   root.querySelector('[aria-label="Webseite abrufen: verfügbar"]').click()
   await nextTick()
   expect(page().payload().toolAvailability.webfetch).toBe(false)
-  expect(root.textContent).not.toContain('JavaScript-Konfiguration')
-  root.querySelector('[aria-label="Webseite abrufen: verfügbar"]').click()
-  await nextTick()
-  button('JavaScript-Konfiguration').click()
-  await vi.waitFor(() => expect(document.querySelector('.q-dialog textarea')?.value).toBe('reddit.com\nwww.reddit.com'))
-  input('discard.example')
-  button('Abbrechen').click()
-  await vi.waitFor(() => expect(document.querySelector('.q-dialog')).toBeNull())
-  expect(page().form.configuration.webFetch.javascriptHosts).toEqual(['reddit.com', 'www.reddit.com'])
-  button('JavaScript-Konfiguration').click()
-  await vi.waitFor(() => expect(document.querySelector('.q-dialog textarea')?.value).toBe('reddit.com\nwww.reddit.com'))
-  document.querySelector('.q-dialog [role="switch"]').click()
-  await nextTick()
-  button('Übernehmen').click()
-  await vi.waitFor(() => expect(document.querySelector('.q-dialog')).toBeNull())
-  expect(page().payload().webFetch).toEqual(expect.objectContaining({ javascriptEnabled: false, javascriptHosts: ['reddit.com', 'www.reddit.com'] }))
   expect(api.put).not.toHaveBeenCalled()
 })
 

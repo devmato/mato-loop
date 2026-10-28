@@ -77,7 +77,6 @@
                 <div class="col-auto"><q-toggle :model-value="form.configuration.toolAvailability[tool.name] !== false" color="primary" label="Verfügbar" :aria-label="`${tool.label}: verfügbar`" :disable="loading || saving || loadFailed" @update:model-value="form.configuration.toolAvailability[tool.name] = $event" /></div>
               </div>
               <template v-if="form.configuration.toolAvailability[tool.name] !== false">
-                <div v-if="tool.name === 'webfetch'" class="row justify-end q-mt-sm"><q-btn flat no-caps icon="edit" label="JavaScript-Konfiguration" :disable="loading || saving" @click="editJavascript" /></div>
                 <q-input v-if="mediaByName[tool.name]" v-model.number="form.configuration[mediaByName[tool.name]].timeoutSeconds" class="q-mt-md" outlined type="number" min="10" max="3600" label="Zeitlimit" suffix="Sekunden" :rules="[timeoutRule]" :disable="loading || saving" />
                 <div v-if="tool.name === 'shell_run'" class="row justify-end q-mt-sm"><q-btn flat no-caps icon="edit" label="Shell-Präfixe konfigurieren" :disable="loading || saving" @click="editShellPrefixes" /></div>
               </template>
@@ -128,17 +127,6 @@
         <q-card-section class="row items-center"><div id="shell-prefixes-title" class="text-h6 col">Shell-Präfixe</div><q-btn v-close-popup flat round dense icon="close" aria-label="Dialog schließen" /></q-card-section>
         <q-card-section class="col scroll"><ShellPrefixFields v-model="shellDraft" /></q-card-section>
         <q-card-actions align="right"><q-btn v-close-popup flat no-caps label="Abbrechen" /><q-btn unelevated no-caps color="primary" label="Übernehmen" @click="applyShellPrefixes" /></q-card-actions>
-      </q-card>
-    </q-dialog>
-    <q-dialog v-model="javascriptDialogOpen" :maximized="$q.screen.lt.sm" aria-labelledby="javascript-title">
-      <q-card class="app-surface column no-wrap full-width">
-        <q-card-section class="row items-center"><div id="javascript-title" class="text-h6 col">JavaScript für ausgewählte Websites</div><q-btn v-close-popup flat round dense icon="close" aria-label="Dialog schließen" /></q-card-section>
-        <q-card-section class="col scroll">
-          <q-toggle v-model="javascriptDraft.enabled" color="primary" label="JavaScript aktivieren" />
-          <q-input v-if="javascriptDraft.enabled" v-model="javascriptDraft.hosts" class="q-mt-md" outlined type="textarea" autogrow label="Websites mit automatischem JavaScript" hint="Ein DNS-Hostname pro Zeile, ohne URL, IP-Adresse, Port oder Platzhalter. Leer: standardmäßig ohne JavaScript." />
-          <div v-else class="text-caption app-muted q-mt-md">JavaScript ist gesperrt. Die gespeicherte Hostliste bleibt erhalten.</div>
-        </q-card-section>
-        <q-card-actions align="right"><q-btn v-close-popup flat no-caps label="Abbrechen" /><q-btn unelevated no-caps color="primary" label="Übernehmen" @click="applyJavascript" /></q-card-actions>
       </q-card>
     </q-dialog>
   </section>
@@ -197,8 +185,6 @@ const mediaByName = { generate_image: 'generateImage', edit_image: 'editImage', 
 const mediaFields = Object.values(mediaByName)
 const shellDialogOpen = ref(false)
 const shellDraft = ref({ shellCustom: true, shellRead: '', shellWrite: '' })
-const javascriptDialogOpen = ref(false)
-const javascriptDraft = ref({ enabled: true, hosts: '' })
 const timeoutRule = value => Number.isInteger(value) && value >= 10 && value <= 3600 || '10 bis 3600 Sekunden eingeben.'
 const responseLimitRule = value => Number.isInteger(value) && value >= 1 && value <= 256 || '1 bis 256 MiB eingeben.'
 const userAgentRule = value => typeof value === 'string' && value.length >= 1 && value.length <= 512 && [...value].every(character => character.charCodeAt(0) >= 32 && character.charCodeAt(0) <= 126) || '1 bis 512 sichtbare ASCII-Zeichen eingeben.'
@@ -210,14 +196,6 @@ function editShellPrefixes() {
 function applyShellPrefixes() {
   form.configuration.shellPrefixes = { read: prefixes(shellDraft.value.shellRead), write: prefixes(shellDraft.value.shellWrite) }
   shellDialogOpen.value = false
-}
-function editJavascript() {
-  javascriptDraft.value = { enabled: form.configuration.webFetch.javascriptEnabled, hosts: form.configuration.webFetch.javascriptHosts.join('\n') }
-  javascriptDialogOpen.value = true
-}
-function applyJavascript() {
-  Object.assign(form.configuration.webFetch, { javascriptEnabled: javascriptDraft.value.enabled, javascriptHosts: javascriptDraft.value.hosts.split('\n').map(host => host.trim()).filter(Boolean) })
-  javascriptDialogOpen.value = false
 }
 const emptyPermissions = () => ({ privatePermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} }, publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} } })
 const form = reactive({ personalSettingsEnabled: false, permissions: emptyPermissions(), configuration: { toolAvailability: {}, shellPrefixes: null } })
@@ -261,7 +239,7 @@ async function loadPermissions() {
     if (!selectedId.value) {
       form.personalSettingsEnabled = data.personalSettingsEnabled
       technicalGroups.value = tools.configurationGroups
-      Object.assign(form.configuration, { shellPrefixes: data.shellPrefixes || { read: [], write: [] }, webAccess: { ...tools.configurationWebAccess }, webFetch: { ...tools.configurationWebFetch }, ...Object.fromEntries(mediaFields.map(field => [field, { ...tools[field] }])) })
+      Object.assign(form.configuration, { shellPrefixes: data.shellPrefixes || { read: [], write: [] }, webAccess: { ...tools.configurationWebAccess }, ...Object.fromEntries(mediaFields.map(field => [field, { ...tools[field] }])) })
     }
     saved.value = JSON.stringify(payload())
   } catch { if (token === loadToken) loadFailed.value = true }

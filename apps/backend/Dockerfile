@@ -35,10 +35,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ffmpeg poppler-utils ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
-# Official Lightpanda 1.0.0 binary; no browser service or compiler is required.
-COPY --from=lightpanda/browser@sha256:5b84708cb3d9bef841aba4a4cd299f4de0609ac1bd7d4c6fbfcbf168d56b685e /bin/lightpanda /usr/local/bin/lightpanda
-RUN lightpanda version
-
 WORKDIR /app/apps/backend
 ENV UV_LINK_MODE=copy
 COPY libs/python/version /app/libs/python/version
