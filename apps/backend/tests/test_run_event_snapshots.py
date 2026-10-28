@@ -29,18 +29,23 @@ async def test_snapshot_restores_full_text_after_history_eviction_and_then_live_
         assert snapshot["content"] == text
 
 
-async def test_slow_subscriber_receives_a_snapshot_without_duplicating_the_overflowing_delta():
+@pytest.mark.parametrize("kind", ["message.delta", "process.output"])
+async def test_slow_subscriber_receives_a_snapshot_without_duplicating_the_overflowing_delta(kind):
     broker = RunEventBroker()
     run_id = uuid4()
+    event = {"type": kind}
+    if kind == "process.output":
+        event.update({"toolCallId": "shell", "stream": "stdout"})
     async with aclosing(broker.subscribe(run_id)) as stream:
         await anext(stream)
         for _ in range(501):
-            await broker.publish(run_id, {"type": "message.delta", "delta": "x"})
+            await broker.publish(run_id, {**event, "delta": "x"})
         snapshot = await anext(stream)
         assert snapshot["type"] == "run.snapshot"
-        assert snapshot["content"] == "x" * 501
-        await broker.publish(run_id, {"type": "message.delta", "delta": "y"})
-        assert await anext(stream) == {"type": "message.delta", "delta": "y"}
+        text = snapshot["content"] if kind == "message.delta" else snapshot["events"][0]["output"]["stdout"]
+        assert text == "x" * 501
+        await broker.publish(run_id, {**event, "delta": "y"})
+        assert await anext(stream) == {**event, "delta": "y"}
 
 
 @pytest.mark.parametrize("boundary", ["message.completed", "message.interrupted", "message.continued"])
@@ -84,7 +89,9 @@ async def test_snapshot_replays_original_events_and_releases_finished_process_ou
     run_id = uuid4()
     for event in [
         {"type": "run.phase", "phase": "processing_tool", "tool": "shell_run", "toolCallId": "shell"},
-        {"type": "process.output", "toolCallId": "shell", "output": {"stdout": "Output", "stderr": "Error"}},
+        {"type": "process.output", "toolCallId": "shell", "output": {"stdout": "Out", "stderr": ""}},
+        {"type": "process.output", "toolCallId": "shell", "stream": "stderr", "delta": "Error"},
+        {"type": "process.output", "toolCallId": "shell", "stream": "stdout", "delta": "put"},
         {"type": "run.phase", "phase": "waiting_model", "modelRequest": 2},
         {"type": "reasoning.updated", "reasoning": {"text": "Thinking"}, "activityLabel": "Prüfen"},
         {"type": "run.timing", "activeTimingRevision": 3, "activeDurationMs": 1000, "activeDurationRunning": True},

@@ -15,7 +15,6 @@ from pydantic import ValidationError
 
 from mato_loop_backend.execution.protocol import (
     MAX_EVENT_BYTES,
-    MAX_EVENTS_PER_REQUEST,
     MAX_MESSAGE_BYTES,
     MAX_OUTPUT_BYTES,
     MAX_REQUEST_BYTES,
@@ -81,7 +80,6 @@ class _PendingRequest:
     future: asyncio.Future[ResponseMessage]
     event_handler: EventHandler | None = None
     dispatched: bool = False
-    event_count: int = 0
     output_bytes: int = 0
 
 
@@ -349,12 +347,11 @@ class ExecutionAgentConnectionManager:
                 pending.future.set_result(message)
                 return
 
-            pending.event_count += 1
             event_bytes = len(message.data.encode("utf-8"))
-            pending.output_bytes += event_bytes
+            # Empty events still consume budget so they cannot bypass the output limit.
+            pending.output_bytes += max(1, event_bytes)
             if (
                 event_bytes > MAX_EVENT_BYTES
-                or pending.event_count > MAX_EVENTS_PER_REQUEST
                 or pending.output_bytes > MAX_OUTPUT_BYTES
             ):
                 raise ExecutionAgentError("process.outputTooLarge")

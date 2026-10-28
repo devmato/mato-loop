@@ -290,7 +290,10 @@ export const useSubagentStore = defineStore('subagents', () => {
       }
       const stream = incoming.stream || incoming.event
       const content = incoming.content ?? incoming.data
-      if (['stdout', 'stderr'].includes(stream) && typeof content === 'string') output[stream] = content
+      if (['stdout', 'stderr'].includes(stream)) {
+        if (typeof incoming.delta === 'string') output[stream] = (output[stream] || '') + incoming.delta
+        else if (typeof content === 'string') output[stream] = content
+      }
       output.truncated = incoming.truncated ?? incoming.outputTruncated ?? output.truncated
       processOutputs.value[payload.toolCallId] = output
     })

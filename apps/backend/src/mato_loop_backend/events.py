@@ -117,6 +117,11 @@ class RunEventBroker:
             key = (kind, event.get("code"), event.get("modelRequest"))
         elif kind == "process.output":
             key = (kind, event.get("toolCallId"))
+            if "delta" in event:
+                output = dict(events.get(key, {}).get("output", {"stdout": "", "stderr": ""}))
+                stream = event["stream"]
+                output[stream] = output.get(stream, "") + event["delta"]
+                event = {"type": kind, "toolCallId": event["toolCallId"], "output": output}
         elif kind == "tool.completed":
             events.pop(("process.output", event.get("toolCallId")), None)
             for source in (event.get("metadata") or {}).get("sources") or []:

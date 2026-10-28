@@ -95,6 +95,7 @@ from mato_loop_backend.tools.arguments import ProtectedQuestionResolution, Shell
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.computer import _authorize_shell, _run_process, _shell_run
 from mato_loop_backend.tools.context import ToolContext
+from mato_loop_backend.tools.process_output import redact_process_output
 
 
 class FakeExecutionClient:
@@ -916,14 +917,16 @@ async def test_elevated_shell_uses_read_classification_and_privileged_inspection
 
 
 @pytest.mark.parametrize("operation", ["shell.run", "administrator.run"])
-async def test_process_masks_split_authentication_headers_without_environment(tmp_path, monkeypatch, operation) -> None:
+@pytest.mark.parametrize("separator", ["\n", "\r"])
+@pytest.mark.parametrize("redacted_values", [(), ("Cookie",)])
+async def test_process_masks_split_authentication_headers(tmp_path, monkeypatch, operation, separator, redacted_values) -> None:
     client = FakeExecutionClient({}, {operation})
     context = _context(tmp_path, ToolCall("headers", "shell_run", {}), client)
     published = AsyncMock()
     monkeypatch.setattr("mato_loop_backend.tools.computer.run_events.publish", published)
 
     async def execute(_operation, _arguments, _model, *, on_event, **_kwargs):
-        for chunk in ("SENT Co", "okie header: session-", "credential\n", "HTTP 403\n"):
+        for chunk in ("SENT Co", "okie header: session-", f"credential{separator}", f"HTTP 403{separator}"):
             await on_event(SimpleNamespace(event="stdout", data=chunk))
         return ProcessResult(
             exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=52, stderr_bytes=0,
@@ -934,11 +937,52 @@ async def test_process_masks_split_authentication_headers_without_environment(tm
     result = await _run_process(
         context, operation,
         {"command": "inspect"} if operation == "shell.run" else {"operation": "shell.run", "arguments": {"command": "inspect"}},
-        requested_arguments={}, executed_arguments={},
+        requested_arguments={}, executed_arguments={}, redacted_values=redacted_values,
     )
     replay = terminal_coordinator._shell_outputs[(context.session.user_id, context.session.id, client.agent_id)]
     visible = result.content + str(published.await_args_list) + b"".join(item.data for item in replay.calls.values()).decode()
     assert "session-credential" not in visible and "session-" not in visible and "HTTP 403" in visible
+
+
+@pytest.mark.parametrize("secret, live", [("private-password", True), ("private-\npassword", False)])
+async def test_process_streams_carriage_return_progress_with_a_secret(tmp_path, monkeypatch, secret, live) -> None:
+    client = FakeExecutionClient({}, {"shell.run"})
+    context = _context(tmp_path, ToolCall("progress", "shell_run", {}), client)
+    published = AsyncMock()
+    monkeypatch.setattr("mato_loop_backend.tools.computer.run_events.publish", published)
+
+    async def execute(_operation, _arguments, _model, *, on_event, **_kwargs):
+        for chunk in ("\rProgress 25%", "\rProgress 50%") * 32:
+            await on_event(SimpleNamespace(event="stderr", data=chunk))
+        assert any("Progress 25%" in call.args[1]["delta"] for call in published.await_args_list) is live
+        assert sum(len(json.dumps(call.args[1])) for call in published.await_args_list) < 10 * 26 * 32
+        return ProcessResult(
+            exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0, stderr_bytes=26 * 32,
+            stdout_truncated=False, stderr_truncated=False,
+        )
+
+    client.request = execute
+    await _run_process(
+        context, "shell.run", {"command": "download"}, requested_arguments={},
+        executed_arguments={}, redacted_values=(secret,),
+    )
+
+
+@pytest.mark.parametrize("text, values, expected", [
+    (
+        "X-Api-Key: PRIVATE_KEY\nAuthorization: Bearer PRIVATE_TOKEN\n",
+        ("X-Api-Key: PRIVATE_KEY\nAuthorization: Bearer PRIVATE_TOKEN",),
+        "[redacted]\n",
+    ),
+    (
+        "Authorization: PRIVATE_KEY\nPRIVATE_TOKEN\nOK\n",
+        ("PRIVATE_KEY\nPRIVATE_TOKEN",),
+        "[redacted authentication header]\nOK\n",
+    ),
+    ("abcdef\n", ("abcd", "cdef"), "[redacted]\n"),
+])
+def test_process_masks_overlapping_secret_and_header_matches(text, values, expected) -> None:
+    assert redact_process_output({"stdout": text}, values)["stdout"] == expected
 
 
 async def test_invalid_secret_reference_reports_environment_field(tmp_path) -> None:
@@ -984,9 +1028,11 @@ async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_p
         chunks = [("stdout", "0\n"), ("stderr", "warning\r\n")]
         if protected:
             chunks = [("stdout", "private-"), ("stdout", "password\n"), ("stderr", "warning\n")]
-        for channel, data in chunks:
+        if mode == "truncated":
+            chunks.append(("stdout", "private-"))
+        for index, (channel, data) in enumerate(chunks):
             await on_event(SimpleNamespace(event=channel, data=data))
-            if protected:
+            if protected and index == 0:
                 assert output.data == b"\r\nsudo id -u\r\n"
             elif mode == "live":
                 assert output.data.endswith(data.replace("\r\n", "\n").replace("\n", "\r\n").encode())
@@ -1005,7 +1051,7 @@ async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_p
         expected = {
             "live": b"0\r\nwarning\r\n",
             "secret": b"[redacted]\r\nwarning\r\n",
-            "truncated": b"[redacted][redacted]",
+            "truncated": b"[redacted]\r\nwarning\r\n[redacted][redacted]",
         }[mode]
         output = terminal.shell_output.calls[result.metadata["shellExecution"]["id"]]
         assert output.data == b"\r\nsudo id -u\r\n" + expected

@@ -205,8 +205,9 @@ export const streamActions = {
         if (typeof incoming.stderr === 'string') next.stderr = incoming.stderr
         const stream = incoming.stream || incoming.event
         const content = incoming.content ?? incoming.data
-        if (['stdout', 'stderr'].includes(stream) && typeof content === 'string') {
-          next[stream] = content
+        if (['stdout', 'stderr'].includes(stream)) {
+          if (typeof incoming.delta === 'string') next[stream] = (next[stream] || '') + incoming.delta
+          else if (typeof content === 'string') next[stream] = content
         }
         if (typeof incoming.truncated === 'boolean') next.truncated = incoming.truncated
         if (typeof incoming.outputTruncated === 'boolean') next.truncated = incoming.outputTruncated

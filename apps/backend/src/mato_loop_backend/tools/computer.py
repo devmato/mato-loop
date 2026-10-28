@@ -226,6 +226,7 @@ async def _run_process(
 ) -> ToolResult:
     output = {"stdout": "", "stderr": ""}
     published_output = dict(output)
+    consumed_output = {"stdout": 0, "stderr": 0}
     client = files_access.workspace_client(context)
     execution = ShellOutput(str(uuid4()), datetime.now(UTC))
     async with terminal_coordinator.capture_shell_output(
@@ -243,15 +244,19 @@ async def _run_process(
         await display(f"\n{prefix}{command}\n")
 
         async def publish(event: Any) -> None:
-            output[event.event] += event.data
-            if not redacted_values:
-                safe = redact_process_output(output, complete=False)
-                if safe != published_output:
-                    await display(safe[event.event][len(published_output[event.event]):])
-                    await run_events.publish(context.run_id, {
-                        "type": "process.output", "toolCallId": context.tool_call.id, "output": safe,
-                    })
-                    published_output.update(safe)
+            channel = event.event
+            output[channel] += event.data
+            text = redact_process_output(
+                {channel: output[channel][consumed_output[channel]:]}, redacted_values, complete=False,
+            )[channel]
+            if text:
+                consumed_output[channel] = max(output[channel].rfind("\n"), output[channel].rfind("\r")) + 1
+                await display(text)
+                await run_events.publish(context.run_id, {
+                    "type": "process.output", "toolCallId": context.tool_call.id,
+                    "stream": channel, "delta": text,
+                })
+                published_output[channel] += text
 
         result = None
         try:
@@ -264,15 +269,13 @@ async def _run_process(
             safe_output = redact_process_output(output, redacted_values, truncated=truncated)
             if safe_output != published_output:
                 for channel, text in safe_output.items():
-                    await display(text[len(published_output[channel]):])
-                await run_events.publish(
-                    context.run_id,
-                    {
-                        "type": "process.output",
-                        "toolCallId": context.tool_call.id,
-                        "output": safe_output,
-                    },
-                )
+                    delta = text[len(published_output[channel]):]
+                    if delta:
+                        await display(delta)
+                        await run_events.publish(context.run_id, {
+                            "type": "process.output", "toolCallId": context.tool_call.id,
+                            "stream": channel, "delta": delta,
+                        })
     tool_result = ToolResult.json(
         {
             **result.model_dump(by_alias=True),

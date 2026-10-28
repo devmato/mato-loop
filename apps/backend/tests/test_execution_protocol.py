@@ -259,13 +259,14 @@ async def test_manager_correlates_events_and_response_and_ignores_unknown_operat
     )
     await asyncio.sleep(0)
     request = json.loads(websocket.sent[0])
-    await manager.receive(
-        hello.agent_id,
-        websocket,  # type: ignore[arg-type]
-        json.dumps(
-            {"type": "event", "id": request["id"], "event": "stdout", "data": "one"}
-        ),
-    )
+    for _ in range(1_025):
+        await manager.receive(
+            hello.agent_id,
+            websocket,  # type: ignore[arg-type]
+            json.dumps(
+                {"type": "event", "id": request["id"], "event": "stdout", "data": "one"}
+            ),
+        )
     await manager.receive(
         hello.agent_id,
         websocket,  # type: ignore[arg-type]
@@ -274,10 +275,32 @@ async def test_manager_correlates_events_and_response_and_ignores_unknown_operat
 
     response = await task
     assert response.result == {"x": 1}
-    assert [event.data for event in events] == ["one"]
+    assert [event.data for event in events] == ["one"] * 1_025
     with pytest.raises(ExecutionAgentError) as exc_info:
         await manager.request(hello.agent_id, "future.unknown", {})
     assert exc_info.value.code == "executionAgent.operationUnavailable"
+
+
+@pytest.mark.parametrize("data", ["", "output"])
+async def test_manager_bounds_output_including_empty_events(monkeypatch, data) -> None:
+    monkeypatch.setattr("mato_loop_backend.execution.manager.MAX_OUTPUT_BYTES", 32)
+    manager = ExecutionAgentConnectionManager()
+    websocket = FakeWebSocket()
+    hello = _hello(operations=["shell.run"])
+    await manager.register(hello, websocket)
+    task = asyncio.create_task(manager.request(hello.agent_id, "shell.run", {}))
+    await asyncio.sleep(0)
+    request_id = json.loads(websocket.sent[0])["id"]
+    event = json.dumps({"type": "event", "id": request_id, "event": "stdout", "data": data})
+    try:
+        for _ in range(32 // max(1, len(data))):
+            await manager.receive(hello.agent_id, websocket, event)
+        with pytest.raises(ExecutionAgentError, match="process.outputTooLarge"):
+            await manager.receive(hello.agent_id, websocket, event)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
 
 async def test_latest_connection_replaces_old_and_disconnects_are_classified() -> None:
