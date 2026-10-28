@@ -2,7 +2,7 @@
 
 ## Nachrichtenanhänge
 
-Sie können Dateien über Dateiauswahl oder Zwischenablage anhängen. Anzahl, Einzelgröße und Gesamtgröße legen Administratoren unter **Administration > Instanzlimits** fest. Browserlokale Anhangsentwürfe bleiben über alle Sessions zusammen auf 256 MiB begrenzt.
+Sie können Dateien über Dateiauswahl oder Zwischenablage anhängen oder direkt auf die Nachrichteneingabe ziehen. Beim Ziehen von Dateien zeigt die Eingabe **Dateien hier ablegen** an; nach dem Ablegen erscheinen sie als Anhänge im Entwurf und werden erst beim Senden hochgeladen. Anzahl, Einzelgröße und Gesamtgröße legen Administratoren unter **Administration > Instanzlimits** fest. Browserlokale Anhangsentwürfe bleiben über alle Sessions zusammen auf 256 MiB begrenzt.
 
 Uploads und ausdrücklich gespeicherte Dokumentableitungen sind verwaltete Dateien der besitzenden Session; Nachrichten behalten ihre exakten Versionsverweise. Es gibt keinen separaten Anhangsbaum. Office-/PDF-Textbegleiter können dauerhaft entstehen, Audio-WAV-Konvertierung erfolgt dagegen bei Bedarf nur vorübergehend. Das Original bleibt zum Download verfügbar.
 

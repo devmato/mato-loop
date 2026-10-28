@@ -8,7 +8,18 @@
     >
       <CommandList :id="paletteId" ref="commandList" :filter="slashQuery || ''" :disabled="inputDisabled" @selected="selectCommand" @resize="commandMenu?.updatePosition()" />
     </AppMenu>
-    <q-card flat class="app-surface chat-composer__card">
+    <q-card
+      flat
+      class="app-surface chat-composer__card"
+      @dragenter="handleDragEnter"
+      @dragover="handleDragOver"
+      @dragleave="handleDragLeave"
+      @drop="handleDrop"
+    >
+      <div v-if="fileDragDepth > 0" class="chat-composer__dropzone column flex-center text-primary" role="status">
+        <q-icon name="attach_file" size="28px" />
+        <span class="text-weight-medium">Dateien hier ablegen</span>
+      </div>
       <q-form @submit.prevent="submit">
         <q-input
           :key="session?.sessionProfile?.messageSize || 'standard'"
@@ -96,7 +107,7 @@
               class="composer-action"
               type="button"
               aria-label="Dateien anhängen"
-              :disable="inputDisabled || starting || recording || finalizing"
+              :disable="attachmentsDisabled"
               @click="attachmentInput?.click()"
             >
               <q-tooltip>Dateien anhängen</q-tooltip>
@@ -241,6 +252,7 @@ const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
 const input = ref(null)
 const attachmentInput = ref(null)
+const fileDragDepth = ref(0)
 const settingsFields = ref(null)
 const sendMode = ref('interrupt')
 const commandList = ref(null)
@@ -305,6 +317,10 @@ const transcriptionUnavailableReason = computed(() => {
   return ''
 })
 const inputDisabled = computed(() => !props.session || props.disabled)
+const attachmentsDisabled = computed(() => inputDisabled.value || starting.value || recording.value || finalizing.value)
+watch([attachmentsDisabled, () => props.session?.id, () => chat.sessionsProjectId, () => chat.draftOwnerUserId], () => {
+  fileDragDepth.value = 0
+})
 const draftHasContent = computed(() => Boolean(props.draft.trim() || props.attachments.length))
 const inputPlaceholder = computed(() => `Eine Nachricht an ${identity.displayName} senden`)
 const voiceActivity = computed(() => starting.value || recording.value || finalizing.value || sendingRecording.value)
@@ -411,6 +427,37 @@ function selectAttachmentFiles(event) {
   const files = Array.from(event.target.files || [])
   if (files.length) emit('add-attachments', files)
   event.target.value = ''
+}
+
+function handleDragEnter(event) {
+  if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return
+  event.preventDefault()
+  event.stopPropagation()
+  if (!attachmentsDisabled.value) fileDragDepth.value += 1
+}
+
+function handleDragOver(event) {
+  if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return
+  event.preventDefault()
+  event.stopPropagation()
+  event.dataTransfer.dropEffect = attachmentsDisabled.value ? 'none' : 'copy'
+}
+
+function handleDragLeave(event) {
+  if (!fileDragDepth.value) return
+  event.stopPropagation()
+  fileDragDepth.value -= 1
+}
+
+function handleDrop(event) {
+  fileDragDepth.value = 0
+  const files = Array.from(event.dataTransfer?.files || [])
+  if (!files.length) return
+  event.preventDefault()
+  event.stopPropagation()
+  if (attachmentsDisabled.value) return
+  emit('add-attachments', files)
+  input.value?.focus()
 }
 
 function handlePaste(event) {

@@ -106,7 +106,10 @@ beforeEach(async () => {
       'onUpdate:draft': (value) => chat.setDraft(value),
       onSend: (content, options) => sentMessages.push({ content, options }),
       onStop: () => { stoppedCount += 1 },
-      'onAdd-attachments': (files, done, options) => done?.(chat.addAttachmentFiles(files, options)),
+      'onAdd-attachments': (files, done, options) => {
+        const result = chat.addAttachmentFiles(files, options)
+        done?.(result)
+      },
       'onRemove-attachment': (id) => chat.removeAttachmentFile(id)
     })
   })
@@ -170,6 +173,47 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('keeps the file dropzone active across child elements and adds dropped files to the draft', async () => {
+    const files = [file('notiz.txt'), file('bild.png')]
+    const transfer = { types: ['Files'], files, dropEffect: 'none' }
+    const drag = (target, type) => {
+      const event = new Event(type, { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'dataTransfer', { value: transfer })
+      target.dispatchEvent(event)
+      return event
+    }
+    const card = root.querySelector('.chat-composer__card')
+    const input = root.querySelector('textarea')
+    drag(card, 'dragenter')
+    drag(input, 'dragenter')
+    drag(card, 'dragleave')
+    await nextTick()
+    expect(root.querySelector('[role="status"]')?.textContent).toContain('Dateien hier ablegen')
+    expect(drag(input, 'dragover').defaultPrevented).toBe(true)
+    expect(transfer.dropEffect).toBe('copy')
+    expect(drag(input, 'drop').defaultPrevented).toBe(true)
+    await nextTick()
+    expect(chat.activeAttachmentDraft.map(attachment => attachment.file)).toEqual(files)
+    expect(root.querySelector('.chat-composer__dropzone')).toBeNull()
+    expect(sentMessages).toEqual([])
+  })
+
+  it.each(['unavailable', 'recording'])('does not attach dropped files while %s', async (state) => {
+    if (state === 'unavailable') session.value = null
+    else mocks.recorder.recording.value = true
+    await nextTick()
+    const card = root.querySelector('.chat-composer__card')
+    for (const type of ['dragenter', 'dragover', 'drop']) {
+      const event = new Event(type, { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'dataTransfer', { value: { types: ['Files'], files: [file()] } })
+      card.dispatchEvent(event)
+      expect(event.defaultPrevented).toBe(true)
+    }
+    await nextTick()
+    expect(chat.activeAttachmentDraft).toEqual([])
+    expect(root.querySelector('.chat-composer__dropzone')).toBeNull()
+  })
+
   it('keeps the final touch-scroll position when a transcript update was deferred during the gesture', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
     await router.push('/')
