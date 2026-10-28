@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from mato_loop_backend.providers.base import (
     DeltaCallback,
@@ -59,6 +59,16 @@ class DiscoveredModel(BaseModel):
     input_modalities: set[ModelInputModality] | None = None
     default_reasoning_effort: ReasoningEffort | None = None
     reasoning_efforts: list[ReasoningEffort] | None = None
+
+    @field_validator("capabilities", mode="before")
+    @classmethod
+    def normalize_capabilities(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                capability for capability in ModelCapability
+                if value.get(capability) is True
+            }
+        return value
 
     @property
     def discovered_max_output_tokens(self) -> int | None:

@@ -1525,7 +1525,14 @@ async def test_transient_error_is_not_retried_after_stream_output() -> None:
     operation.assert_awaited_once()
 
 
-async def test_discovery_gets_models_with_auth_and_preserves_opaque_ids(monkeypatch) -> None:
+@pytest.mark.parametrize("model_fields", [
+    {},
+    {"capabilities": {
+        "chat": True, "tools": True, "reasoning": True,
+        "image_generation": False, "reasoning_efforts": None,
+    }},
+])
+async def test_discovery_gets_models_with_auth_and_preserves_opaque_ids(monkeypatch, model_fields) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert str(request.url) == "https://provider.test/v1/models"
@@ -1539,6 +1546,7 @@ async def test_discovery_gets_models_with_auth_and_preserves_opaque_ids(monkeypa
                         "id": "vendor/model:version@2026-07",
                         "object": "model",
                         "owned_by": "vendor",
+                        **model_fields,
                     }
                 ],
                 "extra": True,
@@ -1558,6 +1566,7 @@ async def test_discovery_gets_models_with_auth_and_preserves_opaque_ids(monkeypa
     )
 
     assert result[0].id == "vendor/model:version@2026-07"
+    assert result[0].capabilities == {ModelCapability.CHAT}
     assert result[0].metadata == {"object": "model", "owned_by": "vendor"}
 
 
