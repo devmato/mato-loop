@@ -81,11 +81,12 @@
                     <pre class="tool-call__details q-py-none">{{ grant.command }}</pre>
                   </template>
                   <q-item-label v-if="grant.elevated || grant.resourceType === 'administrator_path'" caption>Mit Administratorrechten</q-item-label>
-                  <q-item-label caption>Geltungsbereich: Diese Session · Herkunft: {{ grant.source === 'default' ? 'Standard' : grant.source === 'profile' ? 'Profiloption (sessionübergreifende Regel)' : 'Erteilte Freigabe' }}</q-item-label>
+                  <q-item-label caption>Geltungsbereich: Diese Session · Herkunft: {{ grant.source === 'default' ? 'Standard' : grant.source === 'profile' ? 'Profiloption (sessionübergreifende Regel)' : grant.source === 'session_input' ? 'Für diese Session gemerkt' : 'Erteilte Freigabe' }}</q-item-label>
+                  <q-item-label v-if="grant.source === 'session_input'" caption>Nur temporär im Backend gespeichert; nach einem Backend-Neustart nicht mehr verfügbar. Erteilt keine Aktionsrechte.</q-item-label>
                   <q-item-label v-if="grant.derived" caption>{{ grant.source === 'profile' ? 'Über die Temp-Option im Agentenprofil ändern.' : 'Automatisch abgeleiteter Lesezugriff auf den eigenen temporären Arbeitsordner.' }}</q-item-label>
                   <q-item-label v-if="grant.applicable === false" caption class="text-warning">Inaktiv</q-item-label>
                 </q-item-section>
-                <q-item-section v-if="!grant.derived" side>
+                <q-item-section v-if="!grant.derived && !grant.readOnly" side>
                   <q-btn
                     flat
                     round
@@ -131,7 +132,7 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const revokingId = ref(null)
 const sessionGrants = computed(() => approvals.grantsForSession(chat.current?.id))
-const explicitGrants = computed(() => sessionGrants.value.filter(grant => !grant.derived))
+const explicitGrants = computed(() => sessionGrants.value.filter(grant => !grant.derived && !grant.readOnly))
 const grantContext = computed(() => JSON.stringify([
   chat.current?.id, chat.current?.agentProfileId, chat.current?.modelId, chat.current?.sessionProfile,
   chat.current?.preferredExecutionAgentId, chat.current?.currentDirectory
@@ -180,7 +181,7 @@ async function revokeAll() {
   const sessionId = chat.current?.id
   if (!sessionId || !explicitGrants.value.length) return
   const accepted = await confirm(
-    `Sollen alle ${explicitGrants.value.length} Session-Freigaben widerrufen werden? Lauf-Freigaben und automatische Regeln gelten weiterhin.`,
+    `Sollen alle ${explicitGrants.value.length} Session-Freigaben widerrufen werden? Lauf-Freigaben und automatische Regeln gelten weiterhin. Gemerkte Session-Werte bleiben erhalten.`,
     'Alle Session-Freigaben widerrufen',
     { okLabel: 'Alle widerrufen', okColor: 'negative' }
   )

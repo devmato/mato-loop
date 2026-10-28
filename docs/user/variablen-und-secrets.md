@@ -20,6 +20,8 @@ Benötigt ein Tool ein Passwort oder einen Token, kann MatoLoop eine geschützte
 - **Für diese Session merken** behält einen ausgefüllten Wert in Session-Arbeitsspeicher für spätere Läufe. Ein Backend-Neustart verliert diese temporären Werte.
 - Dauerhafte Speicherung unter Variablen & Secrets erfolgt separat mit einer ausdrücklich bestätigten Speicherrückfrage oder Ihrer eigenen Oberflächeingabe.
 
+Unter **Session > Freigaben** sehen Sie auch die Namen der aktuell für diese Session gemerkten Variablen und Secrets, niemals deren Werte. Diese Einträge sind nur zur Ansicht und erteilen keine Aktionsrechte; **Alle Session-Freigaben widerrufen** entfernt die gemerkten Werte nicht.
+
 Mit **Fertig** können Sie auch nur einen Teil der Felder beantworten oder alle auslassen. Nur ausgefüllte Felder erzeugen Referenzen oder gespeicherte Werte. Eine leere Speicherrückfrage legt nichts an und verändert nichts. Ein ausgelassener benötigter Wert blockiert die davon abhängige Arbeit; er wird nicht geraten. Senden Sie eine geänderte Arbeitsanweisung als normale Nachricht, nicht in einem Credential-Feld.
 
 ## Administratorzugriff

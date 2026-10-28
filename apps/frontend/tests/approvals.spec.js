@@ -208,7 +208,8 @@ describe('inline approvals', () => {
       { id: 'grant-2', sessionId: 'session-1' },
       { id: 'grant-3', sessionId: 'session-2' },
       { id: 'grant-4', sessionId: 'session-1', runId: 'run-1' },
-      { id: 'temporary:read', sessionId: 'session-1', derived: true }
+      { id: 'temporary:read', sessionId: 'session-1', derived: true },
+      { id: 'session-secret:token', sessionId: 'session-1', readOnly: true }
     ]
 
     await approvals.revokeAll('session-1')
@@ -217,7 +218,8 @@ describe('inline approvals', () => {
     expect(approvals.grants).toEqual([
       { id: 'grant-3', sessionId: 'session-2' },
       { id: 'grant-4', sessionId: 'session-1', runId: 'run-1' },
-      { id: 'temporary:read', sessionId: 'session-1', derived: true }
+      { id: 'temporary:read', sessionId: 'session-1', derived: true },
+      { id: 'session-secret:token', sessionId: 'session-1', readOnly: true }
     ])
   })
 

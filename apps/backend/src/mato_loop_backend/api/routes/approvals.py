@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.run_support import approval_payload
+from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.memory.service import MemoryApprovalEdit, MemoryService
@@ -335,7 +336,14 @@ async def list_permissions(
             )
         ).all()
     )
-    payloads = []
+    payloads = [
+        {
+            "id": reference, "sessionId": str(session.id),
+            "resourceType": "session_secret", "resourceDisplay": name,
+            "source": "session_input", "scope": "session", "readOnly": True,
+        }
+        for name, reference in session_secrets.references(session.id).items()
+    ]
     binding = await _permission_binding(db, session)
     for item in grants:
         source = (

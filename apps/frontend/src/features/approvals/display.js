@@ -264,6 +264,9 @@ function sanitize(value, depth, seen, key = '', truncate = true) {
 }
 
 export function permissionGrantDisplay(grant, sessions = []) {
+  if (grant?.resourceType === 'session_secret') {
+    return { label: 'Session-Variable / Secret', value: grant.resourceDisplay, icon: 'key' }
+  }
   if (grant?.resourceType === 'run_action') {
     return { label: grant.command ? 'Bestätigter Shell-Befehl' : 'Bestätigte Aktion', value: grant.resourceDisplay || 'Mit den freigegebenen Werten', icon: grant.command ? 'terminal' : 'verified_user' }
   }

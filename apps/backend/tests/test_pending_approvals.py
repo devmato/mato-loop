@@ -8,6 +8,7 @@ from sqlalchemy import Text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.run_support import approval_payload
+from mato_loop_backend.agent.session_secrets import SessionSecretStore
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import (
     _permission_payload,
@@ -70,6 +71,28 @@ async def test_permissions_include_effective_session_scratch_rights(monkeypatch,
     assert [(item["source"], item["resourceDisplay"], item["applicable"], item["derived"]) for item in result] == [
         (source, f"/tmp/mato-loop/{session.id}", not denied, True)
         for source in (["default", "profile"] if writable else ["default"])
+    ]
+
+
+async def test_permissions_include_only_names_of_remembered_session_values(monkeypatch):
+    user = UserAccount(id=uuid4())
+    session = ChatSession(id=uuid4(), user_id=user.id)
+    store = SessionSecretStore()
+    references = store.put(session.id, {"TOKEN": "private token", "USERNAME": "private username"})
+    store.put(uuid4(), {"OTHER_TOKEN": "other session token"})
+    monkeypatch.setattr("mato_loop_backend.api.routes.approvals.session_secrets", store)
+    monkeypatch.setattr("mato_loop_backend.api.routes.approvals._permission_binding", AsyncMock(return_value=(None, TrustLevel.PRIVATE)))
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    db.scalars.return_value = MagicMock(all=lambda: [])
+
+    assert await list_permissions(session.id, user, db) == [
+        {
+            "id": reference, "sessionId": str(session.id),
+            "resourceType": "session_secret", "resourceDisplay": name,
+            "source": "session_input", "scope": "session", "readOnly": True,
+        }
+        for name, reference in references.items()
     ]
 
 

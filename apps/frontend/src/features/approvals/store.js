@@ -132,7 +132,7 @@ export const useApprovalStore = defineStore('approvals', {
     async revokeAll(sessionId) {
       await api.delete(`/approvals/sessions/${sessionId}/permissions`)
       this.grantRevision += 1
-      this.grants = this.grants.filter((item) => item.sessionId !== sessionId || item.runId || item.derived)
+      this.grants = this.grants.filter((item) => item.sessionId !== sessionId || item.runId || item.derived || item.readOnly)
       this.grantsLoading = false
     }
   }
