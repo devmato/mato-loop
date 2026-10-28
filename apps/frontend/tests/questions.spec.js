@@ -67,7 +67,7 @@ describe('agent questions', () => {
 
     await questions.fetchPending({ suppressErrorToast: true })
 
-    expect(api.get).toHaveBeenCalledWith('/questions/pending', { suppressErrorToast: true })
+    expect(api.get).toHaveBeenCalledWith('/questions/pending', { timeout: 30_000, suppressErrorToast: true })
     expect(questions.loaded).toBe(true)
     expect(questions.loadFailed).toBe(false)
   })
@@ -77,10 +77,11 @@ describe('agent questions', () => {
     api.get.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve }))
     const questions = useQuestionStore()
     const fetch = questions.fetchPending()
+    const refresh = questions.fetchPending()
 
     questions.add({ id: 'question-1', sessionId: 'session-1' })
     resolveFetch({ data: [] })
-    await fetch
+    await Promise.all([fetch, refresh])
 
     expect(questions.pending).toHaveLength(1)
   })

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
+import { queueRefresh } from 'src/utils/queued-refresh'
 import { errorDescriptor } from 'src/utils/api-errors'
 import { validRelativePath } from 'src/utils/attachments'
 
@@ -52,20 +53,21 @@ export const useApprovalStore = defineStore('approvals', {
       })).data
     },
     async fetchPending(config = {}) {
-      const revision = ++this.revision
-      this.loading = true
-      this.loadFailed = false
-      try {
-        const { data } = await api.get('/approvals/pending', config)
-        if (revision !== this.revision || !Array.isArray(data)) return
-        this.pending = data
-        this.loaded = true
-      } catch (error) {
-        if (revision === this.revision) this.loadFailed = true
-        throw error
-      } finally {
-        if (revision === this.revision) this.loading = false
-      }
+      return queueRefresh(this, config, async (revision) => {
+        this.loading = true
+        this.loadFailed = false
+        try {
+          const { data } = await api.get('/approvals/pending', { timeout: 30_000, ...config })
+          if (revision !== this.revision || !Array.isArray(data)) return
+          this.pending = data
+          this.loaded = true
+        } catch (error) {
+          if (revision === this.revision) this.loadFailed = true
+          throw error
+        } finally {
+          if (revision === this.revision) this.loading = false
+        }
+      })
     },
     add(approval) {
       if (this.pending.some((item) => item.id === approval.id)) return

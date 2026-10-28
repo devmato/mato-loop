@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
+import { queueRefresh } from 'src/utils/queued-refresh'
 
 export const useProjectStore = defineStore('projects', {
   state: () => ({
@@ -11,20 +12,21 @@ export const useProjectStore = defineStore('projects', {
   }),
   actions: {
     async fetchAll(config = {}) {
-      const revision = ++this.revision
-      this.loading = !this.loaded
-      this.loadFailed = false
-      try {
-        const { data } = await api.get('/projects', config)
-        if (revision !== this.revision) return
-        this.items = data.items
-        this.loaded = true
-      } catch (error) {
-        if (revision === this.revision) this.loadFailed = true
-        throw error
-      } finally {
-        if (revision === this.revision) this.loading = false
-      }
+      return queueRefresh(this, config, async (revision) => {
+        this.loading = !this.loaded
+        this.loadFailed = false
+        try {
+          const { data } = await api.get('/projects', { timeout: 30_000, ...config })
+          if (revision !== this.revision) return
+          this.items = data.items
+          this.loaded = true
+        } catch (error) {
+          if (revision === this.revision) this.loadFailed = true
+          throw error
+        } finally {
+          if (revision === this.revision) this.loading = false
+        }
+      })
     },
     async create(name, instructions = '', defaults = {}) {
       const { data } = await api.post('/projects', {

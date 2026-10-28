@@ -277,7 +277,10 @@ function configureRenderRules() {
         </div>
       </div>`
     }
-    if (!env.interactive) return highlightedCode(token.content, token.info)
+    const cacheKey = `${token.info}\0${token.content}`
+    const code = env.codeCache.get(cacheKey) ?? highlightedCode(token.content, token.info)
+    env.nextCodeCache.set(cacheKey, code)
+    if (!env.interactive) return code
     const codeIndex = String(env.codeBlocks.length)
     env.codeBlocks.push(token.content)
     return `<div class="chat-markdown__code-block">
@@ -285,7 +288,7 @@ function configureRenderRules() {
         <button type="button" class="chat-markdown__block-action chat-markdown__source-download material-icons" data-markdown-code="${codeIndex}" aria-label="Codeblock herunterladen" title="Codeblock herunterladen">download</button>
         <button type="button" class="chat-markdown__block-action chat-markdown__source-copy material-icons" data-markdown-code="${codeIndex}" aria-label="Codeblock kopieren" title="Codeblock kopieren">content_copy</button>
       </div>
-      ${highlightedCode(token.content, token.info)}
+      ${code}
     </div>`
   }
 
@@ -377,6 +380,7 @@ export function renderMarkdown(
   content,
   {
     allowImages = true,
+    codeCache = new Map(),
     fileActions = [],
     imageStates = {},
     interactive = true,
@@ -392,6 +396,8 @@ export function renderMarkdown(
     if (url) sourceMap.set(url, source)
   }
   const env = {
+    codeCache,
+    nextCodeCache: new Map(),
     codeBlocks: [],
     externalImages: [],
     fileActions,
@@ -412,6 +418,8 @@ export function renderMarkdown(
     RETURN_TRUSTED_TYPE: false,
     SANITIZE_NAMED_PROPS: true
   })
+  codeCache.clear()
+  for (const [key, value] of env.nextCodeCache) codeCache.set(key, value)
   return {
     codeBlocks: env.codeBlocks,
     html,

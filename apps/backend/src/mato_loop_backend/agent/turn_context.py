@@ -79,15 +79,18 @@ async def build_turn_context(
     token_ratio = 1.0
     server_counts: dict[str, int] = {}
     counting_available: bool | None = None
+    prepared_request = None
 
     async def prepare(messages: list[dict[str, Any]]):
+        nonlocal prepared_request
         messages, images = run_support._project_ephemeral_images(
             model_browser_observations(messages), ephemeral_images,
             model=model, target_trust_level=trust_level,
         )
-        return await ProviderService.prepare_request(
-            messages=messages, image_inputs=images, **request_options
+        prepared_request = await ProviderService.prepare_request(
+            messages=messages, image_inputs=images, prepared_request=prepared_request, **request_options
         )
+        return prepared_request
 
     async def count_request(prepared) -> int | None:
         nonlocal token_ratio
@@ -199,8 +202,8 @@ async def build_turn_context(
             if repository_context:
                 projection.messages[0]["content"] += "\n\n" + repository_context
                 projection.estimated_input_tokens = candidate_tokens
+        prepared = await prepare(projection.messages)
         if counting_available:
-            prepared = await prepare(projection.messages)
             final_count = await count_request(prepared)
             projection.input_token_source = "server-calibrated"
             if final_count is not None:
@@ -211,6 +214,7 @@ async def build_turn_context(
                 projection.estimated_input_tokens = final_count
                 projection.input_token_source = "server"
                 projection.counted_input_fingerprint = prepared.input_token_fingerprint
+        projection.prepared_request = prepared
         break
     if compacted_summary is not None:
         projection.compacted = True

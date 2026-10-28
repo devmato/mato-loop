@@ -33,7 +33,7 @@ describe('inline approvals', () => {
 
     await approvals.fetchPending({ suppressErrorToast: true })
 
-    expect(api.get).toHaveBeenCalledWith('/approvals/pending', { suppressErrorToast: true })
+    expect(api.get).toHaveBeenCalledWith('/approvals/pending', { timeout: 30_000, suppressErrorToast: true })
     expect(approvals.pendingCount).toBe(1)
     expect(approvals.loaded).toBe(true)
     expect(approvals.loadFailed).toBe(false)
@@ -55,7 +55,7 @@ describe('inline approvals', () => {
 
     await approvals.fetchPending()
 
-    expect(api.get).toHaveBeenCalledExactlyOnceWith('/approvals/pending', {})
+    expect(api.get).toHaveBeenCalledExactlyOnceWith('/approvals/pending', { timeout: 30_000 })
   })
 
   it('does not overwrite an approval added while pending approvals load', async () => {
@@ -63,10 +63,11 @@ describe('inline approvals', () => {
     api.get.mockReturnValue(new Promise((resolve) => { resolveRequest = resolve }))
     const approvals = useApprovalStore()
     const request = approvals.fetchPending()
+    const refresh = approvals.fetchPending()
 
     approvals.add({ id: 'approval-new', sessionId: 'session-1' })
     resolveRequest({ data: [] })
-    await request
+    await Promise.all([request, refresh])
 
     expect(approvals.pending).toEqual([{ id: 'approval-new', sessionId: 'session-1' }])
   })
@@ -147,7 +148,7 @@ describe('inline approvals', () => {
 
     await expect(approvals.decide('approval-1', 'deny')).rejects.toBeTruthy()
 
-    expect(api.get).toHaveBeenCalledWith('/approvals/pending', {})
+    expect(api.get).toHaveBeenCalledWith('/approvals/pending', { timeout: 30_000 })
     expect(approvals.pending).toEqual([])
   })
 

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
+import { queueRefresh } from 'src/utils/queued-refresh'
 import { notifyError } from 'src/utils/notifications'
 import { randomUuid } from 'src/utils/random-id'
 import { applicationServerKey } from 'src/utils/web-push'
@@ -67,25 +68,27 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
       await api.put('/notifications/presence', presence, { suppressErrorToast: true })
     },
     async fetchLatest(config = {}) {
-      const revision = ++this.revision
-      this.loading = true
-      this.loadFailed = false
-      try {
-        const { data } = await api.get('/notifications', {
-          ...config,
-          params: { ...config.params, pageSize: PAGE_SIZE }
-        })
-        if (revision !== this.revision) return
-        this.items = Array.isArray(data.items) ? data.items : []
-        this.nextCursor = data.nextCursor || null
-        this.unreadCount = Number(data.unreadCount) || 0
-        this.loaded = true
-      } catch (error) {
-        if (revision === this.revision) this.loadFailed = true
-        throw error
-      } finally {
-        if (revision === this.revision) this.loading = false
-      }
+      return queueRefresh(this, config, async (revision) => {
+        this.loading = true
+        this.loadFailed = false
+        try {
+          const { data } = await api.get('/notifications', {
+            timeout: 30_000,
+            ...config,
+            params: { ...config.params, pageSize: PAGE_SIZE }
+          })
+          if (revision !== this.revision) return
+          this.items = Array.isArray(data.items) ? data.items : []
+          this.nextCursor = data.nextCursor || null
+          this.unreadCount = Number(data.unreadCount) || 0
+          this.loaded = true
+        } catch (error) {
+          if (revision === this.revision) this.loadFailed = true
+          throw error
+        } finally {
+          if (revision === this.revision) this.loading = false
+        }
+      })
     },
     async fetchMore(config = {}) {
       if (!this.nextCursor || this.loadingMore) return

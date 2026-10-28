@@ -550,8 +550,7 @@ async def test_repository_prefetch_reports_partial_context_budget_omission() -> 
             lines_read=1, has_more=False, truncated_lines=[], sha256="a" * 64,
         )
 
-    async def fits(context):
-        return len(context) < 1_500
+    fits = AsyncMock(side_effect=lambda context: len(context) < 1_500)
 
     client = FakeExecutionClient({"filesystem.stat": stat, "filesystem.read": read},
                                  {"filesystem.stat", "filesystem.read"}, "/work")
@@ -560,6 +559,7 @@ async def test_repository_prefetch_reports_partial_context_budget_omission() -> 
         target_paths=("/work/src/main.py",), fits_context=fits,
     )
     assert "Some repository instructions could not be loaded." in prompt
+    assert fits.await_count == 2
 
 
 async def test_workspace_read_sends_generated_image_to_model(tmp_path) -> None:

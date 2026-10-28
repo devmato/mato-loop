@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import unified_diff
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -27,6 +27,7 @@ from mato_loop_backend.tools.snapshots import SNAPSHOT_MARKER, snapshot_context
 
 if TYPE_CHECKING:
     from mato_loop_backend.agent.context import EstimateCallback
+    from mato_loop_backend.providers.service import PreparedRequest
 
 
 MAX_ATTACHMENT_EXCERPT_CHARACTERS = 20_000
@@ -92,6 +93,7 @@ class ContextProjection:
     reserved_output_tokens: int = 2_048
     input_token_source: str = "estimate"
     counted_input_fingerprint: str | None = None
+    prepared_request: PreparedRequest | None = field(default=None, repr=False, compare=False)
 
 
 def compaction_messages(source: str) -> list[dict[str, str]]:

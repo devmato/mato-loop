@@ -187,6 +187,7 @@ async def complete_model_turn(
             counted_input_fingerprint=projection.counted_input_fingerprint,
             reserved_output_tokens=projection.reserved_output_tokens,
             safety_reserve_tokens=settings.safety_reserve_tokens,
+            prepared_request=projection.prepared_request,
             on_delta=on_delta, on_reasoning=on_reasoning,
             on_warning=on_warning, on_retry=on_provider_retry,
         )

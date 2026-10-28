@@ -73,6 +73,7 @@ const contentRoot = ref(null)
 const rendered = ref({ codeBlocks: [], html: '', externalImages: [], mermaidBlocks: [] })
 const imageStates = ref({})
 const verificationTasks = new Map()
+const codeCache = new Map()
 const mermaidDialog = ref(false)
 const mermaidImage = ref(null)
 const STREAM_RENDER_INTERVAL_MS = 50
@@ -88,6 +89,7 @@ function renderContent() {
   renderTimer = null
   const version = ++renderVersion
   rendered.value = renderMarkdown(props.content, {
+    codeCache,
     allowImages: props.allowImages,
     fileActions: props.fileActions,
     imageStates: imageStates.value,
@@ -313,6 +315,8 @@ watch(
     props.content,
     props.forceLight,
     props.interactive,
+    // Only filenames affect markup; clicks resolve the current file targets.
+    JSON.stringify(props.fileActions.map((action) => action.filename)),
     props.researchSources,
     props.streaming,
     props.trustedImageOrigins,

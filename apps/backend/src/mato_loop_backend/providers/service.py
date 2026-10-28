@@ -7,6 +7,7 @@ import json
 import logging
 import math
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from io import BytesIO
 from types import SimpleNamespace
@@ -479,12 +480,13 @@ async def _with_retries(
 
 
 @dataclass(slots=True, repr=False)
-class _PreparedRequest:
+class PreparedRequest:
     request: ProviderRequest
     adapter: ProviderAdapter
     api_type: ApiType
     pseudonymizer: RequestPseudonymizer | None
     estimated_input_tokens: int
+    inputs: tuple[Any, ...]
 
     @property
     def input_token_fingerprint(self) -> str | None:
@@ -497,7 +499,7 @@ class _PreparedRequest:
 class ProviderService:
     @staticmethod
     async def count_input_tokens(
-        db: AsyncSession, *, provider: LlmProviderConfig, prepared: _PreparedRequest,
+        db: AsyncSession, *, provider: LlmProviderConfig, prepared: PreparedRequest,
     ) -> int | None:
         if (
             provider.adapter_type != "openai-compatible"
@@ -557,8 +559,16 @@ class ProviderService:
         prompt_cache_key: str | None = None,
         required_image_ids: tuple[str, ...] = (),
         reasoning_effort: ReasoningEffort | str | None = None,
-    ) -> _PreparedRequest:
+        prepared_request: PreparedRequest | None = None,
+    ) -> PreparedRequest:
         """Prepare original candidate messages locally, without settings, auth, or transport."""
+        inputs = (
+            provider, model, messages, tools, tool_choice, timeout, target_trust_level,
+            pseudonymization_enabled, pseudonymization_key, image_inputs, media_inputs,
+            prompt_cache_key, required_image_ids, reasoning_effort,
+        )
+        if prepared_request is not None and prepared_request.inputs == inputs:
+            return prepared_request
         if model.provider_id != provider.id:
             raise ProviderError(
                 "Model and provider do not belong together",
@@ -683,12 +693,13 @@ class ProviderService:
         )
         if pseudonymizer is not None:
             pseudonymizer.retain_transmitted(body)
-        return _PreparedRequest(
+        return PreparedRequest(
             request, adapter, api_type, pseudonymizer,
             estimate_request_input_tokens(
                 body, model.characters_per_token,
                 reasoning_token_estimates=reasoning_token_estimates,
             ),
+            deepcopy(inputs),
         )
 
     @staticmethod
@@ -718,6 +729,7 @@ class ProviderService:
         prompt_cache_key: str | None = None,
         required_image_ids: tuple[str, ...] = (),
         reasoning_effort: ReasoningEffort | str | None = None,
+        prepared_request: PreparedRequest | None = None,
     ) -> ProviderResult:
         """Complete with an adaptive budget checked after all input transformations.
 
@@ -743,6 +755,7 @@ class ProviderService:
             prompt_cache_key=prompt_cache_key,
             required_image_ids=required_image_ids,
             reasoning_effort=reasoning_effort,
+            prepared_request=prepared_request,
         )
         request = prepared.request
         adapter = prepared.adapter

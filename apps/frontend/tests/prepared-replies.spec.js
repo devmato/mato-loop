@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createApp, h } from 'vue'
+import { createApp, h, nextTick, ref } from 'vue'
 import { Quasar, QCard, QDialog } from 'quasar'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -15,6 +15,27 @@ afterEach(() => {
 })
 
 describe('prepared Markdown replies', () => {
+  it('ignores equivalent file actions but renders changed filenames', async () => {
+    const fileActions = ref([{ filename: 'Support-Meeting-Protokoll.md' }])
+    const rendered = vi.fn()
+    root = document.createElement('div')
+    app = createApp({
+      render: () => h(MessageContent, {
+        content: '**Support-Meeting-Protokoll.md**', fileActions: fileActions.value, onRendered: rendered
+      })
+    })
+    app.use(Quasar, { components: { QCard, QDialog } })
+    app.mount(root)
+    await nextTick()
+    rendered.mockClear()
+    fileActions.value = fileActions.value.map((action) => ({ ...action }))
+    await nextTick()
+    const unchangedRenders = rendered.mock.calls.length
+    fileActions.value = [{ filename: 'Other.md' }]
+    await nextTick()
+    expect([unchangedRenders, root.querySelector('[data-markdown-file]')]).toEqual([0, null])
+  })
+
   it('emits only a matching host-provided reply', () => {
     const reply = vi.fn()
     root = document.createElement('div')

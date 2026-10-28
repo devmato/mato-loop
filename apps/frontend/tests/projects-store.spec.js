@@ -30,7 +30,7 @@ describe('projects store', () => {
 
     await store.fetchAll()
 
-    expect(api.get).toHaveBeenCalledWith('/projects', {})
+    expect(api.get).toHaveBeenCalledWith('/projects', { timeout: 30_000 })
     expect(store.items).toEqual([project])
     expect(store.loading).toBe(false)
     expect(store.loaded).toBe(true)
@@ -49,9 +49,9 @@ describe('projects store', () => {
     const store = useProjectStore()
     const first = store.fetchAll()
 
-    await store.fetchAll()
+    const second = store.fetchAll()
     resolveFirst({ data: { items: [{ ...project, name: 'Veraltet' }] } })
-    await first
+    await Promise.all([first, second])
 
     expect(store.items).toEqual([project])
     expect(store.loading).toBe(false)
@@ -134,10 +134,11 @@ describe('projects store', () => {
     const store = useProjectStore()
     store.items = [project]
     const load = store.fetchAll()
+    const refresh = store.fetchAll()
 
     await store.setCodingBinding(project.id, codingService)
     resolveLoad({ data: { items: [project] } })
-    await load
+    await Promise.all([load, refresh])
 
     expect(store.items[0].codingService).toEqual(codingService)
   })

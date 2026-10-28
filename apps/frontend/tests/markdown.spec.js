@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi } from 'vitest'
+import hljs from 'highlight.js/lib/common'
 
 import { verifyExternalImage } from '../src/utils/image-verification'
 import {
@@ -28,6 +29,22 @@ function renderedDom(markdown, options) {
 }
 
 describe('assistant markdown rendering', () => {
+  it.each([
+    ['```js\nconst value = 1\n```\n\nMore text', 1],
+    ['```js\nconst value = 2\n```', 2],
+    ['```python\nconst value = 1\n```', 2]
+  ])('reuses only matching code highlighting without changing output (%s)', (updated, expectedCalls) => {
+    const source = '```js\nconst value = 1\n```\n\n'
+    const expected = renderMarkdown(updated, { streaming: true })
+    const highlight = vi.spyOn(hljs, 'highlight')
+    const codeCache = new Map()
+    renderMarkdown(source, { codeCache, streaming: true })
+    const actual = renderMarkdown(updated, { codeCache, streaming: true })
+    const calls = highlight.mock.calls.length
+    highlight.mockRestore()
+    expect([calls, actual]).toEqual([expectedCalls, expected])
+  })
+
   it('links a matching generated filename to its file action', () => {
     const action = { filename: 'Support-Meeting-Protokoll.md', path: 'Support-Meeting-Protokoll.md' }
     const { root } = renderedDom('**Support-Meeting-Protokoll.md**', { fileActions: [action] })

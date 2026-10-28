@@ -101,6 +101,7 @@ async def test_stale_server_count_cannot_bypass_final_budget():
             AsyncMock(spec=AsyncSession), provider=provider, model=model, tools=[],
             messages=[{"role": "user", "content": "x" * 10_000}], estimated_input_tokens=100,
             counted_input_fingerprint=prepared.input_token_fingerprint, safety_reserve_tokens=0,
+            prepared_request=prepared,
         )
     assert error.value.code == "agent.contextWindowExceeded"
 
@@ -109,6 +110,17 @@ def _png_bytes() -> bytes:
     buffer = BytesIO()
     Image.new("RGB", (2, 2), (10, 20, 30)).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+async def test_prepared_request_revalidates_an_in_place_trust_change():
+    provider = LlmProviderConfig(name="Test", adapter_type="openai-compatible", trust_level=TrustLevel.PRIVATE,
+                                 pseudonymization_enabled=False)
+    model = ModelConfig(provider_id=provider.id, model_id="test")
+    options = dict(provider=provider, model=model, messages=[{"role": "user", "content": "Hello"}], tools=[])
+    prepared = await ProviderService.prepare_request(**options)
+    provider.trust_level = TrustLevel.PUBLIC
+    public = await ProviderService.prepare_request(**options, prepared_request=prepared)
+    assert public.request.continuation_scope["trustLevel"] == "public"
 
 
 def _attachment_reference(
@@ -508,7 +520,12 @@ async def test_run_privacy_keeps_serialized_prefix_and_request_scope(monkeypatch
 
     monkeypatch.setattr(service_module, "chat_completions", response)
     monkeypatch.setattr(service_module, "responses_api", response)
-    result = await ProviderService.complete(AsyncMock(spec=AsyncSession), messages=source, **options)
+    projection = AsyncMock(wraps=service_module._provider_projection)
+    monkeypatch.setattr(service_module, "_provider_projection", projection)
+    result = await ProviderService.complete(
+        AsyncMock(spec=AsyncSession), messages=source, prepared_request=first, **options,
+    )
+    assert projection.await_count == 0
     assert result.content == "anna@example.com"
 
     current = await ProviderService.prepare_request(

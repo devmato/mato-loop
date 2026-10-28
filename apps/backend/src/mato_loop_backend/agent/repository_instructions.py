@@ -168,7 +168,7 @@ async def repository_instructions_prompt(
             if "content" not in entry:
                 continue
             if await fits_context(render()):
-                break
+                return render()
             entry.pop("content")
             entry["status"] = "context_budget_exceeded"
         if not await fits_context(render()):

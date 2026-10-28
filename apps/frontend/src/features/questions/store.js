@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
+import { queueRefresh } from 'src/utils/queued-refresh'
 import { errorDescriptor } from 'src/utils/api-errors'
 
 const TERMINAL_ANSWER_ERRORS = new Set([
@@ -23,24 +24,25 @@ export const useQuestionStore = defineStore('questions', {
   },
   actions: {
     async fetchPending(config = {}) {
-      const revision = ++this.revision
-      this.loading = true
-      this.loadFailed = false
-      try {
-        const { data } = await api.get('/questions/pending', config)
-        if (revision !== this.revision || !Array.isArray(data)) return
-        this.pending = data
-        this.loaded = true
-        const pendingIds = new Set(this.pending.map((item) => item.id))
-        for (const id of Object.keys(this.drafts)) {
-          if (!pendingIds.has(id)) delete this.drafts[id]
+      return queueRefresh(this, config, async (revision) => {
+        this.loading = true
+        this.loadFailed = false
+        try {
+          const { data } = await api.get('/questions/pending', { timeout: 30_000, ...config })
+          if (revision !== this.revision || !Array.isArray(data)) return
+          this.pending = data
+          this.loaded = true
+          const pendingIds = new Set(this.pending.map((item) => item.id))
+          for (const id of Object.keys(this.drafts)) {
+            if (!pendingIds.has(id)) delete this.drafts[id]
+          }
+        } catch (error) {
+          if (revision === this.revision) this.loadFailed = true
+          throw error
+        } finally {
+          if (revision === this.revision) this.loading = false
         }
-      } catch (error) {
-        if (revision === this.revision) this.loadFailed = true
-        throw error
-      } finally {
-        if (revision === this.revision) this.loading = false
-      }
+      })
     },
     add(question) {
       if (this.pending.some((item) => item.id === question.id)) return

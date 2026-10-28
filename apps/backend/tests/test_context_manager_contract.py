@@ -2654,6 +2654,7 @@ async def test_turn_context_uses_server_count_with_local_fallback(monkeypatch, c
         db, provider=provider, model=model, messages=projection.messages, tools=[],
         estimated_input_tokens=projection.estimated_input_tokens, counted_input_fingerprint=projection.counted_input_fingerprint,
         reserved_output_tokens=100, safety_reserve_tokens=0,
+        prepared_request=projection.prepared_request, image_inputs=[],
     )
     assert (result.provider_data["output_budget"]["estimatedInputTokens"], projection.input_token_source,
             counter.await_count, result.content) == (

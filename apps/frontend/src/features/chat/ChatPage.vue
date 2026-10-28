@@ -135,12 +135,12 @@
                 v-if="message.workHistory"
                 hide-provided-files
                 :history="message.workHistory"
-                :subagents="childrenByMessage.get(message.id) || []"
+                :subagents="childrenByMessage.get(message.id) || emptyItems"
                 :activity="message.currentTurn ? chat.activity : null"
                 :presentation="message.currentTurn ? runPresentation : null"
                 :reasoning="message.currentTurn ? chat.streamReasoning : null"
                 :context-summary="message.currentTurn ? chat.streamContextSummary : null"
-                :warnings="message.currentTurn ? chat.runWarnings : []"
+                :warnings="message.currentTurn ? chat.runWarnings : emptyItems"
                 :trusted-image-origins="trustedImageOrigins"
                 :running="chat.running && message.currentTurn"
                 :expanded="expandedWorkHistoryIds.has(message.id)"
@@ -174,7 +174,7 @@
                 :content="message.content"
                 :role="message.error ? 'alert' : undefined"
                 :file-actions="message.fileActions"
-                :research-sources="message.research?.linkedSources || []"
+                :research-sources="message.research?.linkedSources || emptyItems"
                 :streaming="message.streaming"
                 :trusted-image-origins="trustedImageOrigins"
                 @open-file="openToolFile"
@@ -430,7 +430,7 @@
           </template>
         </SessionSettingsFields>
         <SessionTodoStrip
-          :todos="chat.current?.todos || []"
+          :todos="chat.current?.todos || emptyItems"
           :collapsed="chat.current?.todosCollapsed || false"
           :saving="savingTodos"
           @update:collapsed="setTodosCollapsed"
@@ -593,6 +593,7 @@ import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-t
 
 defineOptions({ name: 'ChatPage' })
 
+const emptyItems = Object.freeze([])
 const route = useRoute()
 const router = useRouter()
 const $q = useQuasar()
@@ -809,7 +810,7 @@ const runPresentation = computed(() => agentRunPresentation({
   transcript: transcript.value
 }))
 const trustedImageOrigins = computed(() => (
-  trustedImageOriginsBySession.value.get(chat.current?.id) || []
+  trustedImageOriginsBySession.value.get(chat.current?.id) || emptyItems
 ))
 const sessionLoadErrorMessage = computed(() => (
   apiErrorMessage(chat.loadError, 'Die Session konnte nicht geladen werden.')

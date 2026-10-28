@@ -43,6 +43,7 @@ describe('in-app notification store', () => {
     await store.fetchLatest({ suppressErrorToast: true })
 
     expect(api.get).toHaveBeenCalledWith('/notifications', {
+      timeout: 30_000,
       suppressErrorToast: true,
       params: { pageSize: 20 }
     })
@@ -72,9 +73,9 @@ describe('in-app notification store', () => {
     const store = useInAppNotificationStore()
     const first = store.fetchLatest()
 
-    await store.fetchLatest()
+    const second = store.fetchLatest()
     resolveFirst({ data: { items: [{ id: 'old' }], unreadCount: 9 } })
-    await first
+    await Promise.all([first, second])
 
     expect(store.items).toEqual([{ id: 'new' }])
     expect(store.unreadCount).toBe(1)
