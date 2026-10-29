@@ -71,6 +71,14 @@ Unter **Administration > Provider > Einstellungen > Modelltrennung** aktivieren 
 
 Die Einstellung prüft weder Lokalität noch TLS oder Betreiber. Mit der Modellwahl entscheiden Sie über die Übertragung bereits autorisierter Nachrichten, Dateien, Tool-Ergebnisse und Integrationsdaten an diesen Provider. Es gibt dafür keine zweite pauschale Session-Datenfreigabe. Eigentümergrenzen, Memory-Zielgruppen und Aktionsrechte gelten trotzdem. Ein Widerruf kann bereits übertragene Daten nicht zurückholen.
 
+Unter **Session > Session-Einstellungen > Vertraulichkeit** stufen Sie den gesamten Verlauf als **Privat** oder **Öffentlich** ein. Beim ersten Senden übernimmt die Session die wirksame Einstufung des gewählten Modells, sofern Sie sie nicht vorher ausdrücklich gesetzt haben. Spätere Modellwechsel ändern sie nicht. Die Einstufung erscheint nicht mehr an einzelnen Nachrichten und teilt die Session nicht mit anderen Nutzern.
+
+Private Modelle können eigene Sessions beider Einstufungen mit normalen Leserechten nutzen. Öffentliche Modelle erhalten automatisch nur öffentliche Sessions, einschließlich Titel und Vorschauen. Das gezielte Lesen einer anderen privaten Session oder eine Suche/Auflistung einschließlich privater Sessions benötigt **Vertrauliche Daten lesen**. Öffentliche Modelle sollen private Sessions nur auf ausdrückliche Nutzeranfrage einbeziehen. Die eigene aktuelle Session bleibt durch Ihre Modellwahl freigegeben.
+
+Dreaming verarbeitet beide Einstufungen mit dem von Ihnen konfigurierten Modell ohne zusätzliche Rückfrage. Neue Erinnerungen aus privaten Sessions sind nur für private Modelle sichtbar; öffentliche Sessions erzeugen für beide Modellbereiche sichtbare Erinnerungen. Bereits erzeugte Erinnerungen werden beim Umstellen nicht verändert. **Privat → Öffentlich** betrifft auch den bisherigen Verlauf und verlangt eine Bestätigung. **Öffentlich → Privat** holt bereits übertragene Daten nicht zurück.
+
+Ohne Modelltrennung ist das Dropdown ausgeblendet. Alle Modelle und Sessions gelten wirksam als privat; Session-Zugriffe nutzen normale Leserechte und neue Erinnerungen sind privat eingestuft. Gespeicherte Einstufungen bleiben für das erneute Aktivieren erhalten.
+
 Pseudonymisierung ist unabhängig vom Vertrauenslevel am Provider und optional am Modell einstellbar. Die ausdrückliche Auswahl **Öffentlich** schaltet sie im Formular zunächst ein; Sie können sie danach ausschalten. Die Auswahl **Privat** oder das Abschalten der Trennung ändert den gespeicherten Pseudonymisierungswert nicht. Sie erkennt bestimmte Kennungen und strukturierte Secrets, aber nicht beliebige vertrauliche Aussagen, Personen oder Orte. Bilder, Audio und andere Binärdaten werden nicht pseudonymisiert. Die Erkennung ersetzt keine bewusste Provider- und Datenwahl.
 
 ## Rückfragen und geschützte Eingaben

@@ -49,6 +49,10 @@ class ChatSession(Base):
     __tablename__ = "chat_sessions"
     __table_args__ = (
         CheckConstraint(
+            "trust_level IS NULL OR trust_level IN ('public', 'private')",
+            name="trust_level_valid",
+        ),
+        CheckConstraint(
             "web_search_policy IN ('required', 'available', 'disabled')",
             name="web_search_policy_valid",
         ),
@@ -136,6 +140,7 @@ class ChatSession(Base):
         ),
     )
     model_config_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    trust_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
     session_profile: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     agent_profile_id: Mapped[UUID] = mapped_column(
         nullable=False,

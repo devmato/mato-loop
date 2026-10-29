@@ -337,6 +337,7 @@ def session_payload(
         ),
         "reasoningEffort": item.reasoning_effort,
         "memoryMode": item.memory_mode,
+        "trustLevel": item.trust_level,
         "webSearchPolicy": item.web_search_policy,
         "preferredExecutionAgentId": (
             str(item.preferred_execution_agent_id)

@@ -2025,10 +2025,17 @@ async def test_other_session_read_requires_approval_without_matching_grant(tmp_p
     db.scalars.assert_awaited_once()
 
 
-async def test_same_project_session_reads_honor_policy(tmp_path) -> None:
+@pytest.mark.parametrize(("model_trust", "session_trust", "private_access", "expected"), [
+    (TrustLevel.PRIVATE, "private", False, PermissionDecision.ALLOW),
+    (TrustLevel.PUBLIC, "public", False, PermissionDecision.ALLOW),
+    (TrustLevel.PUBLIC, "private", False, PermissionDecision.DENY),
+    (TrustLevel.PUBLIC, "private", True, PermissionDecision.ALLOW),
+])
+async def test_same_project_session_reads_honor_policy(tmp_path, model_trust, session_trust, private_access, expected) -> None:
     project_id = uuid4()
     session = _session(user_id=uuid4(), project_id=project_id, session_type="chat")
     target = _session(user_id=session.user_id, project_id=project_id, session_type="chat")
+    target.trust_level = session_trust
     db = _db_with_grants()
     db.get.return_value = target
     root_files = _root_files(tmp_path, session)
@@ -2043,10 +2050,11 @@ async def test_same_project_session_reads_honor_policy(tmp_path) -> None:
     assert await PermissionPolicy.evaluate(
         db,
         session,
-        session_permission(target.id),
+        session_permission(target.id, private_access=private_access),
         root_files,
         ToolExecutionPolicy.AUTO,
-    ) == PermissionDecision.ALLOW
+        trust_level=model_trust,
+    ) == expected
     assert await PermissionPolicy.evaluate(
         db, session, path_request, root_files, ToolExecutionPolicy.AUTO
     ) == PermissionDecision.ALLOW

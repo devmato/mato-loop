@@ -9,7 +9,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.models import Message
-from mato_loop_backend.settings import TrustLevel
 
 _REFERENCE = re.compile(
     r"^(event|task):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(\d{1,3})$"
@@ -91,7 +90,6 @@ async def resolve_tool_references(
     arguments: dict[str, Any],
     db: AsyncSession,
     session_id: UUID,
-    trust_level: TrustLevel,
 ) -> dict[str, Any]:
     target = _TARGETS.get(tool_name)
     if target is None:
@@ -110,8 +108,6 @@ async def resolve_tool_references(
         Message.role == "tool",
         Message.error_code.is_(None),
     ]
-    if trust_level == TrustLevel.PUBLIC:
-        filters.append(Message.trust_level == TrustLevel.PUBLIC.value)
     source_message = await db.scalar(select(Message).where(*filters))
     if source_message is None:
         raise InvalidToolReference(field)

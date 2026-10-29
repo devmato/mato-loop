@@ -105,6 +105,10 @@ _TRANSCRIPT_ROUTING_INSTRUCTION = (
 
 _SESSION_READ = ToolAction("session.read", "Sessions lesen", category="read")
 
+_SESSION_READ_SENSITIVE = ToolAction(
+    "session.read_sensitive", "Private Sessions lesen und durchsuchen", category="read_sensitive"
+)
+
 _SESSION_SEARCH = ToolAction(
     "session.search", "Sessions durchsuchen", category="read"
 )

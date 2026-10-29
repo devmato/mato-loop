@@ -5,7 +5,7 @@
         :session="chat.activeContext"
         :agent-profile-id="chat.activeAgentProfileId"
         :disabled="chat.historyActionPending || chat.outboxSaving"
-        :fields="['template', 'messageSize', 'agent', 'computer', 'memory', 'webSearch', 'model', 'reasoning']"
+        :fields="['template', 'messageSize', 'agent', 'computer', 'memory', 'trust', 'webSearch', 'model', 'reasoning']"
         grouped
         show-warning
         class="q-pa-md"

@@ -703,6 +703,7 @@ async def test_project_session_uses_configured_relevant_session_limit(monkeypatc
         owner_id=db.get.return_value.user_id,
         current_session_id=session_id,
         project_id=db.get.return_value.project_id,
+        readable_by=TrustLevel.PRIVATE,
     )
     prompt = projections[0]["memory_context"]
     assert '"title": "Mealie deployment"' in prompt

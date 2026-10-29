@@ -2388,7 +2388,7 @@ def test_general_system_prompt_separates_session_discovery_and_reading() -> None
     assert "only when supplied references lack" in prompt
     assert "session_browse by recency" in prompt
     assert "context_search by topic" in prompt
-    assert "Use session_id to search within a known conversation" in prompt
+    assert "session_id for a known conversation" in prompt
     assert "sessionReadArguments" in prompt
 
 

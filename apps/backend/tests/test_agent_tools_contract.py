@@ -5171,6 +5171,57 @@ async def test_public_model_can_select_same_project_session_files(tmp_path) -> N
     assert "chat_sessions.project_id" in statement
 
 
+@pytest.mark.parametrize("name,arguments", [
+    ("read", {"path": "notes.txt"}),
+    ("glob", {"pattern": "*"}),
+    ("grep", {"pattern": "secret"}),
+    ("provide_file", {"path": "notes.txt"}),
+])
+async def test_cross_session_files_require_sensitive_access_after_file_approval(tmp_path, name, arguments):
+    target_id, project_id = uuid4(), uuid4()
+    call = ToolCall("private-file", name, {"root": "session", "session_id": str(target_id), **arguments})
+    context = _context(tmp_path, call)
+    context.session.project_id = project_id
+    context.model_trust_level = TrustLevel.PUBLIC
+    target = ChatSession(id=target_id, user_id=context.session.user_id, project_id=project_id,
+                         session_type="chat", trust_level="public")
+    context.db.scalar.return_value = target
+
+    async def authorize(request):
+        if request.resource_type == "project_session_path":
+            target.trust_level = "private"
+            return PermissionDecision.ALLOW
+        return PermissionDecision.DENY
+
+    context.ask_handler = AsyncMock(side_effect=authorize)
+    result = await tool_registry.execute(call, context)
+
+    assert (result.metadata.get("errorCode"), context.ask_handler.await_args.args[0].capability) == (
+        "permission.denied", "session.read_sensitive",
+    )
+
+
+@pytest.mark.parametrize("file_decision,allowed", [
+    (PermissionDecision.ALLOW, True),
+    (PermissionDecision.ASK, True),
+    (PermissionDecision.DENY, False),
+])
+async def test_sensitive_file_approval_rechecks_ordinary_policy(tmp_path, file_decision, allowed):
+    call = ToolCall("private-file", "read", {"root": "session", "path": "notes.txt"})
+    context = _context(tmp_path, call)
+    context.model_trust_level = TrustLevel.PUBLIC
+    context.session.project_id = uuid4()
+    target = ChatSession(id=uuid4(), project_id=context.session.project_id, trust_level="private")
+    context.db.scalar.return_value = target
+    request = mock_files_access.filesystem_permission(
+        context, root="session", path="notes.txt", capability="filesystem.read",
+        action_kind="read", action_label="Lesen", target_session_id=target.id,
+    )
+    context.ask_handler = AsyncMock(side_effect=[PermissionDecision.ALLOW, PermissionDecision.ALLOW, file_decision])
+
+    assert await mock_tools_access.allow(context, request) is allowed
+
+
 @pytest.mark.parametrize("supports_images,render_failed", [(True, False), (False, False), (True, True)])
 async def test_read_pdf_pages_reuses_file_read_and_vision(tmp_path, monkeypatch, supports_images, render_failed):
     call = ToolCall("read-pdf", "read", {"root": "files", "path": "diagram.pdf", "pdf_pages": [2]})

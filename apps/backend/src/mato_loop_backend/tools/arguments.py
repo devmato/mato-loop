@@ -820,11 +820,13 @@ class SessionToolResultReadArguments(ToolArguments):
 
 class SessionSearchArguments(ToolArguments):
     query: str = Field(min_length=1, max_length=500)
+    include_private: bool = False
     limit: int = Field(default=10, ge=1, le=20)
 
 
 class ContextSearchArguments(ToolArguments):
     query: str = Field(min_length=1, max_length=2_000)
+    include_private: bool = False
     scope: Literal["all", "memories", "sessions"] = "all"
     session_id: UUID | None = Field(
         default=None, description="Restrict search to this known conversation; searches sessions only.",
@@ -854,6 +856,7 @@ class MemoryBrowseArguments(ToolArguments):
 
 
 class SessionBrowseArguments(ToolArguments):
+    include_private: bool = False
     limit: int = Field(default=10, ge=1, le=20)
 
 

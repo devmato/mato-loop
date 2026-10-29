@@ -19,6 +19,7 @@
           <DirectoryField />
         </div>
         <MemoryField v-if="has('memory')" />
+        <TrustField v-if="has('trust') && auth.modelTrustEnabled" />
         <WebSearchField v-if="has('webSearch')" />
       </div>
     </section>
@@ -42,6 +43,7 @@
       <ComputerField v-if="has('computer')" />
       <DirectoryField v-if="has('computer') && !compact" />
       <MemoryField v-if="has('memory')" />
+      <TrustField v-if="has('trust') && auth.modelTrustEnabled" />
       <WebSearchField v-if="has('webSearch')" />
     </template>
     <ExecutionAgentDirectoryPickerDialog
@@ -68,10 +70,12 @@ import { apiErrorMessage } from 'src/utils/api-errors'
 import { modelReasoningEffortOptions, reasoningEffortLabel } from 'src/utils/model-runtime'
 import { sessionModel } from '../session-model'
 import { useSessionTemplateStore } from 'src/features/settings/session-templates-store'
+import { useAuthStore } from 'src/features/auth/store'
+import { useConfirm } from 'src/composables/confirm'
 
 defineOptions({ name: 'SessionSettingsFields' })
 
-const SESSION_FIELDS = ['template', 'messageSize', 'agent', 'computer', 'memory', 'webSearch']
+const SESSION_FIELDS = ['template', 'messageSize', 'agent', 'computer', 'memory', 'trust', 'webSearch']
 const LLM_FIELDS = ['model', 'reasoning']
 const props = defineProps({
   session: { type: Object, default: null },
@@ -81,7 +85,7 @@ const props = defineProps({
   equalFields: Boolean,
   grouped: Boolean,
   showWarning: Boolean,
-  fields: { type: Array, default: () => ['agent', 'model', 'reasoning', 'computer', 'memory', 'webSearch', 'messageSize'] }
+  fields: { type: Array, default: () => ['agent', 'model', 'reasoning', 'computer', 'memory', 'trust', 'webSearch', 'messageSize'] }
 })
 const emit = defineEmits(['update', 'agent-popup-hide'])
 const $q = useQuasar()
@@ -90,6 +94,8 @@ const executionAgents = useExecutionAgentStore()
 const integrations = useIntegrationStore()
 const providers = useProviderStore()
 const templates = useSessionTemplateStore()
+const auth = useAuthStore()
+const { confirm } = useConfirm()
 
 const has = (field) => props.fields.includes(field)
 const hasSessionFields = computed(() => SESSION_FIELDS.some(has))
@@ -183,6 +189,7 @@ const selectedModelLabel = computed(() => {
 })
 const selectedModelConfig = computed(() => providers.models.find((model) => model.id === effectiveModelId.value))
 const selectedModelTrustIcon = computed(() => selectedModelConfig.value?.effectiveTrustLevel === 'private' ? 'lock' : 'public')
+const sessionTrust = computed(() => props.session?.trustLevel || selectedModelConfig.value?.effectiveTrustLevel || 'private')
 const reasoningEffortOptions = computed(() => modelReasoningEffortOptions(selectedModelConfig.value))
 const modelSupportsTools = computed(() => selectedModelConfig.value?.supportsTools !== false)
 const memoryModeOptions = [
@@ -267,6 +274,13 @@ function update(patch) {
   if (props.session && !props.disabled) {
     emit('update', patch)
   }
+}
+
+async function selectTrust(value) {
+  if (value === sessionTrust.value) return
+  if (props.session?.id && sessionTrust.value === 'private' && value === 'public'
+    && !await confirm('Die gesamte bisherige Session kann danach auch von öffentlichen Modellen in anderen Sessions genutzt werden. Bereits erzeugte Erinnerungen bleiben unverändert.', 'Session als öffentlich einstufen?', { okLabel: 'Umstellen' })) return
+  update({ trust_level: value })
 }
 
 function selectModel(modelId) {
@@ -445,6 +459,13 @@ const MemoryField = defineComponent(() => () => h(AppSelect, selectProps({
     (option) => option.value === props.session?.memoryMode
   )?.label || 'Nicht verfügbar') : undefined
 }))
+const TrustField = defineComponent(() => () => h(AppSelect, selectProps({
+  modelValue: sessionTrust.value,
+  options: [{ label: 'Privat', value: 'private' }, { label: 'Öffentlich', value: 'public' }],
+  label: 'Vertraulichkeit',
+  hint: 'Gilt für den gesamten Verlauf und neue Erinnerungen. Die Modellwahl bleibt unabhängig.',
+  'onUpdate:modelValue': selectTrust
+})))
 const WebSearchField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: props.session?.webSearchPolicy,
   options: webSearchOptions.value,

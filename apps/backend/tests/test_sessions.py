@@ -69,6 +69,7 @@ from mato_loop_backend.settings import (
     AgentProfilesSettings,
     AiProviderSettings,
     AiSettings,
+    GeneralSettings,
     MemorySettings,
     SettingsStore,
     TrustLevel,
@@ -81,6 +82,19 @@ from mato_loop_backend.settings.models import (
     ModelConfig,
     ModelDefaultsSettings,
 )
+
+
+@pytest.mark.parametrize(("enabled", "stored", "expected"), [
+    (True, "public", TrustLevel.PUBLIC),
+    (True, "private", TrustLevel.PRIVATE),
+    (False, "public", TrustLevel.PRIVATE),
+    (False, "private", TrustLevel.PRIVATE),
+])
+async def test_session_trust_respects_model_distinction(monkeypatch, enabled, stored, expected):
+    from mato_loop_backend.sessions.trust import effective_session_trust
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=GeneralSettings(modelTrustEnabled=enabled)))
+    assert await effective_session_trust(AsyncMock(), ChatSession(trust_level=stored)) == expected
 
 
 async def test_disabled_agent_profile_cannot_be_selected_for_a_new_session(monkeypatch) -> None:
@@ -696,7 +710,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch, conten
     assert result["session"]["titleGenerationStatus"] == "pending"
     assert result["session"]["webSearchPolicy"] == "available"
     assert result["session"]["reasoningEffort"] == "low"
-    assert "trustLevel" not in result["session"]
+    assert result["session"]["trustLevel"] is None
     assert result["runId"] == str(run.id)
     assert result["modelName"] == "Test"
     assert result["message"]["id"] == str(persisted_message.id)

@@ -24,6 +24,7 @@ from mato_loop_backend.models import (
     Message,
     MessageSearchChunk,
 )
+from mato_loop_backend.sessions.trust import session_visibility_filters
 from mato_loop_backend.settings import TrustLevel
 
 logger = logging.getLogger(__name__)
@@ -76,18 +77,6 @@ class _Candidate:
     chunk: MessageSearchChunk
     message: Message
     session: ChatSession
-    title_trust: str | None
-
-
-def _title_trust():
-    return (
-        select(Message.trust_level)
-        .where(Message.session_id == ChatSession.id, Message.role == "user")
-        .order_by(Message.created_at, Message.id)
-        .limit(1)
-        .correlate(ChatSession)
-        .scalar_subquery()
-    )
 
 
 def _candidate_filters(
@@ -102,6 +91,7 @@ def _candidate_filters(
         ChatSession.session_type == "chat",
         ChatSession.parent_session_id.is_(None),
         *_eligible_filters(),
+        *session_visibility_filters(readable_by),
     ]
     if current_session_id is not None:
         filters.append(ChatSession.id != current_session_id)
@@ -156,6 +146,7 @@ class EpisodeRetrievalService:
         owner_id: UUID,
         current_session_id: UUID,
         project_id: UUID,
+        readable_by: TrustLevel = TrustLevel.PRIVATE,
         limit: int = 10,
     ) -> ProjectSessionIndex:
         if limit <= 0:
@@ -196,6 +187,7 @@ class EpisodeRetrievalService:
                     ChatSession.session_type == "chat",
                     ChatSession.parent_session_id.is_(None),
                     ChatSession.memory_mode == "full",
+                    *session_visibility_filters(readable_by),
                 )
                 .order_by(
                     latest_messages.c.created_at.desc(),
@@ -223,6 +215,7 @@ class EpisodeRetrievalService:
         *,
         owner_id: UUID,
         current_session_id: UUID,
+        readable_by: TrustLevel = TrustLevel.PRIVATE,
         full_sessions_only: bool = False,
     ) -> list[EpisodeReference]:
         if not references:
@@ -247,6 +240,7 @@ class EpisodeRetrievalService:
             ChatSession.session_type == "chat",
             ChatSession.parent_session_id.is_(None),
             *_eligible_filters(),
+            *session_visibility_filters(readable_by),
         ]
         if full_sessions_only:
             filters.append(ChatSession.memory_mode == "full")
@@ -283,7 +277,6 @@ class EpisodeRetrievalService:
     ) -> EpisodeRetrieval:
         if limit <= 0:
             raise ValueError("episode retrieval limit must be positive")
-        title_trust = _title_trust().label("title_trust")
         recent_candidates = (
             select(
                 Message.id.label("message_id"),
@@ -307,7 +300,7 @@ class EpisodeRetrievalService:
         )
         rows = (
             await db.execute(
-                select(Message, ChatSession, title_trust)
+                select(Message, ChatSession)
                 .join(
                     recent_candidates,
                     recent_candidates.c.message_id == Message.id,
@@ -323,13 +316,11 @@ class EpisodeRetrievalService:
                 db,
                 message=message,
                 session=session,
-                title_trust=visible_title_trust,
                 anchor_content=message.content,
-                readable_by=readable_by,
                 excerpt_messages=excerpt_messages,
                 max_excerpt_characters=max_excerpt_characters,
             )
-            for message, session, visible_title_trust in rows
+            for message, session in rows
         ]
         return EpisodeRetrieval(
             references=references,
@@ -375,7 +366,6 @@ class EpisodeRetrievalService:
         )
         if session_id is not None:
             filters.append(ChatSession.id == session_id)
-        title_trust = _title_trust().label("title_trust")
         tsquery = (
             func.plainto_tsquery("simple", " ".join(memory_lexical_terms(cleaned_query)))
             if distinct_sessions else func.websearch_to_tsquery("simple", cleaned_query)
@@ -404,7 +394,7 @@ class EpisodeRetrievalService:
         )
         lexical_rows = (
             await db.execute(
-                select(MessageSearchChunk, Message, ChatSession, title_trust)
+                select(MessageSearchChunk, Message, ChatSession)
                 .join(
                     lexical_candidates,
                     lexical_candidates.c.chunk_id == MessageSearchChunk.id,
@@ -463,7 +453,7 @@ class EpisodeRetrievalService:
                 async with db.begin_nested():
                     semantic_rows = (
                         await db.execute(
-                            select(MessageSearchChunk, Message, ChatSession, title_trust)
+                            select(MessageSearchChunk, Message, ChatSession)
                             .join(
                                 semantic_candidates,
                                 semantic_candidates.c.chunk_id
@@ -508,7 +498,6 @@ class EpisodeRetrievalService:
                 await EpisodeRetrievalService._reference(
                     db,
                     candidate,
-                    readable_by=readable_by,
                     excerpt_messages=excerpt_messages,
                     latest_messages=latest_messages,
                     max_excerpt_characters=max_excerpt_characters,
@@ -530,7 +519,6 @@ class EpisodeRetrievalService:
         db: AsyncSession,
         candidate: _Candidate,
         *,
-        readable_by: TrustLevel,
         excerpt_messages: int,
         latest_messages: int,
         max_excerpt_characters: int,
@@ -539,9 +527,7 @@ class EpisodeRetrievalService:
             db,
             message=candidate.message,
             session=candidate.session,
-            title_trust=candidate.title_trust,
             anchor_content=candidate.chunk.content,
-            readable_by=readable_by,
             excerpt_messages=excerpt_messages,
             latest_messages=latest_messages,
             max_excerpt_characters=max_excerpt_characters,
@@ -553,9 +539,7 @@ class EpisodeRetrievalService:
         *,
         message: Message,
         session: ChatSession,
-        title_trust: str | None,
         anchor_content: str,
-        readable_by: TrustLevel,
         excerpt_messages: int,
         max_excerpt_characters: int,
         latest_messages: int = 0,

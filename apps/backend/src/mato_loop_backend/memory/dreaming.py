@@ -51,6 +51,7 @@ from mato_loop_backend.providers.base import ProviderError, ProviderResult, Tool
 from mato_loop_backend.providers.output_budget import output_token_limit, raw_input_budget
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
+from mato_loop_backend.sessions.trust import effective_session_trust
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
     AiSettings,
@@ -1376,11 +1377,7 @@ class DreamingService:
             or messages[-1].id != run.source_to_message_id
         ):
             raise DreamingContractError("memory.dreamingSourceChanged")
-        input_trust = (
-            TrustLevel.PRIVATE
-            if any(item.trust_level == TrustLevel.PRIVATE.value for item in messages)
-            else TrustLevel.PUBLIC
-        )
+        input_trust = await effective_session_trust(db, session)
         memory_read_trust = _memory_read_trust(input_trust, model_trust)
         evidence_ids = {item.id for item in messages}
         user_evidence_ids = {item.id for item in messages if item.role == "user"}
@@ -1577,9 +1574,11 @@ class DreamingService:
             raise DreamingContractError("memory.dreamingOutputInvalid")
         existing = {item.id: item for matches in local_matches for item in matches}
 
-        locked_session = await db.get(ChatSession, session.id, with_for_update=True)
+        locked_session = await db.get(ChatSession, session.id, with_for_update=True, populate_existing=True)
         if locked_session is None:
             raise RuntimeError("session.notFound")
+        if await effective_session_trust(db, locked_session) != input_trust:
+            raise DreamingContractError("memory.dreamingSourceChanged")
         memory = await SettingsStore.load(
             db, MemorySettings, user_id=locked_session.user_id, for_update=True
         )

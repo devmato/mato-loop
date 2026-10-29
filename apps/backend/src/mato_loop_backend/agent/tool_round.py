@@ -494,7 +494,7 @@ async def execute_tool_batch(
                 video_analysis_target=video_target, assistant_message_id=assistant.id,
                 memory_read_enabled=current_memory_state.read_enabled,
                 memory_write_enabled=current_memory_state.write_enabled,
-                memory_trust_level=trust_level, memory_write_trust_level=trust_level,
+                memory_trust_level=trust_level,
                 excluded_memory_content_hashes=excluded_memory_content_hashes,
                 model_id=model.id, model_trust_level=trust_level,
                 agent_persona_id=identity.persona.id, agent_profile_id=agent_profile_id,

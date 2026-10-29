@@ -1047,6 +1047,7 @@ async def create_session(
         title="Neue Session",
         title_generation_status=TitleGenerationStatus.PENDING.value,
         model_config_id=configured_model,
+        trust_level=payload.trust_level.value if payload.trust_level else None,
         session_profile=configuration.model_dump(mode="json"),
         agent_profile_id=agent_profile_id,
         reasoning_effort=configured_reasoning.value if configured_reasoning else None,
@@ -1407,7 +1408,7 @@ async def update_session(
         "preferred_execution_agent_id",
         "current_directory",
     }
-    if fields & (policy_fields | {"control_center", "todos_collapsed"}):
+    if fields & (policy_fields | {"control_center", "todos_collapsed", "trust_level"}):
         if fields & execution_fields:
             await db.execute(select(UserAccount.id).where(UserAccount.id == user.id).with_for_update(key_share=True))
         await db.scalar(
@@ -1553,6 +1554,10 @@ async def update_session(
         )
     if "memory_mode" in fields and payload.memory_mode is not None:
         item.memory_mode = payload.memory_mode.value
+    if "trust_level" in fields:
+        if payload.trust_level is None:
+            raise SessionServiceError(422, "validation.required", field="trustLevel")
+        item.trust_level = payload.trust_level.value
     if "web_search_policy" in fields and payload.web_search_policy is not None:
         if payload.web_search_policy.value == "required":
             ai = apply_session_ai(await load_effective_ai(db, user.id), item, target_profile_id)

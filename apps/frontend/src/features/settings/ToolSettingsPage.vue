@@ -127,7 +127,7 @@
             <li v-for="label in presetInfo.additionalConfirmations" :key="label" class="q-mb-xs">{{ label }}</li>
           </ul>
           <div v-else class="app-muted">Keine</div>
-          <div class="text-caption app-muted q-mt-lg">Eigene Regeln und Profilvorgaben haben Vorrang. Zugriffsgrenzen gelten weiterhin.</div>
+          <div class="text-caption app-muted q-mt-lg">Die Listen zeigen nur Ausnahmen von den Basisberechtigungen. Eigene Regeln und Profilvorgaben haben Vorrang. Zugriffsgrenzen gelten weiterhin.</div>
         </q-card-section>
         <q-card-actions align="right"><q-btn v-close-popup flat no-caps label="Schließen" /></q-card-actions>
       </q-card>

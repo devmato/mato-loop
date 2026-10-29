@@ -206,8 +206,7 @@
               v-if="message.deliveryStatus || message.queueRecoveryId || message.createdAt
                 || showMessageModel(message)
                 || agentProfileName(message)
-                || userMessageSource(message)
-                || isMessageTrustLevel(message.trustLevel)"
+                || userMessageSource(message)"
               class="chat-message__meta items-center wrap"
             >
               <q-btn
@@ -225,24 +224,6 @@
               >
                 <q-tooltip>Nachricht rückgängig machen</q-tooltip>
               </q-btn>
-              <span
-                v-if="isMessageTrustLevel(message.trustLevel)"
-                class="row inline items-center"
-                role="img"
-                :aria-label="`Datenfreigabe: ${messageTrustLabel(message.trustLevel)}`"
-              >
-                <q-icon
-                  :name="message.trustLevel === 'private' ? 'lock' : 'public'"
-                  size="1em"
-                  aria-hidden="true"
-                />
-                <q-tooltip>{{ messageTrustLabel(message.trustLevel) }}</q-tooltip>
-              </span>
-              <span
-                v-if="isMessageTrustLevel(message.trustLevel)
-                  && (showMessageModel(message) || agentProfileName(message) || userMessageSource(message) || message.createdAt)"
-                aria-hidden="true"
-              >·</span>
               <template v-if="agentProfileName(message)">
                 <span class="chat-message__meta-agent">{{ agentProfileName(message) }}</span>
                 <span v-if="showMessageModel(message) || userMessageSource(message) || message.createdAt" aria-hidden="true">·</span>
@@ -877,19 +858,11 @@ function trustImageOrigin(origin) {
   trustedImageOriginsBySession.value = next
 }
 
-function isMessageTrustLevel(value) {
-  return value === 'public' || value === 'private'
-}
-
 function showMessageModel(message) {
   if (message.origin === 'host') return true
   return message.role === 'assistant'
     && Boolean(message.hasAssistantContent || message.content)
     && Boolean(message.modelName)
-}
-
-function messageTrustLabel(value) {
-  return value === 'private' ? 'Privat' : 'Öffentlich'
 }
 
 function canRetryMessage(message) {

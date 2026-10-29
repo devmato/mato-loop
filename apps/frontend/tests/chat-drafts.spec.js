@@ -167,10 +167,10 @@ describe('chat drafts', () => {
     expect(chat.activeContext.webSearchPolicy).toBe('required')
   })
 
-  it('drops aggregate trust from a legacy persisted draft', () => {
+  it('preserves restored session trust when loading draft defaults', async () => {
     window.localStorage.setItem('matoLoopChatDrafts', JSON.stringify({
       ownerUserId: 'user-1',
-      newSession: { message: 'Alt', options: { modelId: 'model-1', trustLevel: 'private' } },
+      newSession: { message: 'Alt', options: { trustLevel: 'private' } },
       sessionMessages: {}
     }))
 
@@ -178,10 +178,12 @@ describe('chat drafts', () => {
     chat.setDraftOwner(null)
     chat.setDraftOwner('user-1')
 
-    expect(chat.activeContext).not.toHaveProperty('trustLevel')
+    api.post.mockResolvedValueOnce({ data: { modelId: 'model-1' } })
+    await chat.fetchDefaults()
+    expect(chat.activeContext.trustLevel).toBe('private')
     chat.setDraft('Neu')
     const stored = JSON.parse(window.localStorage.getItem('matoLoopChatDrafts'))
-    expect(stored.newSession.options).not.toHaveProperty('trustLevel')
+    expect(stored.newSession.options.trustLevel).toBe('private')
   })
 
   it('clears removed workspace fields from persisted drafts', () => {

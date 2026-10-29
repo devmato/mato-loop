@@ -8,6 +8,7 @@ export function defaultSessionOptions() {
     modelId: null,
     reasoningEffort: null,
     memoryMode: 'full',
+    trustLevel: null,
     effectiveMemoryMode: 'full',
     memoryToolsAvailable: true,
     memoryUnavailableReason: null,
@@ -34,6 +35,7 @@ export function sessionCreatePayload(options, projectId, controlCenter) {
     model_id: options.modelId,
     reasoning_effort: options.reasoningEffort,
     memory_mode: options.memoryMode,
+    ...(options.trustLevel ? { trust_level: options.trustLevel } : {}),
     web_search_policy: options.webSearchPolicy,
     preferred_execution_agent_id: options.preferredExecutionAgentId,
     workspace_mode: projectId && options.preferredExecutionAgentId && options.currentDirectory ? options.workspaceMode || 'local' : 'local',
@@ -50,6 +52,7 @@ export function optionsFromSession(session) {
     modelId: session.modelId,
     reasoningEffort: session.reasoningEffort ?? null,
     memoryMode: session.memoryMode,
+    trustLevel: session.trustLevel ?? null,
     effectiveMemoryMode: session.effectiveMemoryMode,
     memoryToolsAvailable: session.memoryToolsAvailable,
     memoryUnavailableReason: session.memoryUnavailableReason,
@@ -125,6 +128,7 @@ export function normalizedNewSessionDraft(value) {
       memoryMode: ['full', 'read_only', 'disabled'].includes(options.memoryMode)
         ? options.memoryMode
         : 'full',
+      trustLevel: ['private', 'public'].includes(options.trustLevel) ? options.trustLevel : null,
       effectiveMemoryMode: ['full', 'read_only', 'disabled'].includes(options.effectiveMemoryMode)
         ? options.effectiveMemoryMode
         : 'full',

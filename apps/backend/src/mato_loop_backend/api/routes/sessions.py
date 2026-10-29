@@ -89,7 +89,7 @@ from mato_loop_backend.settings import (
     apply_session_ai,
     load_effective_ai,
 )
-from mato_loop_backend.settings.models import ReasoningEffort
+from mato_loop_backend.settings.models import ReasoningEffort, TrustLevel
 from mato_loop_backend.settings.session_profiles import SessionProfileSnapshot
 
 router = APIRouter(prefix="/sessions", dependencies=[Depends(require_user)])
@@ -355,6 +355,7 @@ class SessionOptionsRequest(BaseModel):
 
 
 class SessionCreateRequest(SessionOptionsRequest):
+    trust_level: TrustLevel | None = None
     content: str | None = Field(max_length=200_000)
     voice_attachment_indices: list[StrictInt] = Field(default_factory=list, alias="voiceAttachmentIndices")
     run_id: UUID | None = None
@@ -384,6 +385,7 @@ class SessionUpdateRequest(BaseModel):
     )
     reasoning_effort: ReasoningEffort | None = None
     memory_mode: MemoryMode | None = None
+    trust_level: TrustLevel | None = None
     web_search_policy: WebSearchPolicy | None = None
     preferred_execution_agent_id: UUID | None = None
     current_directory: str | None = Field(default=None, max_length=4_096)

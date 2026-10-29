@@ -246,6 +246,7 @@ async def run_tasks(
                         spawned_by_tool_call_id=tool_call_id, spawn_index=index,
                         agent_profile_id=parent.agent_profile_id or session.agent_profile_id,
                         model_config_id=parent.model_config_id,
+                        trust_level=session.trust_level,
                         reasoning_effort=session_ai.reasoning_effort,
                         preferred_execution_agent_id=parent.execution_agent_id,
                         current_directory=parent.current_directory_snapshot,

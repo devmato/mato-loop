@@ -10,11 +10,32 @@ vi.mock('src/boot/axios', () => ({ api: { get: vi.fn() } }))
 import SessionSettingsFields from '../src/features/chat/components/SessionSettingsFields.vue'
 import { useProviderStore } from '../src/stores/providers'
 import { useExecutionAgentStore } from '../src/stores/execution-agents'
+import { useAuthStore } from '../src/stores/auth'
 import { api } from 'src/boot/axios'
 import { quasarOptions } from './quasar-options'
 
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks() })
+
+it.each([true, false])('edits session trust only with model distinction enabled (%s)', async (enabled) => {
+  const pinia = createPinia()
+  useAuthStore(pinia).modelTrustEnabled = enabled
+  const update = vi.fn()
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(SessionSettingsFields, {
+    session: { id: 'session', trustLevel: 'public' }, fields: ['trust'], onUpdate: update
+  }) }).use(pinia).use(Quasar, quasarOptions)
+  app.mount(root)
+  if (!enabled) {
+    expect(root.textContent).not.toContain('Vertraulichkeit')
+    return
+  }
+  root.querySelector('.q-field__native').click()
+  const option = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.textContent.includes('Privat')))
+  option.click()
+  expect(update).toHaveBeenCalledWith({ trust_level: 'private' })
+})
 
 it('changes message size while retaining configuration and shows an unselected computer as information', async () => {
   const sessionProfile = { templateId: 'coding', agentIds: ['plan', 'build'], agentModels: { plan: { modelId: 'model' } }, messageSize: 'standard' }

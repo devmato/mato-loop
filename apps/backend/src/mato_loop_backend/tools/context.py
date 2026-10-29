@@ -90,7 +90,6 @@ class ToolContext:
     memory_read_enabled: bool = False
     memory_write_enabled: bool = False
     memory_trust_level: TrustLevel = TrustLevel.PUBLIC
-    memory_write_trust_level: TrustLevel = TrustLevel.PUBLIC
     excluded_memory_content_hashes: frozenset[str] = frozenset()
     bound_options: dict[str, Any] = field(default_factory=dict)
     model_id: UUID | None = None

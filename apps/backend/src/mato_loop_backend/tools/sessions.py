@@ -27,6 +27,7 @@ from mato_loop_backend.permissions.policy import (
     session_permission,
     session_search_permission,
 )
+from mato_loop_backend.sessions.trust import session_visibility_filters
 from mato_loop_backend.settings import TrustLevel
 from mato_loop_backend.tools.actions import (
     _SESSION_READ,
@@ -175,7 +176,13 @@ async def _session_tool_result_read(
 
 async def _session_read(arguments: SessionReadArguments, context: ToolContext) -> ToolResult:
     target_id = arguments.session_id or context.session.id
-    if not await tools_access.allow(context, session_permission(target_id)):
+    target = None
+    permission = session_permission(target_id)
+    if context.model_trust_level == TrustLevel.PUBLIC and target_id != context.session.id:
+        target, permission = await session_read_permission(context, target_id)
+        if target is None:
+            return ToolResult.error("session.notFound")
+    if not await tools_access.allow(context, permission):
         return ToolResult.error("permission.denied")
     if (
         arguments.after_message_id is not None
@@ -193,23 +200,10 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             field="after_message_id",
             params={"retryArguments": retry_arguments},
         )
-    target = await context.db.scalar(
-        select(ChatSession).where(
-            ChatSession.id == target_id,
-            ChatSession.user_id == context.session.user_id,
-            or_(
-                ChatSession.session_type == "chat",
-                ChatSession.id == context.session.id,
-            ),
-            or_(
-                ChatSession.parent_session_id.is_(None),
-                ChatSession.parent_session_id == context.session.id,
-                ChatSession.id == context.session.id,
-            ),
-        )
-    )
     if target is None:
-        return ToolResult.error("session.notFound")
+        target, _permission = await session_read_permission(context, target_id)
+        if target is None:
+            return ToolResult.error("session.notFound")
     records = list(
         (
             await context.db.scalars(
@@ -330,6 +324,20 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
     )
 
 
+async def session_read_permission(context: ToolContext, target_id: UUID):
+    target = await context.db.scalar(select(ChatSession).where(
+        ChatSession.id == target_id,
+        ChatSession.user_id == context.session.user_id,
+        or_(ChatSession.session_type == "chat", ChatSession.id == context.session.id),
+        or_(ChatSession.parent_session_id.is_(None), ChatSession.parent_session_id == context.session.id,
+            ChatSession.id == context.session.id),
+    ).execution_options(populate_existing=True))
+    return target, session_permission(target_id, private_access=(
+        target is not None and target_id != context.session.id
+        and context.model_trust_level == TrustLevel.PUBLIC and target.trust_level != TrustLevel.PUBLIC.value
+    ))
+
+
 def _ranked_visible_session_messages(*, pattern: str | None = None):
     filters = [
         Message.role.in_(("user", "assistant")),
@@ -389,7 +397,9 @@ def _session_discovery_item(
 async def _session_browse(
     arguments: SessionBrowseArguments, context: ToolContext
 ) -> ToolResult:
-    if not await tools_access.allow(context, session_browse_permission()):
+    if not await tools_access.allow(context, session_browse_permission(
+        include_private=arguments.include_private, trust_level=context.model_trust_level,
+    )):
         return ToolResult.error("permission.denied")
     messages = _ranked_visible_session_messages()
     rows = (
@@ -413,6 +423,7 @@ async def _session_browse(
                 ChatSession.id != context.session.id,
                 ChatSession.session_type == "chat",
                 or_(ChatSession.parent_session_id.is_(None), ChatSession.parent_session_id == context.session.id),
+                *session_visibility_filters(TrustLevel.PRIVATE if arguments.include_private else context.model_trust_level),
             )
             .order_by(messages.c.created_at.desc(), ChatSession.id.desc())
             .limit(arguments.limit)
@@ -438,7 +449,9 @@ async def _session_browse(
 async def _session_search(
     arguments: SessionSearchArguments, context: ToolContext
 ) -> ToolResult:
-    if not await tools_access.allow(context, session_search_permission()):
+    if not await tools_access.allow(context, session_search_permission(
+        include_private=arguments.include_private, trust_level=context.model_trust_level,
+    )):
         return ToolResult.error("permission.denied")
     escaped = (
         arguments.query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -468,6 +481,7 @@ async def _session_search(
                 ChatSession.id != context.session.id,
                 ChatSession.session_type == "chat",
                 or_(ChatSession.parent_session_id.is_(None), ChatSession.parent_session_id == context.session.id),
+                *session_visibility_filters(TrustLevel.PRIVATE if arguments.include_private else context.model_trust_level),
                 or_(*match_conditions),
             )
             .order_by(
@@ -518,7 +532,7 @@ SESSION_TOOL_RESULT_READ = ToolDefinition(
 
 SESSION_BROWSE = ToolDefinition(
             "session_browse",
-            "List recently active prior chat sessions for discovery.",
+            "List recent chat sessions.",
             SessionBrowseArguments,
             _session_browse,
             group="sessions",

@@ -88,7 +88,7 @@ export const draftActions = {
       const scope = sessionScopeKey(projectId)
       const targetDraft = this.drafts.newSessions[scope] || this.drafts.newSession
       const options = targetDraft.options
-      const initial = !options.sessionTemplateId && !options.modelId && !options.sessionProfile && !options.agentProfileId && options.memoryMode === 'full' && !options.reasoningEffort
+      const initial = !options.sessionTemplateId && !options.modelId && !options.sessionProfile && !options.agentProfileId && !options.trustLevel && options.memoryMode === 'full' && !options.reasoningEffort
       const snapshot = JSON.stringify(options)
       this.sessionSettingsPending += 1
       const request = (async () => {

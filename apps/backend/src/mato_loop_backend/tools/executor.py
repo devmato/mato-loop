@@ -201,7 +201,6 @@ async def execute_definition(
             raw_arguments,
             context.db,
             context.session.id,
-            context.model_trust_level,
         )
     except InvalidToolReference as exc:
         return ToolResult.error("integration.staleReference", field=exc.field)

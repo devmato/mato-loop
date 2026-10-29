@@ -1085,7 +1085,7 @@ class MemoryService:
         if memory_edit is not None and action not in {"update", "merge"}:
             return "target_changed"
         session = await db.get(
-            ChatSession, payload.source_session_id, with_for_update=True
+            ChatSession, payload.source_session_id, with_for_update=True, populate_existing=True
         )
         dream_run = await db.get(
             MemoryDreamRun, payload.source_dream_run_id, with_for_update=True
@@ -1098,6 +1098,10 @@ class MemoryService:
             or dream_run is None
             or dream_run.session_id != session.id
         ):
+            return "target_changed"
+        from mato_loop_backend.sessions.trust import effective_session_trust
+
+        if await effective_session_trust(db, session) != payload.trust_level:
             return "target_changed"
         evidence_valid = (
             await MemoryService._valid_explicit_user_evidence(

@@ -10,7 +10,6 @@ from mato_loop_backend.permissions.policy import (
     PermissionDecision,
     memory_read_permission,
     session_browse_permission,
-    session_permission,
     session_search_permission,
     shell_command_permissions,
 )
@@ -62,7 +61,10 @@ async def builtin_permissions(arguments, context: ToolContext, name: str):
             action_kind=name, action_label="Session-Zugriff vorbereiten",
         ),)
     if name == "session_read":
-        return (session_permission(arguments.session_id or context.session.id),)
+        from mato_loop_backend.tools.sessions import session_read_permission
+
+        _target, permission = await session_read_permission(context, arguments.session_id or context.session.id)
+        return (permission,)
     if name == "shell_run" and not arguments.elevated and not arguments.environment:
         client = context.execution_client
         if client is None or client.current_directory is None:
@@ -72,18 +74,22 @@ async def builtin_permissions(arguments, context: ToolContext, name: str):
         }, ShellInspectResult)
         return shell_command_permissions(client.agent_id, client.current_directory, arguments.command, inspection)
     if name == "session_search":
-        return (session_search_permission(),)
+        return (session_search_permission(include_private=arguments.include_private, trust_level=context.model_trust_level),)
     if name == "context_search":
-        from mato_loop_backend.tools.context_search import requested_sources, source_available
+        from mato_loop_backend.tools.context_search import (
+            requested_sources,
+            session_context_permission,
+            source_available,
+        )
 
         settings = await profile_tool_settings(context)
-        return tuple(
-            memory_read_permission(context.session.user_id) if source == "memories" else session_search_permission()
+        return tuple([
+            memory_read_permission(context.session.user_id) if source == "memories" else await session_context_permission(arguments, context)
             for source in requested_sources(arguments)
             if source_available(settings, source, memory_enabled=context.memory_read_enabled)
-        )
+        ])
     if name == "session_browse":
-        return (session_browse_permission(),)
+        return (session_browse_permission(include_private=arguments.include_private, trust_level=context.model_trust_level),)
     return ()
 
 

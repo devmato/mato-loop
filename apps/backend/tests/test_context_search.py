@@ -9,7 +9,7 @@ from tool_helpers import _context
 
 from mato_loop_backend.agent.projection import _target_tool_result
 from mato_loop_backend.memory.episode_retrieval import EpisodeReference
-from mato_loop_backend.models import MemoryRecord
+from mato_loop_backend.models import ChatSession, MemoryRecord
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import IntegrationSettings, ToolSettings, TrustLevel
 from mato_loop_backend.tools import context_search as search
@@ -17,9 +17,11 @@ from mato_loop_backend.tools.catalog import tool_registry
 
 
 @pytest.mark.parametrize('memory_status', ['searched', 'unavailable', 'denied'])
-async def test_context_search_combines_sources_without_requiring_memory(tmp_path, monkeypatch, memory_status):
-    call = ToolCall('search', 'context_search', {'query': 'Atlas address'})
+@pytest.mark.parametrize('include_private', [False, True])
+async def test_context_search_combines_sources_without_requiring_memory(tmp_path, monkeypatch, memory_status, include_private):
+    call = ToolCall('search', 'context_search', {'query': 'Atlas address', 'include_private': include_private})
     context = _context(tmp_path, call)
+    context.model_trust_level = TrustLevel.PUBLIC
     context.memory_read_enabled = memory_status != 'unavailable'
     if memory_status == 'denied':
         from mato_loop_backend.permissions.policy import PermissionDecision
@@ -48,6 +50,8 @@ async def test_context_search_combines_sources_without_requiring_memory(tmp_path
     assert result['sessions'][0]['passage'] == episode.anchor_content
     assert result['sources'] == {'memories': memory_status, 'sessions': 'searched'}
     assert retrieve.await_count == int(memory_status == 'searched')
+    assert episodes.await_args.kwargs['readable_by'] == (TrustLevel.PRIVATE if include_private else TrustLevel.PUBLIC)
+    assert [call.args[0].capability for call in context.ask_handler.await_args_list if call.args[0].resource_type == 'session_collection'] == ['session.read_sensitive' if include_private else 'session.search']
 
 
 @pytest.mark.parametrize(('legacy', 'capability'), [('memory_retrieve', 'memory.read'), ('session_search', 'session.search')])
@@ -68,6 +72,8 @@ async def test_scoped_context_search_uses_session_search_permission_and_no_memor
     session_id = uuid4()
     call = ToolCall('search', 'context_search', {'query': 'port', 'session_id': str(session_id), 'scope': scope})
     context = _context(tmp_path, call)
+    context.model_trust_level = TrustLevel.PUBLIC
+    context.db.scalar.return_value = ChatSession(id=session_id, user_id=context.session.user_id, trust_level='public')
     monkeypatch.setattr(search.access, 'profile_tool_settings', AsyncMock(return_value=context.tool_settings))
     monkeypatch.setattr(search, 'get_runtime_config', lambda: SimpleNamespace(embedding_enabled=False))
     episodes = AsyncMock(return_value=SimpleNamespace(references=[]))
@@ -78,6 +84,7 @@ async def test_scoped_context_search_uses_session_search_permission_and_no_memor
     assert result['sources'] == {'sessions': 'searched'}
     assert context.ask_handler.call_args.args[0].capability == 'session.search'
     assert episodes.call_args.kwargs['session_id'] == session_id
+    assert episodes.call_args.kwargs['readable_by'] == TrustLevel.PUBLIC
 
 
 def test_context_search_history_revalidates_memory_audience_even_when_nested():

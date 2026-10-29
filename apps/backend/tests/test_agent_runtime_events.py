@@ -656,6 +656,7 @@ async def test_child_authorization_uses_main_grants_child_roots_and_snapshot(mon
     ],
 )
 @pytest.mark.parametrize("tool_limit", [25, None])
+@pytest.mark.parametrize("session_trust", [None, "public", "private"])
 @pytest.mark.usefixtures("mock_db_settings")
 async def test_start_persists_effective_run_policy_snapshot(
     monkeypatch,
@@ -664,6 +665,7 @@ async def test_start_persists_effective_run_policy_snapshot(
     expected_trust: TrustLevel,
     expected_pseudonymization: bool,
     tool_limit: int | None,
+    session_trust: str | None,
 ) -> None:
     from mato_loop_backend.settings.models import AgentProfile
 
@@ -700,6 +702,7 @@ async def test_start_persists_effective_run_policy_snapshot(
         title="Test",
         model_config_id=model.id,
         agent_profile_id=profile.id,
+        trust_level=session_trust,
     )
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [session, None, True, True]
@@ -715,6 +718,7 @@ async def test_start_persists_effective_run_policy_snapshot(
     assert run.model_config_id == model.id
     assert run.model_name == "Anzeigename"
     assert run.trust_level == expected_trust.value
+    assert session.trust_level == (session_trust or expected_trust.value)
     assert run.pseudonymization_enabled is expected_pseudonymization
     db.commit.assert_awaited_once()
     task.add_done_callback.assert_called_once()

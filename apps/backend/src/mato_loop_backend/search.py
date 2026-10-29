@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.memory.episode_retrieval import EpisodeRetrievalService
 from mato_loop_backend.memory.retrieval import MemoryRetrievalStrategy
 from mato_loop_backend.models import ChatSession, Project
+from mato_loop_backend.sessions.trust import session_visibility_filters
 from mato_loop_backend.settings import TrustLevel
 
 
@@ -50,12 +51,14 @@ class GlobalSearchService:
     async def session_titles(
         db: AsyncSession, *, owner_id: UUID, query: str, limit: int = 10,
         exclude_session_id: UUID | None = None,
+        readable_by: TrustLevel = TrustLevel.PRIVATE,
     ) -> list[tuple[ChatSession, str | None]]:
         filters = [
             ChatSession.user_id == owner_id,
             ChatSession.session_type == "chat",
             ChatSession.parent_session_id.is_(None),
             ChatSession.title.icontains(query.strip(), autoescape=True),
+            *session_visibility_filters(readable_by),
         ]
         if exclude_session_id is not None:
             filters.append(ChatSession.id != exclude_session_id)

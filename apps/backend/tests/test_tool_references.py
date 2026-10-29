@@ -88,7 +88,6 @@ async def test_resolve_tool_references_restores_canonical_token(
         {field: f"{kind}:{source.id}:0", "other": "value"},
         db,
         source.session_id,
-        TrustLevel.PUBLIC,
     )
 
     assert resolved == {field: "encrypted-token", "other": "value"}
@@ -99,7 +98,7 @@ async def test_resolve_tool_references_preserves_full_tokens() -> None:
     arguments = {"task_token": "encrypted-token"}
 
     assert await resolve_tool_references(
-        "tasks_delete", arguments, db, uuid4(), TrustLevel.PUBLIC
+        "tasks_delete", arguments, db, uuid4()
     ) is arguments
     db.scalar.assert_not_awaited()
 
@@ -116,7 +115,6 @@ async def test_resolve_tool_references_rejects_missing_or_wrong_sources() -> Non
             {"task_token": reference},
             db,
             source.session_id,
-            TrustLevel.PUBLIC,
         )
     with pytest.raises(InvalidToolReference, match="task_token"):
         await resolve_tool_references(
@@ -124,5 +122,4 @@ async def test_resolve_tool_references_rejects_missing_or_wrong_sources() -> Non
             {"task_token": reference},
             db,
             source.session_id,
-            TrustLevel.PUBLIC,
         )

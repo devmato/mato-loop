@@ -196,6 +196,7 @@ def general_system_prompt(
     current_directory: str | None = None,
     session_environment: dict[str, dict[str, str]] | None = None,
     delegated: bool = False,
+    model_trust_level: TrustLevel = TrustLevel.PRIVATE,
 ) -> str:
     identity = agent_identity or AgentIdentitySettings()
     file_tool_names = {
@@ -262,6 +263,11 @@ def general_system_prompt(
     ]
     dynamic_parts: list[str] = []
     runtime_parts: list[str] = []
+    if model_trust_level == TrustLevel.PUBLIC:
+        parts.append(
+            "Access other private sessions, including listing or searching them, only when explicitly "
+            "requested by the user. Do not include them in proactive discovery."
+        )
     if offered_tool_names:
         parts.extend(
             [
@@ -499,17 +505,15 @@ def general_system_prompt(
         parts.append("Web research contract:\n- " + "\n- ".join(research_instructions))
     if "session_read" in offered_tool_names:
         parts.append(
-            "Use session_read for needed compacted details or historical attachments; do not claim visual "
-            "inspection before return. Metadata includes IDs, filenames, and session paths. "
-            "Prior-session computer evidence may come from another MatoLoop Agent. Compare its "
-            "executionAgentId with the selected computer before applying it to this machine."
+            "Use session_read for missing compacted details or historical attachments. "
+            "IDs, filenames and paths are not visual inspection. Compare historical executionAgentId "
+            "with the selected computer before applying computer-specific evidence."
         )
     if {"session_browse", "context_search"} & offered_tool_names:
         parts.append(
-            "Discover another session only when supplied references lack needed conversation details: "
-            "session_browse by recency or context_search by topic, name, or literal term. "
-            "Use sufficient matching passages directly; read omitted details with sessionReadArguments. "
-            "Use session_id to search within a known conversation."
+            "Discover sessions only when supplied references lack needed details: session_browse by "
+            "recency, context_search by topic, name or literal term. Use returned passages directly, "
+            "sessionReadArguments for missing details, and session_id for a known conversation."
         )
     if "session_tool_result_read" in offered_tool_names:
         parts.append(

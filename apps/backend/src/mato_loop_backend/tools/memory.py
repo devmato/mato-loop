@@ -14,6 +14,7 @@ from mato_loop_backend.permissions.policy import (
     memory_read_permission,
     memory_write_permission,
 )
+from mato_loop_backend.sessions.trust import effective_session_trust
 from mato_loop_backend.settings import TrustLevel
 from mato_loop_backend.tools.actions import _MEMORY_READ, _MEMORY_WRITE
 from mato_loop_backend.tools.arguments import (
@@ -72,6 +73,8 @@ async def _memory_write(
             {"id": str(item.id), "forgotten": True},
             metadata={"memoryWriteOutcome": "forgotten"},
         )
+    await context.db.refresh(context.session, ["trust_level"], with_for_update=True)
+    write_trust_level = await effective_session_trust(context.db, context.session)
     if arguments.action == "update":
         assert arguments.memory_id is not None
         assert arguments.expected_revision is not None
@@ -85,7 +88,7 @@ async def _memory_write(
             content=arguments.content,
             category=arguments.category,
             readable_by=context.memory_trust_level,
-            write_trust_level=context.memory_write_trust_level,
+            write_trust_level=write_trust_level,
             session_id=context.session.id,
             evidence_message_id=context.assistant_message_id,
             run_id=context.run_id,
@@ -128,7 +131,7 @@ async def _memory_write(
         owner_id=context.session.user_id,
         content=arguments.content,
         category=arguments.category,
-        trust_level=context.memory_write_trust_level,
+        trust_level=write_trust_level,
         session_id=context.session.id,
         message_id=context.assistant_message_id,
         run_id=context.run_id,

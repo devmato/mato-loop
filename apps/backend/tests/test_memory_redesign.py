@@ -226,10 +226,10 @@ def _candidate(session_id, message_id, chunk_id, created_at) -> _Candidate:
         content_hash="hash",
         profile_fingerprint="profile",
     )
-    return _Candidate(chunk, message, session, "public")
+    return _Candidate(chunk, message, session)
 
 
-def test_episode_ranking_deduplicates_sessions_without_destination_trust_filter() -> None:
+def test_episode_ranking_deduplicates_sessions_with_session_trust_filter() -> None:
     now = datetime.now(UTC)
     first_session = uuid4()
     shared = _candidate(first_session, uuid4(), uuid4(), now)
@@ -264,6 +264,7 @@ def test_episode_ranking_deduplicates_sessions_without_destination_trust_filter(
         )
     )
     assert "messages.trust_level" not in public_sql
+    assert "chat_sessions.trust_level" in public_sql
     assert "messages.trust_level" not in private_sql
     assert "private_integration_data_used" not in public_sql
     for sql in (public_sql, private_sql):

@@ -483,6 +483,7 @@ export const sessionsActions = {
         model_id: 'modelId',
         reasoning_effort: 'reasoningEffort',
         memory_mode: 'memoryMode',
+        trust_level: 'trustLevel',
         web_search_policy: 'webSearchPolicy',
         preferred_execution_agent_id: 'preferredExecutionAgentId',
         current_directory: 'currentDirectory',

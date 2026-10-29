@@ -686,39 +686,35 @@ def execution_agent_select_permission(agent_id: UUID, alias: str) -> PermissionR
     )
 
 
-def session_permission(target_session_id: UUID) -> PermissionRequest:
+def session_permission(target_session_id: UUID, *, private_access: bool = False) -> PermissionRequest:
     return PermissionRequest(
-        capability="session.read",
+        capability="session.read_sensitive" if private_access else "session.read",
         resource_type="session",
         resource_scope=str(target_session_id),
         action_kind="session_read",
         risk_level="medium",
-        title="Andere Session lesen?",
-        summary="Der Agent möchte den Gesprächsverlauf einer anderen Session lesen.",
+        title="Private Session lesen?" if private_access else "Andere Session lesen?",
+        summary="Der Agent möchte den Gesprächsverlauf einer privaten Session lesen." if private_access else "Der Agent möchte den Gesprächsverlauf einer anderen Session lesen.",
     )
 
 
-def session_search_permission() -> PermissionRequest:
+def session_search_permission(*, include_private: bool = False, trust_level: TrustLevel = TrustLevel.PRIVATE) -> PermissionRequest:
+    private_access = include_private and trust_level == TrustLevel.PUBLIC
     return PermissionRequest(
-        capability="session.search",
+        capability="session.read_sensitive" if private_access else "session.search",
         resource_type="session_collection",
-        resource_scope="all",
+        resource_scope="all" if include_private or trust_level == TrustLevel.PRIVATE else "public",
         action_kind="session_search",
         risk_level="medium",
         title="Sessions durchsuchen?",
-        summary="Der Agent möchte Titel und Inhalte anderer Sessions durchsuchen.",
+        summary="Der Agent möchte Titel und Inhalte anderer Sessions einschließlich privater Sessions durchsuchen." if private_access else "Der Agent möchte Titel und Inhalte anderer Sessions durchsuchen.",
     )
 
 
-def session_browse_permission() -> PermissionRequest:
-    return PermissionRequest(
-        capability="session.search",
-        resource_type="session_collection",
-        resource_scope="all",
-        action_kind="session_browse",
-        risk_level="medium",
-        title="Sessions anzeigen?",
-        summary="Der Agent möchte kürzlich aktive Sessions anzeigen.",
+def session_browse_permission(*, include_private: bool = False, trust_level: TrustLevel = TrustLevel.PRIVATE) -> PermissionRequest:
+    return replace(
+        session_search_permission(include_private=include_private, trust_level=trust_level),
+        action_kind="session_browse", title="Sessions anzeigen?",
     )
 
 
@@ -1660,18 +1656,24 @@ class PermissionPolicy:
                 if policy != ToolExecutionPolicy.DISABLED:
                     policy = ToolExecutionPolicy.AUTO
 
-        if request.resource_type == "session" and request.capability == "session.read":
+        if request.resource_type == "session" and request.capability in {"session.read", "session.read_sensitive"}:
             try:
                 target_id = UUID(request.resource_scope)
                 target = (
                     chat_session
                     if target_id == chat_session.id
-                    else await db.get(ChatSession, target_id)
+                    else await db.get(ChatSession, target_id, populate_existing=True)
                 )
                 if target is None or target.user_id != chat_session.user_id or (
                     target is not chat_session
                     and target.parent_session_id is not None
                     and target.parent_session_id != chat_session.id
+                ):
+                    return PermissionDecision.DENY
+                if (
+                    target_id != chat_session.id and trust_level == TrustLevel.PUBLIC
+                    and target.trust_level != TrustLevel.PUBLIC.value
+                    and request.capability != "session.read_sensitive"
                 ):
                     return PermissionDecision.DENY
                 if target is chat_session or (
@@ -1690,7 +1692,10 @@ class PermissionPolicy:
                 return PermissionDecision.DENY
 
         if request.resource_type == "session_collection":
-            if request.resource_scope != "all":
+            if request.resource_scope not in {"all", "public"} or (
+                trust_level == TrustLevel.PUBLIC and request.resource_scope == "all"
+                and request.capability != "session.read_sensitive"
+            ):
                 return PermissionDecision.DENY
 
         if request.resource_type == "execution_agent_collection":
@@ -1728,7 +1733,7 @@ class PermissionPolicy:
             }:
                 return PermissionDecision.DENY
             project_id, target_id, _path = scope
-            target = await db.get(ChatSession, target_id)
+            target = await db.get(ChatSession, target_id, populate_existing=True)
             if (
                 chat_session.project_id is None
                 or project_id != chat_session.project_id

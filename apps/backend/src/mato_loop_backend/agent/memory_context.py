@@ -104,6 +104,7 @@ async def prepare_memory_context(
             index = await EpisodeRetrievalService.project_index(
                 db, owner_id=session.user_id, current_session_id=session.id,
                 project_id=session.project_id,
+                readable_by=trust_level,
             )
             project_sessions = index.items
             has_more_project_sessions = index.has_more
@@ -230,13 +231,13 @@ async def prepare_memory_context(
                 cache.relevant_episodes = (
                     await EpisodeRetrievalService.revalidate(
                         db, cache.relevant_episodes or [], owner_id=session.user_id,
-                        current_session_id=session.id, full_sessions_only=True,
+                        current_session_id=session.id, readable_by=trust_level, full_sessions_only=True,
                     )
                 )[:settings.automatic_session_snippet_limit]
                 cache.recent_episodes = (
                     await EpisodeRetrievalService.revalidate(
                         db, cache.recent_episodes or [], owner_id=session.user_id,
-                        current_session_id=session.id, full_sessions_only=True,
+                        current_session_id=session.id, readable_by=trust_level, full_sessions_only=True,
                     )
                 )[:settings.recent_session_snippet_limit]
             pinned_ids = {item.id for item in pinned_memories}

@@ -13,10 +13,19 @@ from mato_loop_backend.settings import (
     SkillDefinition,
     ToolExecutionPolicy,
     ToolSettings,
+    TrustLevel,
 )
 from mato_loop_backend.settings.models import AgentProfile
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.discovery import offer_integration_tools
+
+
+def test_private_history_instruction_is_model_bound_not_session_bound() -> None:
+    session = ChatSession(trust_level="private")
+    prompt = general_system_prompt(session, model_trust_level=TrustLevel.PUBLIC, include_local_time=False)
+    session.trust_level = "public"
+    assert general_system_prompt(session, model_trust_level=TrustLevel.PUBLIC, include_local_time=False) == prompt
+    assert "Do not include them in proactive discovery." in prompt
 
 
 def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
@@ -83,6 +92,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
             web_search_policy="available",
         ),
         memory_context_enabled=True,
+        model_trust_level=TrustLevel.PUBLIC,
         current_datetime=datetime(2026, 8, 7, 17, 49, tzinfo=UTC),
         research_tool_call_limit=8,
         offered_tool_names=frozenset(effective.tools),

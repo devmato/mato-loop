@@ -402,6 +402,7 @@ async def execute_loop_body(
         render_system_prompt = partial(
             general_system_prompt,
             chat_session,
+            model_trust_level=model_trust_level,
             delegated=delegated,
             agent_identity=agent_identity,
             persona=agent_identity.persona,

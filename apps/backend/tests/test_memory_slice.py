@@ -75,6 +75,7 @@ from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
     AiSettings,
+    GeneralSettings,
     IntegrationSettings,
     MemorySettings,
     ReasoningEffort,
@@ -878,7 +879,7 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
         memory_write_enabled=True,
     )
     monkeypatch.setattr(
-        SettingsStore, "load", AsyncMock(return_value=MemorySettings())
+        SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **kwargs: kind())
     )
 
     result = await tool_registry.execute(call, context)
@@ -889,6 +890,7 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
         "duplicate": True,
         "pinned": True,
     }
+    context.db.refresh.assert_awaited_once_with(session, ["trust_level"], with_for_update=True)
     set_pinned.assert_awaited_once()
 
 
@@ -2216,7 +2218,7 @@ async def test_host_matching_routes_profile_and_remove_candidates(
     )
     user_id = uuid4()
     session = ChatSession(
-        id=uuid4(), user_id=user_id, title="Test", memory_mode="full", session_type="chat"
+        id=uuid4(), user_id=user_id, title="Test", memory_mode="full", session_type="chat", trust_level="public"
     )
     locked_session = ChatSession(
         id=session.id,
@@ -2224,6 +2226,7 @@ async def test_host_matching_routes_profile_and_remove_candidates(
         title="Test",
         memory_mode=latest_mode,
         session_type="chat",
+        trust_level="public",
     )
     user_message = Message(
         id=uuid4(),
@@ -2317,6 +2320,8 @@ async def test_host_matching_routes_profile_and_remove_candidates(
             if kind is UserProfileSettings
             else AgentRuntimeSettings(safety_reserve_tokens=128)
             if kind is AgentRuntimeSettings
+            else GeneralSettings()
+            if kind is GeneralSettings
             else ai
         )
     )
@@ -2462,6 +2467,7 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
         title="Test",
         memory_mode="full",
         session_type="chat",
+        trust_level="private",
     )
     messages = [
         Message(
@@ -2522,6 +2528,8 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
             if kind is UserProfileSettings
             else AgentRuntimeSettings(safety_reserve_tokens=128)
             if kind is AgentRuntimeSettings
+            else GeneralSettings()
+            if kind is GeneralSettings
             else ai
         )
     )
@@ -2601,6 +2609,7 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
     mutation = update if policy == ToolExecutionPolicy.AUTO else approval
     if policy != ToolExecutionPolicy.DISABLED:
         assert mutation.await_args.kwargs["owner_id"] == session.user_id
+        assert mutation.await_args.kwargs["trust_level"] == TrustLevel.PRIVATE
     assert any(
         call.args[1] is MemorySettings and call.kwargs.get("for_update") is True
         for call in load_settings.await_args_list
@@ -2905,6 +2914,7 @@ async def test_approved_update_increments_run_counter(monkeypatch) -> None:
         title="Quelle",
         memory_mode="full",
         session_type="chat",
+        trust_level="public",
     )
     run = MemoryDreamRun(id=uuid4(), session_id=session.id)
     evidence_id = uuid4()
@@ -2972,7 +2982,7 @@ async def test_approved_update_increments_run_counter(monkeypatch) -> None:
     monkeypatch.setattr(
         SettingsStore,
         "load",
-        AsyncMock(return_value=MemorySettings(dreaming_update_policy="ask")),
+        AsyncMock(side_effect=lambda _db, kind, **kwargs: MemorySettings(dreaming_update_policy="ask") if kind is MemorySettings else kind()),
     )
     update = AsyncMock(return_value=MemoryMutation(target, updated=True))
     monkeypatch.setattr(MemoryService, "update_dreaming", update)
@@ -2998,7 +3008,7 @@ async def test_approved_remove_revalidates_snapshot_and_updates_run_counter(
 ) -> None:
     user_id = uuid4()
     session = ChatSession(
-        id=uuid4(), user_id=user_id, memory_mode="full", session_type="chat"
+        id=uuid4(), user_id=user_id, memory_mode="full", session_type="chat", trust_level="public"
     )
     run = MemoryDreamRun(id=uuid4(), session_id=session.id)
     target = MemoryRecord(
@@ -3060,7 +3070,7 @@ async def test_approved_remove_revalidates_snapshot_and_updates_run_counter(
     monkeypatch.setattr(
         SettingsStore,
         "load",
-        AsyncMock(return_value=MemorySettings(dreaming_remove_policy="ask")),
+        AsyncMock(side_effect=lambda _db, kind, **kwargs: MemorySettings(dreaming_remove_policy="ask") if kind is MemorySettings else kind()),
     )
 
     outcome = await MemoryService.apply_approved_change(
@@ -3090,7 +3100,7 @@ async def test_approved_merge_revalidates_policy_and_updates_run_counters(
 ) -> None:
     user_id = uuid4()
     session = ChatSession(
-        id=uuid4(), user_id=user_id, memory_mode="full", session_type="chat"
+        id=uuid4(), user_id=user_id, memory_mode="full", session_type="chat", trust_level="public"
     )
     run = MemoryDreamRun(id=uuid4(), session_id=session.id)
     targets = [
@@ -3160,10 +3170,10 @@ async def test_approved_merge_revalidates_policy_and_updates_run_counters(
         SettingsStore,
         "load",
         AsyncMock(
-            return_value=MemorySettings(
+            side_effect=lambda _db, kind, **kwargs: MemorySettings(
                 dreaming_update_policy=update_policy,
                 dreaming_remove_policy=remove_policy,
-            )
+            ) if kind is MemorySettings else kind()
         ),
     )
     merge = AsyncMock(return_value=MemoryMutation(targets[0], updated=True))
