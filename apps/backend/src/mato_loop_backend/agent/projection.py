@@ -546,6 +546,7 @@ def message_dict(
     content = _timestamp_user_message(message, content)
     return {
         "role": message.role,
+        **({"source_message_id": str(message.id)} if message.role == "assistant" else {}),
         "content": content,
         "tool_call_id": message.tool_call_id,
         "tool_calls": _model_tool_calls(tool_calls),

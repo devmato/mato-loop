@@ -810,8 +810,6 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
         for image in kwargs["image_inputs"]:
             carrier = kwargs["messages"][image.message_index]
             assert carrier["role"] == "assistant" and not carrier.get("tool_calls")
-            if reused_ids:
-                assert image.message_index >= len(records) + 1
         assert all(
             "Ephemeral tool-result image" not in item["content"]
             for item in kwargs["messages"] if item["role"] == "tool"
@@ -850,6 +848,7 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
                 expected.insert(0, (2, sources[1], png("blue")))
             for image, (request_number, source, data) in zip(observed[-1], expected, strict=True):
                 label = observed_messages[-1][image.message_index]["content"]
+                assert observed_messages[-1][image.message_index - 2]["source_message_id"] == str(source.id)
                 assert image.data == data
                 assert f"model request {request_number}, assistant message {source.id}, call \"capture\"" in label
     else:
@@ -898,11 +897,18 @@ def test_ephemeral_projection_keeps_user_references_and_newest_images(persisted_
 
 
 @pytest.mark.parametrize("serialize,history_key", [(provider_service._chat_body, "messages"), (provider_service._responses_body, "input")])
-async def test_pdf_upload_images_preserve_the_provider_prefix_across_tool_rounds(serialize, history_key):
+@pytest.mark.parametrize("source", ["pdf", "tool"])
+async def test_ephemeral_images_preserve_the_provider_prefix_across_tool_rounds(serialize, history_key, source):
     provider = LlmProviderConfig(name="Test", adapter_type="openai-compatible", pseudonymization_enabled=False)
     model = ModelConfig(provider_id=provider.id, model_id="vision", supports_image_input=True)
     messages = [{"role": "system", "content": "Stable instructions"}, {"role": "user", "content": "Inspect the PDF"}]
-    images = {(uuid4(), 0, "pdf-upload:test", 1): ProviderImageInput(0, png("red"), "private", "image/png", filename="PDF page 1")}
+    assistant_id = uuid4()
+    if source == "tool":
+        messages.extend([
+            {"role": "assistant", "source_message_id": str(assistant_id), "content": "", "tool_calls": [{"id": "capture", "name": "browser_take_screenshot", "arguments": {}}]},
+            {"role": "tool", "tool_call_id": "capture", "content": "Screenshot captured"},
+        ])
+    images = {(assistant_id, 0, "pdf-upload:test" if source == "pdf" else "capture", 1): ProviderImageInput(0, png("red"), "private", "image/png")}
     bodies = []
     for index in range(2):
         projected, direct = mock_agent_run_support._project_ephemeral_images(messages, images, model=model, target_trust_level=TrustLevel.PRIVATE)

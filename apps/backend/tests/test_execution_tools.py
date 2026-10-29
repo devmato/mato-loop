@@ -1710,7 +1710,7 @@ async def test_legacy_shell_target_is_not_authorized_by_existing_directory_grant
     ) == PermissionDecision.ASK
 
 
-def test_configured_shell_prefixes_are_class_specific(tmp_path) -> None:
+def test_configured_shell_prefixes_are_class_specific(tmp_path, monkeypatch) -> None:
     client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
     settings = ToolSettings(shell_prefixes={"read": [["cat"]], "write": [["git"]]})
 
@@ -1722,6 +1722,9 @@ def test_configured_shell_prefixes_are_class_specific(tmp_path) -> None:
         _shell_permission(client, classification="read", prefixes=[["git", "status"]]),
     )
     request = _shell_permission(client, prefixes=[["git", "status"]])
+    monkeypatch.setattr(tool_registry, "policy_actions", Mock(side_effect=AssertionError(
+        "Built-in policy lookup must not rebuild integration catalogs"
+    )))
     assert _tool_policy(settings, IntegrationSettings(), request) == ToolExecutionPolicy.AUTO
     settings.permissions.policies["shell.write"] = ToolExecutionPolicy.DISABLED
     assert _tool_policy(settings, IntegrationSettings(), request) == ToolExecutionPolicy.DISABLED

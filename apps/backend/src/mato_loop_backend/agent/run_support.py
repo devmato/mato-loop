@@ -120,14 +120,19 @@ def _project_ephemeral_images(
             + ("Retained only for this active run.]" if admitted else
                "Omitted from this request because of the combined image budget.]")
         )
-        # Provider call IDs may repeat across responses. Never bind observations by ID;
-        # request-only carriers also survive compaction without changing the latest user.
+        # Bind by host message ID, never reusable provider call IDs; compacted sources fall back to the tail.
         if upload:
             index = user_index
             projected[index] = {**projected[index], "content": (projected[index].get("content") or "") + "\n\n" + label}
         else:
-            index = len(projected)
-            projected.append({"role": "assistant", "content": label})
+            index = next((index + 1 for index, message in enumerate(projected)
+                          if message.get("source_message_id") == str(assistant_id)), len(projected))
+            while index < len(projected) and projected[index]["role"] == "tool":
+                index += 1
+            projected.insert(index, {"role": "assistant", "content": label})
+            for previous in selected:
+                if previous.message_index >= index:
+                    previous.message_index += 1
         if admitted:
             image.message_index = index
             selected.append(image)
@@ -303,12 +308,14 @@ def _tool_policy(
                 request.policy_hard_unavailable_capabilities
             ),
         ).policy
+    action = tool_registry.actions_by_capability.get(request.capability)
     policy = resolve_tool_execution_policy(
         tool_settings,
         request.capability,
         (
             ToolExecutionPolicy(snapshot["actionDefaults"].get(request.capability, "disabled"))
             if snapshot is not None
+            else action.default_policy(tool_settings) if action is not None
             else next((action.default_policy(tool_settings) for action in tool_registry.policy_actions(integration_settings)
                        if action.capability == request.capability), ToolExecutionPolicy.ASK)
         ),

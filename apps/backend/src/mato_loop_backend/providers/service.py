@@ -224,6 +224,7 @@ async def _provider_projection(
     for message in messages:
         projected = dict(message)
         projected.pop("attachments", None)
+        projected.pop("source_message_id", None)
         recorded_computer = projected.pop("recorded_computer", None)
         if projected.get("role") == "tool":
             content = projected.get("content") or ""
