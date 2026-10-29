@@ -12,8 +12,10 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.request_body_limit import _request_limit
+from mato_loop_backend.api.routes import mail as mail_routes
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.integrations import registry as integration_registry
+from mato_loop_backend.integrations.mail import adapter as mail_adapter
 from mato_loop_backend.integrations.mail.adapter import (
     MAIL_ADAPTER,
     MAIL_CREDENTIAL_KIND,
@@ -26,21 +28,25 @@ from mato_loop_backend.integrations.mail.adapter import (
     _permission,
     binding_revision,
     locator_from_token,
+    search_messages,
     token_for,
 )
 from mato_loop_backend.integrations.mail.client import (
     MailClient,
     MailError,
     MessageLocator,
+    MessagePage,
     build_message,
     parse_message,
 )
+from mato_loop_backend.integrations.mail.send import MailSendResult
 from mato_loop_backend.integrations.mail.service import MailIntegrationService
 from mato_loop_backend.models import ChatSession
 from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.security import CredentialCipher
 from mato_loop_backend.settings import (
+    InstanceLimits,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
@@ -512,6 +518,151 @@ async def test_imap_delete_uses_uid_expunge_and_never_global_expunge(monkeypatch
 
     assert ("STORE", "42", "+FLAGS.SILENT", "(\\Deleted)") in calls
     assert ("EXPUNGE", "42") in calls
+
+
+def test_imap_folder_roles_are_preserved() -> None:
+    client = SimpleNamespace(list=lambda: ("OK", [
+        b'(\\Sent) "/" "Sent"', b'(\\Drafts) "/" "Drafts"', b'(\\Trash) "/" "Trash"',
+    ]))
+    assert [mailbox.flags for mailbox in MailClient._mailboxes(client)] == [
+        frozenset({"\\sent"}), frozenset({"\\drafts"}), frozenset({"\\trash"}),
+    ]
+
+
+@pytest.mark.parametrize("outcome", ["stored", "missing_folder", "append_failed"])
+async def test_smtp_success_reports_sent_copy_separately(monkeypatch, outcome) -> None:
+    client = _client()
+    smtp = SimpleNamespace(send_message=Mock(return_value={}))
+    imap_client = SimpleNamespace(
+        list=lambda: ("OK", [] if outcome == "missing_folder" else [b'(\\Sent) "/" "Sent"']),
+        append=lambda *_args: ("NO" if outcome == "append_failed" else "OK", []),
+    )
+
+    @contextmanager
+    def smtp_connection():
+        yield smtp
+
+    @contextmanager
+    def imap_connection():
+        yield imap_client
+
+    monkeypatch.setattr(client, "_smtp", smtp_connection)
+    monkeypatch.setattr(client, "_imap", imap_connection)
+    raw = build_message(from_address="user@example.com", to=("other@example.com",), subject="Test", body="Body")
+    assert await client.send(raw) is (outcome == "stored")
+    smtp.send_message.assert_called_once()
+
+
+async def test_imap_search_pages_use_exclusive_uid_boundary(monkeypatch) -> None:
+    class FakeImap:
+        def select(self, _mailbox, readonly=False):
+            return "OK", [b"3"]
+
+        def response(self, _name):
+            return "OK", [b"17"]
+
+        def uid(self, command, *args):
+            if command == "SEARCH":
+                return "OK", [b"1" if "1:1" in args else b"1 2 3"]
+            return "OK", [(f"1 (UID {args[0]} FLAGS () RFC822.SIZE 0)".encode(), b"")]
+
+    client = _client()
+
+    @contextmanager
+    def imap():
+        yield FakeImap()
+
+    monkeypatch.setattr(client, "_imap", imap)
+    first = await client.search("INBOX", limit=2)
+    second = await client.search("INBOX", limit=2, before_uid=first.next_uid, expected_uidvalidity=17)
+    assert ([item.locator.uid for item in first.messages], [item.locator.uid for item in second.messages], second.next_uid) == ([3, 2], [1], None)
+
+
+@pytest.mark.parametrize("changed", [None, "integration_id", "revision", "mailbox", "query", "invalid"])
+async def test_mail_search_cursor_scope(changed) -> None:
+    arguments = MailSearchArguments(integration_id=uuid4(), mailbox="INBOX", query="workshop")
+    client = SimpleNamespace(search=AsyncMock(return_value=MessagePage((), 17, 42)))
+    result = await search_messages(arguments, client, "revision")
+    arguments.cursor = result["nextCursor"]
+    if changed is None:
+        await search_messages(arguments, client, "revision")
+        client.search.assert_awaited_with(
+            "INBOX", query="workshop", limit=50, before_uid=42, expected_uidvalidity=17,
+        )
+        return
+    revision = "revision"
+    if changed == "revision":
+        revision = "changed"
+    elif changed == "invalid":
+        arguments.cursor = "invalid"
+    else:
+        setattr(arguments, changed, uuid4() if changed == "integration_id" else "changed")
+    with pytest.raises(ValueError):
+        await search_messages(arguments, client, revision)
+
+
+async def test_mail_search_cursor_rejects_changed_uidvalidity(monkeypatch) -> None:
+    client = _client()
+
+    @contextmanager
+    def imap():
+        yield SimpleNamespace(select=lambda *_args, **_kwargs: ("OK", []), response=lambda _name: ("OK", [b"18"]))
+
+    monkeypatch.setattr(client, "_imap", imap)
+    with pytest.raises(MailError, match="mail.staleReference"):
+        await client.search("INBOX", before_uid=42, expected_uidvalidity=17)
+
+
+@pytest.mark.parametrize("channel", ["agent", "api"])
+@pytest.mark.parametrize("replay", [False, True])
+@pytest.mark.parametrize("confirmed", [True, False, None])
+async def test_sent_draft_cleanup_requires_confirmed_copy(monkeypatch, channel, replay, confirmed) -> None:
+    account = _account()
+    revision = binding_revision(account)
+    token = token_for(account.id, revision, MessageLocator("Drafts", 17, 42))
+    client = SimpleNamespace(
+        get_message=AsyncMock(return_value=SimpleNamespace(raw=b"saved draft")),
+        delete_draft=AsyncMock(),
+    )
+    result = MailSendResult(sent_copy_confirmed=confirmed)
+    module = mail_adapter if channel == "agent" else mail_routes
+    monkeypatch.setattr(module, "send_status", AsyncMock(return_value=result if replay else None))
+    monkeypatch.setattr(module, "send_once", AsyncMock(return_value=result))
+    user = SimpleNamespace(id=uuid4())
+    if channel == "agent":
+        monkeypatch.setattr(module, "_selected_client", AsyncMock(return_value=(client, account, revision)))
+        await module.mail_send_draft(
+            MailTokenArguments(integration_id=account.id, message_token=token),
+            SimpleNamespace(run_id=uuid4(), tool_call=SimpleNamespace(id="call"), session=SimpleNamespace(user_id=user.id), bound_options={}),
+        )
+    else:
+        monkeypatch.setattr(module, "_account", AsyncMock(return_value=(account, client, revision)))
+        await module.send_draft(account.id, token, user, None, "key")
+    assert client.delete_draft.await_count == int(confirmed is True)
+
+
+@pytest.mark.parametrize("channel", ["agent", "api"])
+async def test_generated_message_id_uses_sender_domain(monkeypatch, channel) -> None:
+    account = _account()
+    sent = AsyncMock(return_value=MailSendResult(sent_copy_confirmed=True))
+    if channel == "agent":
+        monkeypatch.setattr(mail_adapter, "_selected_client", AsyncMock(return_value=(None, account, "revision")))
+        monkeypatch.setattr(mail_adapter, "send_once", sent)
+        await mail_adapter.mail_send_message(
+            MailSendMessageArguments(integration_id=account.id, to=("other@example.com",)),
+            SimpleNamespace(run_id=uuid4(), tool_call=SimpleNamespace(id="call"), session=SimpleNamespace(user_id=uuid4())),
+        )
+    else:
+        monkeypatch.setattr(mail_routes, "_account", AsyncMock(return_value=(account, None, "revision")))
+        monkeypatch.setattr(mail_routes, "send_once", sent)
+        monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=InstanceLimits()))
+        await mail_routes.send_message(
+            integration_id=account.id, user=SimpleNamespace(id=uuid4()), db=None,
+            to=["other@example.com"], idempotency_key="key",
+        )
+    from email.parser import BytesParser
+
+    assert str(BytesParser().parsebytes(sent.await_args.kwargs["raw"])["Message-ID"]).endswith("@example.com>")
 
 
 async def test_imap_rejects_control_characters_before_select(monkeypatch) -> None:

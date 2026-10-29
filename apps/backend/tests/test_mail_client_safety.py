@@ -53,7 +53,7 @@ def test_mailbox_arguments_are_quoted_and_search_uses_charset_keyword(monkeypatc
         yield FakeImap()
 
     monkeypatch.setattr(client, "_imap", imap)
-    assert client._search_sync('Projekte "Q"\\Über', 'Text "x"\\y', 10) == ()
+    assert client._search_sync('Projekte "Q"\\Über', 'Text "x"\\y', 10).messages == ()
     assert calls == [
         ("SELECT", '"Projekte \\"Q\\"\\\\&ANw-ber"', True),
         ("SEARCH", "CHARSET", "UTF-8", "TEXT", b'"Text \\"x\\"\\\\y"'),

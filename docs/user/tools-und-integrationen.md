@@ -245,6 +245,12 @@ CalDAV-Aufgaben unterstützen Titel, Notiz, eine optionale Fälligkeit als Datum
 
 ## IMAP/SMTP-Mail integrieren
 
+Im E-Mail-Fenster können Sie den ausgewählten Ordner durchsuchen. Bestätigen Sie den Suchbegriff mit Enter oder dem Suchsymbol. **Weitere laden** zeigt ältere Nachrichten beziehungsweise weitere Treffer; beim Aktualisieren bleibt die aktive Suche erhalten.
+
+Nach dem Senden unterscheidet MatoLoop zwischen der Annahme durch den Mailserver und der gespeicherten Kopie unter **Gesendet**. Kann diese Kopie nicht bestätigt werden, erscheint eine Warnung. Das bedeutet nicht, dass der Versand fehlgeschlagen ist: Senden Sie die Nachricht deshalb nicht erneut. Bei älteren Versandvorgängen kann der Ablagestatus unbekannt sein. Die Annahme durch den Mailserver ist keine Zustellbestätigung des Empfängers.
+
+Ein gespeicherter Entwurf bleibt erhalten, solange die Kopie unter **Gesendet** nicht bestätigt ist. Die Nachricht wurde trotzdem bereits an den Mailserver übergeben; senden Sie den erhaltenen Entwurf nicht erneut.
+
 Unter **Einstellungen > Integrationen** können Sie Mail-Konten mit IMAP- und SMTP-Server, TLS-Modus, Benutzername, festem Absender und Passwort oder App-Passwort anlegen. Zugangsdaten werden verschlüsselt gespeichert und nie wieder angezeigt. Unverschlüsselte Verbindungen werden nicht unterstützt.
 
 An der Verbindung legen Sie private/öffentliche Kontorechte zum Lesen, Verwalten von Entwürfen, Senden und Löschen fest. Alle Aktionen unterstützen **Nicht erlaubt**, **Nachfragen** und **Automatisch**. Ohne eigene Regel gilt das Freigabeverhalten anhand der Aktionskategorie. IMAP-Ordner haben keine eigenen Rechte.

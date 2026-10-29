@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import imaplib
+import logging
 import re
 import smtplib
 import ssl
@@ -24,6 +25,7 @@ _MAX_HEADER_BYTES = 256 * 1024
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 MAX_BODY_CHARS = 100_000
 MAX_ATTACHMENTS = 50
+logger = logging.getLogger(__name__)
 _LIST_RE = re.compile(rb"^\(([^)]*)\)\s+(?:\"(?:\\.|[^\"])*\"|NIL)\s+(.+)$")
 _UID_RE = re.compile(rb"\bUID\s+(\d+)\b")
 _SIZE_RE = re.compile(rb"\bRFC822\.SIZE\s+(\d+)\b")
@@ -65,6 +67,13 @@ class MessageSummary:
     date: datetime | None
     size: int
     flags: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class MessagePage:
+    messages: tuple[MessageSummary, ...]
+    uidvalidity: int
+    next_uid: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -486,7 +495,7 @@ class MailClient:
                 continue
             flags = frozenset(
                 item.decode("ascii", errors="ignore").casefold()
-                for item in imaplib.ParseFlags(b"(" + match.group(1) + b")")
+                for item in imaplib.ParseFlags(b"FLAGS (" + match.group(1) + b")")
             )
             result.append(Mailbox(_unquote(match.group(2)), flags))
             if len(result) >= _MAX_MAILBOXES:
@@ -518,29 +527,37 @@ class MailClient:
                 return item[0]
         raise MailError("mail.invalidResponse")
 
-    def _search_sync(self, mailbox: str, query: str | None, limit: int) -> tuple[MessageSummary, ...]:
+    def _search_sync(
+        self, mailbox: str, query: str | None, limit: int,
+        before_uid: int | None = None, expected_uidvalidity: int | None = None,
+    ) -> MessagePage:
         _modified_utf7_encode(mailbox)
         if query and any(ord(character) < 32 or ord(character) == 127 for character in query):
             raise MailError("mail.invalidMessage")
         with self._imap() as client:
             uidvalidity = self._select(client, mailbox, readonly=True)
+            if expected_uidvalidity is not None and uidvalidity != expected_uidvalidity:
+                raise MailError("mail.staleReference")
+            criteria = ("UID", f"1:{before_uid - 1}") if before_uid is not None else ()
             if query:
                 escaped = query.replace("\\", "\\\\").replace('"', '\\"')
                 status, values = client.uid(
-                    "SEARCH", "CHARSET", "UTF-8", "TEXT", f'"{escaped}"'.encode()
+                    "SEARCH", "CHARSET", "UTF-8", *criteria, "TEXT", f'"{escaped}"'.encode()
                 )
             else:
-                status, values = client.uid("SEARCH", None, "ALL")
+                status, values = client.uid("SEARCH", None, *criteria, "ALL")
             self._ok(status)
             raw_uids = values[0] if values else b""
             if not isinstance(raw_uids, bytes) or len(raw_uids) > _MAX_SEARCH_RESPONSE:
                 raise MailError("mail.responseTooLarge")
             try:
-                uids = sorted({int(value) for value in raw_uids.split()}, reverse=True)[:limit]
+                uids = sorted({int(value) for value in raw_uids.split()}, reverse=True)
+                if any(uid <= 0 for uid in uids):
+                    raise ValueError("invalid message UID")
             except ValueError as exc:
                 raise MailError("mail.invalidResponse") from exc
             summaries = []
-            for uid in uids:
+            for uid in uids[:limit]:
                 status, data = client.uid(
                     "FETCH",
                     str(uid),
@@ -565,12 +582,17 @@ class MailClient:
                         ),
                     )
                 )
-            return tuple(summaries)
+            return MessagePage(
+                tuple(summaries), uidvalidity, uids[limit - 1] if len(uids) > limit else None
+            )
 
     async def search(
-        self, mailbox: str, *, query: str | None = None, limit: int = 50
-    ) -> tuple[MessageSummary, ...]:
-        return await self._run(self._search_sync, mailbox, query, limit)
+        self, mailbox: str, *, query: str | None = None, limit: int = 50,
+        before_uid: int | None = None, expected_uidvalidity: int | None = None,
+    ) -> MessagePage:
+        return await self._run(
+            self._search_sync, mailbox, query, limit, before_uid, expected_uidvalidity
+        )
 
     def _get_raw_sync(self, locator: MessageLocator) -> tuple[bytes, frozenset[str]]:
         with self._imap() as client:
@@ -782,21 +804,23 @@ class MailClient:
             if refused:
                 raise MailError("mail.outcomeUnknown")
 
-    def _archive_sent_sync(self, raw: bytes) -> None:
+    def _archive_sent_sync(self, raw: bytes) -> bool:
         with self._imap() as client:
             mailbox = self._special_mailbox(client, "\\sent")
             if mailbox is None:
-                return
+                return False
             status, _data = client.append(_imap_mailbox(mailbox), None, None, raw)
             self._ok(status)
+            return True
 
-    async def send(self, raw: bytes) -> None:
+    async def send(self, raw: bytes) -> bool:
         await self._run(self._send_sync, raw, mutation=True)
         try:
-            await self._run(self._archive_sent_sync, raw, mutation=True)
-        except MailError:
+            return await self._run(self._archive_sent_sync, raw, mutation=True)
+        except MailError as exc:
             # SMTP already accepted the message; a missing Sent copy must not invite a retry.
-            pass
+            logger.warning("Sent copy could not be confirmed (%s)", exc.code)
+            return False
 
     async def send_draft(self, locator: MessageLocator) -> None:
         def get_draft() -> bytes:
@@ -806,12 +830,12 @@ class MailClient:
             return self._get_raw_sync(locator)[0]
 
         raw = await self._run(get_draft)
-        await self.send(raw)
-        try:
-            await self.delete_draft(locator)
-        except MailError:
-            # The SMTP result is definitive; leaving a sent draft is safer than suggesting a retry.
-            pass
+        if await self.send(raw):
+            try:
+                await self.delete_draft(locator)
+            except MailError:
+                # The SMTP result is definitive; leaving a sent draft is safer than suggesting a retry.
+                pass
 
     async def test_connection(self) -> None:
         await self.list_mailboxes()

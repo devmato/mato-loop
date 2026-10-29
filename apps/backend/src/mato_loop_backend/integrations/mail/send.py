@@ -4,14 +4,21 @@ import hashlib
 import json
 from email import policy
 from email.parser import BytesParser
+from typing import Literal
 from uuid import UUID
 
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.integrations.mail.client import MailClient, MailError
 from mato_loop_backend.models import MailSendOperation
+
+
+class MailSendResult(BaseModel):
+    sent: Literal[True] = True
+    sent_copy_confirmed: bool | None = Field(serialization_alias="sentCopyConfirmed")
 
 
 def _digest(value: str | bytes) -> str:
@@ -54,7 +61,7 @@ async def send_status(
     idempotency_key: str,
     *,
     draft_reference: str,
-) -> str | None:
+) -> MailSendResult | None:
     async with AsyncSessionFactory() as db:
         operation = await db.scalar(
             select(MailSendOperation).where(
@@ -65,7 +72,9 @@ async def send_status(
         )
     if operation is not None and operation.draft_hash != _digest(draft_reference):
         raise MailError("mail.staleReference")
-    return operation.status if operation is not None else None
+    if operation is not None and operation.status == "sent":
+        return MailSendResult(sent_copy_confirmed=operation.sent_copy_confirmed)
+    return None
 
 
 async def send_once(
@@ -76,7 +85,7 @@ async def send_once(
     raw: bytes,
     client: MailClient,
     draft_reference: str | None = None,
-) -> bool:
+) -> MailSendResult:
     key_hash = _digest(idempotency_key)
     request_hash = _message_digest(raw)
     draft_hash = _digest(draft_reference) if draft_reference is not None else None
@@ -112,11 +121,11 @@ async def send_once(
             if existing is None or existing.request_hash != request_hash:
                 raise MailError("mail.staleReference")
             if existing.status == "sent":
-                return False
+                return MailSendResult(sent_copy_confirmed=existing.sent_copy_confirmed)
             raise MailError("mail.outcomeUnknown")
 
     try:
-        await client.send(raw)
+        sent_copy_confirmed = await client.send(raw)
     except MailError as exc:
         async with AsyncSessionFactory() as db:
             if exc.code == "mail.outcomeUnknown":
@@ -136,7 +145,7 @@ async def send_once(
         await db.execute(
             update(MailSendOperation)
             .where(MailSendOperation.id == created)
-            .values(status="sent")
+            .values(status="sent", sent_copy_confirmed=sent_copy_confirmed)
         )
         await db.commit()
-    return True
+    return MailSendResult(sent_copy_confirmed=sent_copy_confirmed)

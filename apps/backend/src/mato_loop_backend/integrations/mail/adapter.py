@@ -113,6 +113,16 @@ class MailSearchArguments(MailIntegrationArguments):
     mailbox: str = Field(min_length=1, max_length=1_000)
     query: str | None = Field(default=None, min_length=1, max_length=500)
     limit: int = Field(default=50, ge=1, le=100)
+    cursor: str | None = Field(default=None, min_length=1, max_length=50_000)
+
+
+class _MailSearchCursor(_Arguments):
+    integration_id: UUID
+    binding_revision: str
+    mailbox: str
+    query: str | None
+    uidvalidity: int = Field(gt=0)
+    before_uid: int = Field(gt=1)
 
 
 class MailTokenArguments(MailIntegrationArguments):
@@ -384,22 +394,59 @@ async def mail_list_folders(arguments: MailIntegrationArguments, context: Any):
         return _error(exc)
 
 
+async def search_messages(
+    arguments: MailSearchArguments, client: MailClient, revision: str
+) -> dict[str, Any]:
+    cursor = None
+    if arguments.cursor is not None:
+        try:
+            cursor = _MailSearchCursor.model_validate(
+                CredentialCipher().decrypt(arguments.cursor.encode("ascii"))
+            )
+        except Exception as exc:
+            raise ValueError("invalid mail search cursor") from exc
+        if (
+            cursor.integration_id != arguments.integration_id
+            or cursor.binding_revision != revision
+            or cursor.mailbox != arguments.mailbox
+            or cursor.query != arguments.query
+        ):
+            raise ValueError("mail search cursor binding mismatch")
+    page = await client.search(
+        arguments.mailbox, query=arguments.query, limit=arguments.limit,
+        before_uid=cursor.before_uid if cursor else None,
+        expected_uidvalidity=cursor.uidvalidity if cursor else None,
+    )
+    next_cursor = None
+    if page.next_uid is not None:
+        next_cursor = CredentialCipher().encrypt(
+            _MailSearchCursor(
+                integration_id=arguments.integration_id,
+                binding_revision=revision,
+                mailbox=arguments.mailbox,
+                query=arguments.query,
+                uidvalidity=page.uidvalidity,
+                before_uid=page.next_uid,
+            ).model_dump(mode="json")
+        ).decode("ascii")
+    return {
+        "messages": [
+            _summary_payload(item, arguments.integration_id, revision) for item in page.messages
+        ],
+        "nextCursor": next_cursor,
+    }
+
+
 async def mail_search(arguments: MailSearchArguments, context: Any):
     try:
         client, _instance, revision = await _selected_client(
             arguments.integration_id, context
         )
-        messages = await client.search(
-            arguments.mailbox, query=arguments.query, limit=arguments.limit
-        )
-        return _result(
-            {
-                "messages": [
-                    _summary_payload(item, arguments.integration_id, revision)
-                    for item in messages
-                ]
-            }
-        )
+        return _result(await search_messages(arguments, client, revision))
+    except ValueError:
+        from mato_loop_backend.tools.contracts import ToolResult
+
+        return ToolResult.error("integration.staleReference", field="cursor")
     except MailError as exc:
         return _error(exc)
 
@@ -518,22 +565,24 @@ async def mail_send_draft(arguments: MailTokenArguments, context: Any):
             arguments.message_token, arguments.integration_id, revision
         )
         draft_reference = f"{locator.mailbox}\0{locator.uidvalidity}\0{locator.uid}"
-        if await send_status(
+        completed = await send_status(
             context.session.user_id,
             arguments.integration_id,
             key,
             draft_reference=draft_reference,
-        ) == "sent":
-            try:
-                await client.delete_draft(locator)
-            except MailError:
-                pass
-            return _result({"sent": True})
+        )
+        if completed is not None:
+            if completed.sent_copy_confirmed is True:
+                try:
+                    await client.delete_draft(locator)
+                except MailError:
+                    pass
+            return _result(completed.model_dump(by_alias=True))
         message = await client.get_message(locator)
         expected = context.bound_options.get("mail_approved_raw_hash")
         if expected is not None and hashlib.sha256(message.raw).hexdigest() != expected:
             raise MailError("mail.staleReference")
-        await send_once(
+        result = await send_once(
             user_id=context.session.user_id,
             integration_id=arguments.integration_id,
             idempotency_key=key,
@@ -541,11 +590,12 @@ async def mail_send_draft(arguments: MailTokenArguments, context: Any):
             client=client,
             draft_reference=draft_reference,
         )
-        try:
-            await client.delete_draft(locator)
-        except MailError:
-            pass
-        return _result({"sent": True})
+        if result.sent_copy_confirmed is True:
+            try:
+                await client.delete_draft(locator)
+            except MailError:
+                pass
+        return _result(result.model_dump(by_alias=True))
     except ValueError:
         from mato_loop_backend.tools.contracts import ToolResult
 
@@ -560,23 +610,24 @@ async def mail_send_message(arguments: MailSendMessageArguments, context: Any):
             arguments.integration_id, context
         )
         key = f"agent:{context.run_id}:{context.tool_call.id}"
+        from_address = MailConfig.model_validate(instance.config).from_address
         raw = build_message(
-            from_address=MailConfig.model_validate(instance.config).from_address,
+            from_address=from_address,
             to=arguments.to,
             cc=arguments.cc,
             bcc=arguments.bcc,
             subject=arguments.subject,
             body=arguments.body,
-            message_id=f"<{hashlib.sha256(key.encode()).hexdigest()}@mato-loop.local>",
+            message_id=f"<{hashlib.sha256(key.encode()).hexdigest()}@{from_address.rpartition('@')[2]}>",
         )
-        await send_once(
+        result = await send_once(
             user_id=context.session.user_id,
             integration_id=arguments.integration_id,
             idempotency_key=key,
             raw=raw,
             client=client,
         )
-        return _result({"sent": True})
+        return _result(result.model_dump(by_alias=True))
     except MailError as exc:
         return _error(exc)
 
@@ -797,7 +848,9 @@ MAIL_SHARED_TOOLS = (
     ),
     _tool(
         "mail_search",
-        "List or search at most 100 messages in one folder.",
+        "List messages in one folder when query is omitted, or search their full text. "
+        "Return up to 100 messages, newest UIDs first. Pass nextCursor as cursor with the "
+        "same account, folder and query to read older results.",
         MailSearchArguments,
         mail_search,
         _READ,
@@ -813,7 +866,8 @@ MAIL_SHARED_TOOLS = (
     ),
     _tool(
         "mail_create_draft",
-        "Create a plain-text email draft.",
+        "Create a plain-text email draft. Omit mailbox to use the account's Drafts folder; "
+        "an explicit mailbox must have the Drafts role, not INBOX.",
         MailCreateDraftArguments,
         mail_create_draft,
         _DRAFTS,
@@ -837,7 +891,9 @@ MAIL_SHARED_TOOLS = (
     ),
     _tool(
         "mail_send_draft",
-        "Send a previously returned email draft without automatic retries.",
+        "Send a previously returned email draft without automatic retries. sent means SMTP "
+        "accepted the message, not recipient delivery. sentCopyConfirmed reports whether "
+        "the Sent copy was confirmed; false or null must not trigger another send.",
         MailTokenArguments,
         mail_send_draft,
         _SEND,
@@ -845,7 +901,9 @@ MAIL_SHARED_TOOLS = (
     ),
     _tool(
         "mail_send_message",
-        "Send one new plain-text email without automatic retries.",
+        "Send one new plain-text email without automatic retries. sent means SMTP accepted "
+        "the message, not recipient delivery. sentCopyConfirmed reports whether the Sent "
+        "copy was confirmed; false or null must not trigger another send.",
         MailSendMessageArguments,
         mail_send_message,
         _SEND,

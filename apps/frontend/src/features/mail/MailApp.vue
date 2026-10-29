@@ -83,6 +83,20 @@
       </AppStateMessage>
       <div v-else class="mail-layout col">
         <div v-show="!mobileDetail" class="column no-wrap mail-list-pane">
+          <q-form class="row items-center no-wrap q-pa-sm q-gutter-sm" @submit.prevent="searchMessages">
+            <q-input
+              v-model="searchQuery"
+              class="col"
+              outlined
+              dense
+              clearable
+              maxlength="500"
+              label="In diesem Ordner suchen"
+              :disable="!selectedMailboxKey"
+              @clear="searchMessages"
+            />
+            <q-btn flat round icon="search" type="submit" aria-label="E-Mails suchen" :disable="!selectedMailboxKey" />
+          </q-form>
           <q-scroll-area class="col">
             <q-list separator>
               <q-item v-if="mail.messagesLoading && !mail.messages.length" class="q-pa-lg">
@@ -91,11 +105,11 @@
               <q-item v-else-if="mail.messagesLoadFailed && !mail.messages.length" class="q-pa-lg">
                 <q-item-section>
                   <q-item-label>E-Mails konnten nicht geladen werden.</q-item-label>
-                  <q-btn flat no-caps color="primary" label="Erneut laden" class="self-start q-mt-sm" @click="selectMailbox(selectedMailboxKey)" />
+                  <q-btn flat no-caps color="primary" label="Erneut laden" class="self-start q-mt-sm" @click="refresh" />
                 </q-item-section>
               </q-item>
               <q-item v-else-if="!mail.messages.length && !mail.messagesLoading" class="q-pa-lg">
-                <q-item-section class="text-center app-muted">Dieser Ordner ist leer.</q-item-section>
+                <q-item-section class="text-center app-muted">{{ mail.query ? 'Keine E-Mails gefunden.' : 'Dieser Ordner ist leer.' }}</q-item-section>
               </q-item>
               <q-item
                 v-for="message in mail.messages"
@@ -242,6 +256,7 @@ const mail = useMailStore()
 const selectedAccountId = ref(null)
 const selectedMailboxKey = ref(null)
 const selectedToken = ref(null)
+const searchQuery = ref('')
 const composeOpen = ref(false)
 const composeSaving = ref(false)
 const compose = reactive(emptyCompose())
@@ -307,6 +322,7 @@ async function selectAccount(accountId) {
   selectedAccountId.value = accountId
   selectedMailboxKey.value = null
   selectedToken.value = null
+  searchQuery.value = ''
   try {
     const mailboxes = await mail.fetchMailboxes(accountId)
     if (!mailboxes?.length || selectedAccountId.value !== accountId) return
@@ -321,6 +337,7 @@ async function selectAccount(accountId) {
 async function selectMailbox(mailboxKey) {
   selectedMailboxKey.value = mailboxKey
   selectedToken.value = null
+  searchQuery.value = ''
   try {
     await mail.fetchMessages(selectedAccountId.value, mailboxKey)
   } catch {
@@ -331,7 +348,18 @@ async function selectMailbox(mailboxKey) {
 async function refresh() {
   if (!selectedAccountId.value || !selectedMailboxKey.value) return loadAccounts()
   try {
-    await mail.fetchMessages(selectedAccountId.value, selectedMailboxKey.value)
+    await mail.fetchMessages(selectedAccountId.value, selectedMailboxKey.value, null, mail.query)
+  } catch {
+    // Axios errors are displayed centrally.
+  }
+}
+
+async function searchMessages() {
+  if (!selectedAccountId.value || !selectedMailboxKey.value) return
+  selectedToken.value = null
+  mail.clearDetail()
+  try {
+    await mail.fetchMessages(selectedAccountId.value, selectedMailboxKey.value, null, searchQuery.value)
   } catch {
     // Axios errors are displayed centrally.
   }
@@ -339,7 +367,7 @@ async function refresh() {
 
 async function loadMore() {
   try {
-    await mail.fetchMessages(selectedAccountId.value, selectedMailboxKey.value, mail.nextCursor)
+    await mail.fetchMessages(selectedAccountId.value, selectedMailboxKey.value, mail.nextCursor, mail.query)
   } catch {
     // Existing messages remain canonical and visible.
   }
@@ -412,15 +440,20 @@ async function sendCompose() {
   try {
     const payload = compose.sendPayload || composePayload()
     compose.sendPayload = payload
-    if (compose.token) {
-      await mail.sendDraft(
+    const result = compose.token
+      ? await mail.sendDraft(
         selectedAccountId.value, compose.token, payload, compose.idempotencyKey
       )
-    } else {
-      await mail.sendMessage(selectedAccountId.value, payload, compose.idempotencyKey)
-    }
+      : await mail.sendMessage(selectedAccountId.value, payload, compose.idempotencyKey)
     composeOpen.value = false
-    $q.notify({ type: 'positive', message: 'E-Mail gesendet' })
+    $q.notify({
+      type: result.sentCopyConfirmed === true ? 'positive' : 'warning',
+      message: result.sentCopyConfirmed === true
+        ? 'E-Mail an den Mailserver übergeben und unter „Gesendet“ gespeichert.'
+        : result.sentCopyConfirmed === false
+          ? 'E-Mail an den Mailserver übergeben. Die Kopie unter „Gesendet“ konnte nicht bestätigt werden. Nicht erneut senden.'
+          : 'E-Mail an den Mailserver übergeben. Die Ablage unter „Gesendet“ ist unbekannt. Nicht erneut senden.'
+    })
     await refresh()
   } catch {
     // The editor and confirmed mail state remain available for retry.

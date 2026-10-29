@@ -53,6 +53,7 @@ export const useMailStore = defineStore('mail', {
     accountsLoadFailed: false,
     accountId: null,
     mailboxKey: null,
+    query: null,
     mailboxes: [],
     mailboxesLoading: false,
     mailboxesLoadFailed: false,
@@ -109,26 +110,29 @@ export const useMailStore = defineStore('mail', {
         if (version === this.mailboxesVersion) this.mailboxesLoading = false
       }
     },
-    async fetchMessages(accountId, mailboxKey, cursor = null) {
+    async fetchMessages(accountId, mailboxKey, cursor = null, query = null) {
+      query = query?.trim() || null
       const version = ++this.messagesVersion
-      const append = Boolean(cursor && this.accountId === accountId && this.mailboxKey === mailboxKey)
-      if (!append && (this.accountId !== accountId || this.mailboxKey !== mailboxKey)) {
+      const append = Boolean(cursor && this.accountId === accountId && this.mailboxKey === mailboxKey && this.query === query)
+      if (!append && (this.accountId !== accountId || this.mailboxKey !== mailboxKey || this.query !== query)) {
         this.messages = []
         this.nextCursor = null
         this.clearDetail()
       }
       this.accountId = accountId
       this.mailboxKey = mailboxKey
+      this.query = query
       this.messagesLoading = true
       this.messagesLoadFailed = false
       try {
         const { data } = await api.get(`/mail/accounts/${accountId}/messages`, {
-          params: { mailboxKey, ...(cursor ? { cursor } : {}) }
+          params: { mailboxKey, ...(append ? { cursor } : {}), ...(query ? { query } : {}) }
         })
         if (
           version !== this.messagesVersion
           || this.accountId !== accountId
           || this.mailboxKey !== mailboxKey
+          || this.query !== query
         ) return
         const items = list(data, 'messages').map(normalizeMessage)
         this.messages = append ? [...this.messages, ...items] : items

@@ -25,14 +25,17 @@ class _Session:
         return next(self.values)
 
 
-async def test_replayed_completed_send_does_not_use_smtp(monkeypatch) -> None:
+@pytest.mark.parametrize("confirmed", [True, False, None])
+async def test_replayed_completed_send_does_not_use_smtp(monkeypatch, confirmed) -> None:
     operation_id = uuid4()
     existing = SimpleNamespace(
-        request_hash=mail_send._message_digest(b"raw"), status="sent"
+        request_hash=mail_send._message_digest(b"raw"), status="sent",
+        sent_copy_confirmed=None,
     )
-    sessions = iter([_Session([operation_id]), _Session(), _Session([None, existing])])
+    saved = _Session()
+    sessions = iter([_Session([operation_id]), saved, _Session([None, existing])])
     monkeypatch.setattr(mail_send, "AsyncSessionFactory", lambda: next(sessions))
-    client = SimpleNamespace(send=AsyncMock())
+    client = SimpleNamespace(send=AsyncMock(return_value=confirmed))
     arguments = {
         "user_id": uuid4(),
         "integration_id": uuid4(),
@@ -41,8 +44,11 @@ async def test_replayed_completed_send_does_not_use_smtp(monkeypatch) -> None:
         "client": client,
     }
 
-    assert await mail_send.send_once(**arguments)
-    assert not await mail_send.send_once(**arguments)
+    assert (await mail_send.send_once(**arguments)).sent_copy_confirmed is confirmed
+    stored = saved.execute.await_args.args[0].compile().params
+    assert stored["sent_copy_confirmed"] is confirmed
+    existing.sent_copy_confirmed = stored["sent_copy_confirmed"]
+    assert (await mail_send.send_once(**arguments)).sent_copy_confirmed is confirmed
     client.send.assert_awaited_once_with(b"raw")
 
 

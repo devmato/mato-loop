@@ -18,11 +18,13 @@ from mato_loop_backend.integrations.mail.adapter import (
     MAIL_CREDENTIAL_KIND,
     MailComposeArguments,
     MailConfig,
+    MailSearchArguments,
     binding_revision,
     client_for,
     locator_from_token,
     mail_error_code,
     message_payload,
+    search_messages,
     token_for,
 )
 from mato_loop_backend.integrations.mail.client import (
@@ -32,7 +34,7 @@ from mato_loop_backend.integrations.mail.client import (
     build_message,
     parse_message,
 )
-from mato_loop_backend.integrations.mail.send import send_once, send_status
+from mato_loop_backend.integrations.mail.send import MailSendResult, send_once, send_status
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import load_credential, read_credential, require_user
 from mato_loop_backend.settings import (
@@ -269,28 +271,21 @@ async def list_messages(
     ],
     query: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=50_000)] = None,
 ) -> dict:
     _instance, client, revision = await _account(db, user, integration_id)
     try:
-        messages = await client.search(mailbox, query=query, limit=limit)
+        return await search_messages(
+            MailSearchArguments(
+                integration_id=integration_id, mailbox=mailbox, query=query,
+                limit=limit, cursor=cursor,
+            ),
+            client, revision,
+        )
+    except ValueError as exc:
+        raise ApiError(409, "integration.staleReference", field="cursor") from exc
     except MailError as exc:
         raise _api_error(exc) from exc
-    return {
-        "messages": [
-            {
-                "messageToken": token_for(integration_id, revision, item.locator),
-                "mailbox": item.locator.mailbox,
-                "subject": item.subject,
-                "from": item.sender,
-                "to": list(item.recipients),
-                "date": item.date.isoformat() if item.date is not None else None,
-                "size": item.size,
-                "flags": sorted(item.flags),
-            }
-            for item in messages
-        ],
-        "nextCursor": None,
-    }
 
 
 @router.get("/accounts/{integration_id}/messages/{message_token}")
@@ -454,22 +449,24 @@ async def send_draft(
     retained_attachment_tokens: Annotated[
         list[str] | None, Form(alias="retainedAttachmentToken")
     ] = None,
-) -> dict[str, bool]:
+) -> MailSendResult:
     account, client, revision = await _account(db, user, integration_id)
     try:
         locator, _part = locator_from_token(message_token, integration_id, revision)
         draft_reference = f"{locator.mailbox}\0{locator.uidvalidity}\0{locator.uid}"
-        if await send_status(
+        completed = await send_status(
             user.id,
             integration_id,
             idempotency_key,
             draft_reference=draft_reference,
-        ) == "sent":
-            try:
-                await client.delete_draft(locator)
-            except MailError:
-                pass
-            return {"sent": True}
+        )
+        if completed is not None:
+            if completed.sent_copy_confirmed is True:
+                try:
+                    await client.delete_draft(locator)
+                except MailError:
+                    pass
+            return completed
         compose_requested = any(
             value is not None
             for value in (
@@ -505,12 +502,13 @@ async def send_draft(
                 attachments=attachments,
                 retained_attachments=retained,
                 message_id=(
-                    f"<{hashlib.sha256(idempotency_key.encode()).hexdigest()}@mato-loop.local>"
+                    f"<{hashlib.sha256(idempotency_key.encode()).hexdigest()}"
+                    f"@{MailConfig.model_validate(account.config).from_address.rpartition('@')[2]}>"
                 ),
             )
         else:
             raw = (await client.get_message(locator)).raw
-        await send_once(
+        result = await send_once(
             user_id=user.id,
             integration_id=integration_id,
             idempotency_key=idempotency_key,
@@ -518,15 +516,16 @@ async def send_draft(
             client=client,
             draft_reference=draft_reference,
         )
-        try:
-            await client.delete_draft(locator)
-        except MailError:
-            pass
+        if result.sent_copy_confirmed is True:
+            try:
+                await client.delete_draft(locator)
+            except MailError:
+                pass
     except ValueError as exc:
         raise ApiError(409, "integration.staleReference") from exc
     except MailError as exc:
         raise _api_error(exc) from exc
-    return {"sent": True}
+    return result
 
 
 @router.post("/accounts/{integration_id}/messages/send")
@@ -543,11 +542,11 @@ async def send_message(
     cc: Annotated[list[str] | None, Form()] = None,
     bcc: Annotated[list[str] | None, Form()] = None,
     attachments: Annotated[list[UploadFile] | None, File()] = None,
-) -> dict[str, bool]:
+) -> MailSendResult:
     account, client, _revision = await _account(db, user, integration_id)
     limits = await SettingsStore.load(db, InstanceLimits)
     try:
-        await send_once(
+        return await send_once(
             user_id=user.id,
             integration_id=integration_id,
             idempotency_key=idempotency_key,
@@ -562,13 +561,13 @@ async def send_message(
                 body=body,
                 attachments=attachments,
                 message_id=(
-                    f"<{hashlib.sha256(idempotency_key.encode()).hexdigest()}@mato-loop.local>"
+                    f"<{hashlib.sha256(idempotency_key.encode()).hexdigest()}"
+                    f"@{MailConfig.model_validate(account.config).from_address.rpartition('@')[2]}>"
                 ),
             ),
         )
     except MailError as exc:
         raise _api_error(exc) from exc
-    return {"sent": True}
 
 
 @router.delete(

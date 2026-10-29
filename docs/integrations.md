@@ -121,6 +121,14 @@ The `tasks_create_many` tool creates at most 50 tasks in one selected `VTODO` co
 
 ## Mail
 
+The shared folder parser preserves IMAP special-use flags for Drafts, Sent, and Trash. Folder names alone do not assign roles. Mail search and the Control Center use the same server-side, per-folder full-text search and UID-based pagination. An omitted query lists messages by descending UID. Continuation cursors are encrypted and bound to the account configuration, folder, query, and `UIDVALIDITY`; changed bindings require a fresh search.
+
+Send results distinguish SMTP acceptance (`sent`) from confirmed Sent-folder storage (`sentCopyConfirmed`). A false confirmation means that no Sent copy was confirmed, not that SMTP failed; null means the stored historical result has no copy status. This result is persisted with the existing send operation and returned on replay without sending or archiving again. Missing or failed Sent storage never triggers another SMTP send and is shown as a warning in the mail UI. SMTP acceptance does not confirm recipient delivery.
+
+Generated Message-IDs use the configured sender domain rather than a local harness domain. The deterministic per-send identifier and persistent idempotency checks remain unchanged. SPF, DKIM, and DMARC are the mail server administrator's responsibility.
+
+Sending a saved draft deletes the original only after Sent-folder storage is confirmed, including replay cleanup. A false or unknown confirmation preserves the draft as the sender's remaining mailbox copy; it does not authorize another SMTP send.
+
 The IMAP/SMTP adapter represents one mail account per integration instance. IMAP and SMTP endpoints, TLS modes, username, and fixed sender address are non-secret configuration; the shared password or app password is stored as one encrypted owner-scoped credential. Only implicit TLS and mandatory STARTTLS are supported. The blocking standard-library protocol clients run in bounded worker-thread operations with verified TLS and controlled errors.
 
 Mail policies are account-level actions: `mail.read`, `mail.drafts`, `mail.send`, and `mail.delete`. All support `disabled`, `ask`, and `auto`; defaults follow the saved trust preset by category. Sending and deletion support matching run or session grants, scoped to the account, binding revision and capability family. IMAP folders are live navigation targets, not policy resources. Mail tools release private untrusted data, use UIDs rather than sequence numbers, and return encrypted message and attachment tokens bound to the integration revision, mailbox, `UIDVALIDITY`, and UID.

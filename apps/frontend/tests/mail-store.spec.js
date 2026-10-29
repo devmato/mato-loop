@@ -63,6 +63,32 @@ describe('mail store', () => {
     expect(store.nextCursor).toBe('next')
   })
 
+  it('keeps the server search query when loading the next page', async () => {
+    api.get.mockResolvedValueOnce({ data: { messages: [{ token: 'first' }], nextCursor: 'next' } })
+      .mockResolvedValueOnce({ data: { messages: [{ token: 'second' }], nextCursor: null } })
+    const store = useMailStore()
+    await store.fetchMessages('mail-1', 'INBOX', null, 'Werkstatt')
+    await store.fetchMessages('mail-1', 'INBOX', store.nextCursor, store.query)
+
+    expect(api.get).toHaveBeenLastCalledWith('/mail/accounts/mail-1/messages', {
+      params: { mailboxKey: 'INBOX', query: 'Werkstatt', cursor: 'next' }
+    })
+    expect(store.messages.map((message) => message.token)).toEqual(['first', 'second'])
+  })
+
+  it('clears old results and cursor when the search changes', async () => {
+    api.get.mockResolvedValueOnce({ data: { messages: [{ token: 'old' }], nextCursor: 'next' } })
+      .mockResolvedValueOnce({ data: { messages: [{ token: 'new' }] } })
+    const store = useMailStore()
+    await store.fetchMessages('mail-1', 'INBOX', null, 'old')
+    await store.fetchMessages('mail-1', 'INBOX', store.nextCursor, 'new')
+
+    expect(store.messages.map((message) => message.token)).toEqual(['new'])
+    expect(api.get).toHaveBeenLastCalledWith('/mail/accounts/mail-1/messages', {
+      params: { mailboxKey: 'INBOX', query: 'new' }
+    })
+  })
+
   it('preserves a draft after a failed delete and removes it only after confirmation', async () => {
     const store = useMailStore()
     store.messages = [{ token: 'draft-1', isDraft: true }]
