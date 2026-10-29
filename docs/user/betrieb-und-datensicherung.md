@@ -81,7 +81,7 @@ Standalone-Setup und Updates installieren den exakten Commit des laufenden Backe
 
 Öffnen Sie Windows PowerShell als Administrator unter dem Konto, das den Agenten besitzen soll, und kopieren Sie den Windows-Befehl aus den Computereinstellungen. Die Installation liegt unter `%LOCALAPPDATA%\matoloop-agent`, der Standardworkspace unter `%USERPROFILE%\mato-loop-agent\workspace`. Der Installer verwendet vorhandenes Git oder privates geprüftes MinGit, ohne globale PATH-Änderung.
 
-Der Starttask läuft unter dem Installationskonto ohne Anmeldung; dessen Passwort wird nur dem Aufgabenplaner übergeben. Pairing erfolgt danach in normaler PowerShell mit `& "$env:LOCALAPPDATA\matoloop-agent\installer.ps1" pair`. Dasselbe Skript unterstützt `update`, `status`, `uninstall` und `uninstall -Purge`. Ein lokaler Checkout kann mit `-Source` installiert werden. PowerShell-Shellzugriff ist verfügbar; Browser, OpenSCAD und interaktive Terminals sind nicht angeboten. Native Windows-Akzeptanz ist getrennt von Linux-/Containerprüfungen zu beurteilen.
+Der Starttask läuft unter dem Installationskonto ohne Anmeldung. Geben Sie dessen Kontopasswort, nicht die Windows-Hello-PIN, verdeckt direkt im Terminal ein; es wird nur dem Aufgabenplaner übergeben. Pairing erfolgt danach in normaler PowerShell mit `& "$env:LOCALAPPDATA\matoloop-agent\installer.ps1" pair`. Dasselbe Skript unterstützt `update`, `status`, `uninstall` und `uninstall -Purge`. Ein lokaler Checkout kann mit `-Source` installiert werden. PowerShell-Shellzugriff ist verfügbar; Browser, OpenSCAD und interaktive Terminals sind nicht angeboten. Native Windows-Akzeptanz ist getrennt von Linux-/Containerprüfungen zu beurteilen.
 
 ## Zu sichernde Daten
 

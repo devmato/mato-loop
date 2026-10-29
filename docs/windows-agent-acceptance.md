@@ -16,7 +16,8 @@ binding is loaded only on Linux.
 1. Install with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File
    C:\path\to\checkout\scripts\install-matoloop-agent.ps1 -Source
    C:\path\to\checkout -InstanceUrl https://your-matoloop-host`.
-   Enter the installing account's password only in the Task Scheduler prompt.
+   Enter the installing account's password (not its Windows Hello PIN) at the
+   masked terminal prompt. No separate credential dialog should open.
    Also test the downloaded installer on a machine without
    Git in `PATH`. Confirm `tools\git\cmd\git.exe` runs and the checkout matches the backend SHA.
    The private Git must remain available for local and portal updates without

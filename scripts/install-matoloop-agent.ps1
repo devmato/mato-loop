@@ -377,9 +377,9 @@ try {
         Save-State $newState
         if (-not (Task) -or -not (Get-ScheduledTask -TaskName $maintenanceTask -ErrorAction SilentlyContinue)) {
             $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-            $credential = Get-Credential -UserName $identity -Message 'Password for the MatoLoop Agent tasks'
-            if (-not $credential) { Fail 'Task setup was cancelled.' }
-            if ($credential.UserName -ne $identity) { Fail 'Task account must be the installing user.' }
+            Write-Host "Windows Task Scheduler requires the account password for $identity (not the Windows Hello PIN)."
+            $password = Read-Host 'Windows account password' -AsSecureString
+            $credential = [Management.Automation.PSCredential]::new($identity, $password)
             $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
             if (-not (Task)) {
                 $action = New-ScheduledTaskAction -Execute $powershell -Argument (
