@@ -20,6 +20,7 @@ $stateFile = Join-Path $root 'install.json'
 $taskName = 'MatoLoop Agent'
 $maintenanceTask = 'MatoLoop Agent Maintenance'
 $marker = Join-Path $root '.managed-by-matoloop-agent'
+$commandDirectory = Join-Path $root 'bin'
 $env:UV_CACHE_DIR = Join-Path $root 'cache\uv'
 $env:UV_PYTHON_INSTALL_DIR = Join-Path $root 'tools\python'
 $env:UV_PYTHON_INSTALL_BIN = '0'
@@ -52,13 +53,42 @@ function Runtime($Value) {
 function Stop-Agent {
     $job = Task
     if ($job -and $job.State -eq 'Running') {
-        Stop-ScheduledTask -TaskName $taskName
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction Stop
         for ($attempt = 0; $attempt -lt 20; $attempt++) {
             if ((Task).State -ne 'Running') { return }
             Start-Sleep -Milliseconds 500
         }
         Fail 'The startup task did not stop; no files were removed.'
     }
+}
+
+function Set-CommandPath([bool] $Installed) {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+    try {
+        $value = $key.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $kind = if ($null -ne $value) { $key.GetValueKind('Path') } else { [Microsoft.Win32.RegistryValueKind]::ExpandString }
+        $entries = @()
+        if ($null -ne $value) { $entries = @($value -split ';' | Where-Object { $_.TrimEnd('\') -ine $commandDirectory }) }
+        if ($Installed) { $entries += $commandDirectory }
+        if ($entries.Count) { $key.SetValue('Path', ($entries -join ';'), $kind) }
+        else { $key.DeleteValue('Path', $false) }
+    } finally { $key.Dispose() }
+    if (-not ('MatoLoopEnvironment' -as [type])) {
+        Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class MatoLoopEnvironment {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr wparam,
+        string lparam, uint flags, uint timeout, out UIntPtr result);
+}
+'@
+    }
+    $result = [UIntPtr]::Zero
+    [void] [MatoLoopEnvironment]::SendMessageTimeout([IntPtr] 0xffff, 0x1a, [IntPtr]::Zero, 'Environment', 2, 1000, [ref] $result)
+    $entries = @($env:PATH -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ine $commandDirectory })
+    if ($Installed) { $entries += $commandDirectory }
+    $env:PATH = $entries -join ';'
 }
 
 function Resolve-Git {
@@ -107,6 +137,72 @@ function Read-AgentCredential {
     $plain = [Security.Cryptography.ProtectedData]::Unprotect(
         [IO.File]::ReadAllBytes($path), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
     return ([Text.Encoding]::UTF8.GetString($plain) | ConvertFrom-Json)
+}
+
+function Register-AgentTasks {
+    param([string] $InstallationRoot, [string] $ExpectedUserSid)
+    $ErrorActionPreference = 'Stop'
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($user.User.Value -ne $ExpectedUserSid) {
+        throw 'MatoLoop Agent: Elevation must use the installing Windows account, not another administrator account.'
+    }
+    if (-not ([Security.Principal.WindowsPrincipal]::new($user)).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'MatoLoop Agent: Task registration requires administrator rights.'
+    }
+    $current = [IO.DirectoryInfo] $InstallationRoot
+    while ($current) {
+        if ($current.Exists -and ($current.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'MatoLoop Agent: The installation path contains a reparse point.'
+        }
+        $current = $current.Parent
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $InstallationRoot '.managed-by-matoloop-agent') -PathType Leaf)) {
+        throw 'MatoLoop Agent: Installation marker is missing.'
+    }
+    $taskName = 'MatoLoop Agent'
+    $maintenanceTask = 'MatoLoop Agent Maintenance'
+    $identity = $user.Name
+    $installer = Join-Path $InstallationRoot 'installer.ps1'
+    Write-Host "Windows Task Scheduler requires the account password for $identity (not the Windows Hello PIN)."
+    $password = Read-Host 'Windows account password' -AsSecureString
+    $credential = [Management.Automation.PSCredential]::new($identity, $password)
+    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $created = @()
+    try {
+        if (-not (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+            $action = New-ScheduledTaskAction -Execute $powershell -Argument (
+                '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $installer + '" run')
+            $trigger = New-ScheduledTaskTrigger -AtStartup
+            $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
+                -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings `
+                -User $identity -Password ($credential.GetNetworkCredential().Password) -RunLevel Limited -ErrorAction Stop | Out-Null
+            $created += $taskName
+        }
+        if (-not (Get-ScheduledTask -TaskName $maintenanceTask -ErrorAction SilentlyContinue)) {
+            $action = New-ScheduledTaskAction -Execute $powershell -Argument (
+                '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $installer + '" maintenance-run')
+            $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 60) `
+                -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+            Register-ScheduledTask -TaskName $maintenanceTask -Action $action -Settings $settings `
+                -User $identity -Password ($credential.GetNetworkCredential().Password) -RunLevel Limited -ErrorAction Stop | Out-Null
+            $created += $maintenanceTask
+        }
+        # Both tasks run without elevation. Their account can start/stop/manage its own tasks.
+        $scheduler = New-Object -ComObject 'Schedule.Service'
+        $scheduler.Connect()
+        $folder = $scheduler.GetFolder('\')
+        foreach ($name in @($taskName, $maintenanceTask)) {
+            $folder.GetTask($name).SetSecurityDescriptor("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;$ExpectedUserSid)", 0)
+        }
+    } catch {
+        $failure = $_
+        foreach ($name in $created) {
+            Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        throw $failure
+    }
 }
 
 $installerMutex = $null
@@ -176,7 +272,8 @@ if ($Command -eq 'run') {
 if ($Command -eq 'pair') {
     $state = State
     $env:MATOLOOP_AGENT_CONFIG = Join-Path $data 'config.json'
-    & (Runtime $state) pair
+    $websocket = $state.instanceUrl.TrimEnd('/') -replace '^https:', 'wss:' -replace '^http:', 'ws:'
+    & (Runtime $state) pair --backend-url ($websocket + '/api/execution-agents/connect')
     exit $LASTEXITCODE
 }
 if ($Command -eq 'status') {
@@ -202,10 +299,11 @@ if ($Command -eq 'uninstall') {
     Stop-Agent
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $maintenanceTask -Confirm:$false -ErrorAction SilentlyContinue
+    Set-CommandPath $false
     if ($Purge) {
         Remove-Item -LiteralPath $root -Recurse -Force
     } else {
-        foreach ($name in @('venvs', 'source', 'sources', 'tools', 'cache', 'install.json', 'installer.ps1')) {
+        foreach ($name in @('venvs', 'source', 'sources', 'tools', 'cache', 'bin', 'install.json', 'installer.ps1')) {
             Remove-Item -LiteralPath (Join-Path $root $name) -Recurse -Force -ErrorAction SilentlyContinue
         }
         foreach ($child in Get-ChildItem -LiteralPath $data -ErrorAction SilentlyContinue) {
@@ -327,6 +425,7 @@ $installer = Join-Path $root 'installer.ps1'
 $previousInstaller = if (Test-Path -LiteralPath $installer) { [IO.File]::ReadAllBytes($installer) } else { $null }
 $env:VIRTUAL_ENV = $newVenv
 $snapshot = $null
+$commandInstalled = $false
 try {
     $python = & $uv python find 3.13
     if ($LASTEXITCODE) { Fail 'Could not find private Python.' }
@@ -343,6 +442,13 @@ try {
         $destination = Join-Path $snapshot $relative
         New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
         Copy-Item -LiteralPath $origin -Destination $destination -Recurse -Force
+    }
+    # Older target commits have no CLI launcher; retain the installed launcher on downgrade.
+    foreach ($name in @('matoloop-agent.cmd', 'matoloop-agent-cli.ps1')) {
+        $origin = Join-Path $checkout "scripts\$name"
+        if (Test-Path -LiteralPath $origin -PathType Leaf) {
+            Copy-Item -LiteralPath $origin -Destination (Join-Path $snapshot "scripts\$name") -Force
+        }
     }
     $stamp = Join-Path $snapshot 'libs\python\version\src\matoloop_version\build-version.txt'
     & $python $versionScript --source $checkout --output $stamp
@@ -366,64 +472,89 @@ try {
     if (-not (Test-Path -LiteralPath $sourceInstaller -PathType Leaf)) {
         Fail 'The source checkout has no Windows installer.'
     }
+    foreach ($path in @($commandDirectory, (Join-Path $commandDirectory 'matoloop-agent.cmd'), (Join-Path $commandDirectory 'cli.ps1'))) {
+        if ((Test-Path -LiteralPath $path) -and
+            ((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            Fail 'The command path contains a reparse point.'
+        }
+    }
+    # shortcut: compatible CLI setup survives activation failure; add rollback if the install.json contract changes.
+    if (Test-Path -LiteralPath (Join-Path $checkout 'scripts\matoloop-agent.cmd') -PathType Leaf) {
+        New-Item -ItemType Directory -Path $commandDirectory -Force | Out-Null
+        foreach ($name in @('matoloop-agent.cmd', 'cli.ps1')) {
+            $sourceName = if ($name -eq 'cli.ps1') { 'matoloop-agent-cli.ps1' } else { $name }
+            $path = Join-Path $commandDirectory $name
+            $sourcePath = Join-Path $checkout "scripts\$sourceName"
+            if ((Test-Path -LiteralPath $path -PathType Leaf) -and
+                (Get-FileHash -LiteralPath $path -ErrorAction Stop).Hash -eq (Get-FileHash -LiteralPath $sourcePath -ErrorAction Stop).Hash) { continue }
+            $staged = Join-Path $snapshot "command-$name.new"
+            Copy-Item -LiteralPath $sourcePath -Destination $staged -Force
+            if (Test-Path -LiteralPath $path -PathType Leaf) { [IO.File]::Replace($staged, $path, [NullString]::Value) }
+            else { [IO.File]::Move($staged, $path) }
+        }
+    }
+    if (Test-Path -LiteralPath (Join-Path $commandDirectory 'matoloop-agent.cmd') -PathType Leaf) {
+        $commandInstalled = $true
+        Set-CommandPath $true
+    }
     if (-not [string]::Equals($sourceInstaller, $installer, [StringComparison]::OrdinalIgnoreCase)) {
         Copy-Item -LiteralPath $sourceInstaller -Destination $installer -Force
+    }
+    if (-not (Task) -or -not (Get-ScheduledTask -TaskName $maintenanceTask -ErrorAction SilentlyContinue)) {
+        $user = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (([Security.Principal.WindowsPrincipal]::new($user)).IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            Register-AgentTasks -InstallationRoot $root -ExpectedUserSid $user.User.Value
+        } else {
+            Write-Host 'Windows will request administrator approval to register the startup tasks. Use the same Windows account.'
+            $registrationError = Join-Path $root 'task-registration-error.txt'
+            Remove-Item -LiteralPath $registrationError -ErrorAction SilentlyContinue
+            $registration = 'function Register-AgentTasks {' + ${function:Register-AgentTasks}.ToString() + "}`n" +
+                "try { Register-AgentTasks -InstallationRoot '" + $root.Replace("'", "''") + "' -ExpectedUserSid '" + $user.User.Value + "'; exit 0 } " +
+                "catch { [IO.File]::WriteAllText('" + $registrationError.Replace("'", "''") + "', `$_.Exception.Message); exit 1 }"
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($registration))
+            try {
+                $process = Start-Process -FilePath $powershell -Verb RunAs -Wait -PassThru `
+                    -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) -ErrorAction Stop
+                if ($process.ExitCode) {
+                    if (Test-Path -LiteralPath $registrationError -PathType Leaf) {
+                        Fail ([IO.File]::ReadAllText($registrationError))
+                    }
+                    Fail 'Task registration failed. Elevation must use the installing Windows account.'
+                }
+            } finally {
+                Remove-Item -LiteralPath $registrationError -ErrorAction SilentlyContinue
+            }
+        }
     }
     Stop-Agent
     try {
         [IO.File]::WriteAllText($configFile, ($config | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
         $newState = [pscustomobject] @{activeVenv=$newVenv; source=$checkout; sourceUrl=$sourceUrl;
-            homeDirectory=$HomeDirectory; instanceUrl=$InstanceUrl.TrimEnd('/'); maintenanceReady=$false}
+            homeDirectory=$HomeDirectory; instanceUrl=$InstanceUrl.TrimEnd('/'); maintenanceReady=$true}
         Save-State $newState
-        if (-not (Task) -or -not (Get-ScheduledTask -TaskName $maintenanceTask -ErrorAction SilentlyContinue)) {
-            $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-            Write-Host "Windows Task Scheduler requires the account password for $identity (not the Windows Hello PIN)."
-            $password = Read-Host 'Windows account password' -AsSecureString
-            $credential = [Management.Automation.PSCredential]::new($identity, $password)
-            $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-            if (-not (Task)) {
-                $action = New-ScheduledTaskAction -Execute $powershell -Argument (
-                    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $installer + '" run')
-                $trigger = New-ScheduledTaskTrigger -AtStartup
-                $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
-                    -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-                Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings `
-                    -User $identity -Password ($credential.GetNetworkCredential().Password) -RunLevel Limited | Out-Null
-            }
-            if (-not (Get-ScheduledTask -TaskName $maintenanceTask -ErrorAction SilentlyContinue)) {
-                $action = New-ScheduledTaskAction -Execute $powershell -Argument (
-                    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $installer + '" maintenance-run')
-                $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 60) `
-                    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-                Register-ScheduledTask -TaskName $maintenanceTask -Action $action -Settings $settings `
-                    -User $identity -Password ($credential.GetNetworkCredential().Password) -RunLevel Limited | Out-Null
-            }
-            # Both tasks run without elevation. Their account can start/stop/manage its own tasks.
-            $scheduler = New-Object -ComObject 'Schedule.Service'
-            $scheduler.Connect()
-            $folder = $scheduler.GetFolder('\')
-            $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-            foreach ($name in @($taskName, $maintenanceTask)) {
-                $folder.GetTask($name).SetSecurityDescriptor("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;$sid)", 0)
-            }
-        }
-        $newState.maintenanceReady = $true
-        Save-State $newState
-        Start-ScheduledTask -TaskName $taskName
+        Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
         Start-Sleep -Seconds 2
         if ((Task).State -ne 'Running') { Fail 'The Agent task did not remain running.' }
     } catch {
-        Stop-Agent
-        if ($existing) { Save-State $existing } else { Remove-Item -LiteralPath $stateFile -ErrorAction SilentlyContinue }
-        if ($previousConfig) { [IO.File]::WriteAllText($configFile, $previousConfig, [Text.UTF8Encoding]::new($false)) } else {
-            Remove-Item -LiteralPath $configFile -ErrorAction SilentlyContinue
+        $failure = $_
+        try {
+            Stop-Agent
+            if ($existing) { Save-State $existing } else { Remove-Item -LiteralPath $stateFile -ErrorAction SilentlyContinue }
+            if ($previousConfig) { [IO.File]::WriteAllText($configFile, $previousConfig, [Text.UTF8Encoding]::new($false)) } else {
+                Remove-Item -LiteralPath $configFile -ErrorAction SilentlyContinue
+            }
+            if ($previousInstaller) { [IO.File]::WriteAllBytes($installer, $previousInstaller) }
+            if (-not $existing) {
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+                Unregister-ScheduledTask -TaskName $maintenanceTask -Confirm:$false -ErrorAction SilentlyContinue
+            }
+            if ($existing -and (Task)) { Start-ScheduledTask -TaskName $taskName -ErrorAction Stop }
+        } catch {
+            Write-Warning "The previous Agent could not be restored: $_"
         }
-        if (-not $existing) {
-            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-            Unregister-ScheduledTask -TaskName $maintenanceTask -Confirm:$false -ErrorAction SilentlyContinue
-        }
-        if ($existing) { Start-ScheduledTask -TaskName $taskName }
-        throw
+        throw $failure
     }
     if ($existing -and $existing.activeVenv -ne $newVenv -and
         ([IO.Path]::GetFullPath($existing.activeVenv)).StartsWith((Join-Path $root 'venvs') + '\', [StringComparison]::OrdinalIgnoreCase)) {
@@ -433,20 +564,35 @@ try {
         ([IO.Path]::GetFullPath($existing.source)).StartsWith((Join-Path $root 'sources') + '\', [StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $existing.source -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Write-Host "MatoLoop Agent installed. Workspace: $HomeDirectory"
-    if (-not (Test-Path -LiteralPath (Join-Path $data 'agent-state\credential.dat'))) {
-        Write-Host 'Create a computer under Einstellungen > Computer, then pair it with:'
-        Write-Host "  & '$installer' pair"
-        Write-Host "  Backend WebSocket URL: $websocket"
-    }
 } catch {
-    Remove-Item -LiteralPath $newVenv -Recurse -Force -ErrorAction SilentlyContinue
-    if ($snapshot) { Remove-Item -LiteralPath $snapshot -Recurse -Force -ErrorAction SilentlyContinue }
-    if ($managedSource -and $checkout -ne $snapshot) { Remove-Item -LiteralPath $checkout -Recurse -Force -ErrorAction SilentlyContinue }
-    if ($previousInstaller) { [IO.File]::WriteAllBytes($installer, $previousInstaller) } else {
-        Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+    $failure = $_
+    try {
+        if (-not $existing -and $commandInstalled) { Set-CommandPath $false }
+        Remove-Item -LiteralPath $newVenv -Recurse -Force -ErrorAction SilentlyContinue
+        if ($snapshot) { Remove-Item -LiteralPath $snapshot -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($managedSource -and $checkout -ne $snapshot) { Remove-Item -LiteralPath $checkout -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($previousInstaller) { [IO.File]::WriteAllBytes($installer, $previousInstaller) } else {
+            Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-Warning "Installation cleanup failed: $_"
     }
-    throw
+    throw $failure
+}
+Write-Host "MatoLoop Agent installed. Workspace: $HomeDirectory"
+$pairCommand = "& '$installer' pair"
+if (Test-Path -LiteralPath (Join-Path $commandDirectory 'matoloop-agent.cmd') -PathType Leaf) {
+    $pairCommand = 'matoloop-agent pair'
+    Write-Host 'Commands: matoloop-agent pair | status | update | uninstall. Restart your terminal to use the command.'
+} else {
+    Write-Host "Pair with: $pairCommand"
+}
+if ($Command -eq 'install' -and -not $Yes -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and
+    -not (Test-Path -LiteralPath (Join-Path $data 'agent-state\credential.dat'))) {
+    Write-Host 'Create a computer under Einstellungen > Computer, then enter its values.'
+    $env:MATOLOOP_AGENT_CONFIG = Join-Path $data 'config.json'
+    & $executable pair --backend-url $websocket
+    if ($LASTEXITCODE) { Fail "Pairing failed. Retry with $pairCommand; the Agent remains installed." }
 }
 } finally {
     if ($installerMutex) {

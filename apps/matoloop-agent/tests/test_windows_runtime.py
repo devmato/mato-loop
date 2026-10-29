@@ -323,6 +323,122 @@ class WindowsRuntimeTests(unittest.TestCase):
         )
         self.assertIn("Home: workspace", result.stdout)
 
+    def test_installer_elevation_rejects_another_account(self) -> None:
+        installer = Path(__file__).parents[3] / "scripts/install-matoloop-agent.ps1"
+        result = subprocess.run(
+            [
+                self.process.shell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$tokens=$null; $errors=$null; "
+                "$ast=[Management.Automation.Language.Parser]::ParseFile("
+                "$env:TEST_INSTALLER, [ref]$tokens, [ref]$errors); "
+                "$definition=$ast.Find({ param($node) "
+                "$node -is [Management.Automation.Language.FunctionDefinitionAst] "
+                "-and $node.Name -eq 'Register-AgentTasks' }, $true); "
+                ". ([ScriptBlock]::Create($definition.Extent.Text)); "
+                "Register-AgentTasks -InstallationRoot $env:TEST_ROOT -ExpectedUserSid 'S-1-0-0'",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env={
+                **os.environ,
+                "TEST_INSTALLER": str(installer),
+                "TEST_ROOT": self.temporary.name,
+            },
+        )
+        self.assertIn("Elevation must use the installing Windows account", result.stderr)
+
+    def test_installer_preserves_unexpanded_user_path_and_registry_type(self) -> None:
+        installer = Path(__file__).parents[3] / "scripts/install-matoloop-agent.ps1"
+        # Redirect HKCU only inside the child process; never edit the user's real PATH.
+        result = subprocess.run(
+            [
+                self.process.shell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$ErrorActionPreference='Stop'; $tokens=$null; $errors=$null; "
+                "$ast=[Management.Automation.Language.Parser]::ParseFile("
+                "$env:TEST_INSTALLER, [ref]$tokens, [ref]$errors); "
+                "$ast.FindAll({ param($node) "
+                "$node -is [Management.Automation.Language.FunctionDefinitionAst] "
+                "-and $node.Name -eq 'Set-CommandPath' "
+                "}, $true) | ForEach-Object { . ([ScriptBlock]::Create($_.Extent.Text)) }; "
+                "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; "
+                'public static class TestRegistry { [DllImport("advapi32.dll")] '
+                "public static extern int RegOverridePredefKey(IntPtr key, IntPtr target); }'; "
+                "$name='Software\\MatoLoop-Tests\\'+[Guid]::NewGuid().ToString('N'); "
+                "$key=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($name); "
+                "$environment=$key.CreateSubKey('Environment'); "
+                "$environment.SetValue('Path','%MATOLOOP_PATH_TEST_HOME%\\bin;C:\\existing', "
+                "[Microsoft.Win32.RegistryValueKind]::ExpandString); $environment.Dispose(); "
+                "try { "
+                "if ([TestRegistry]::RegOverridePredefKey([IntPtr](-2147483647), "
+                "$key.Handle.DangerousGetHandle()) -ne 0) { throw 'Registry isolation failed' }; "
+                "$commandDirectory='C:\\agent\\bin'; Set-CommandPath $true; "
+                "$environment=$key.OpenSubKey('Environment'); "
+                "@{value=$environment.GetValue('Path',$null, "
+                "[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); "
+                "kind=$environment.GetValueKind('Path')} | ConvertTo-Json -Compress; "
+                "$environment.Dispose() "
+                "} finally { "
+                "[void][TestRegistry]::RegOverridePredefKey("
+                "[IntPtr](-2147483647), [IntPtr]::Zero); "
+                "$key.Dispose(); [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($name) }",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={
+                **os.environ,
+                "TEST_INSTALLER": str(installer),
+                "MATOLOOP_PATH_TEST_HOME": "C:\\old-tool",
+            },
+        )
+        self.assertEqual(
+            json.loads(result.stdout),
+            {"value": "%MATOLOOP_PATH_TEST_HOME%\\bin;C:\\existing;C:\\agent\\bin", "kind": 2},
+        )
+
+    def test_installer_rollback_preserves_error_when_the_task_is_missing(self) -> None:
+        installer = Path(__file__).parents[3] / "scripts/install-matoloop-agent.ps1"
+        result = subprocess.run(
+            [
+                self.process.shell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$ErrorActionPreference='Stop'; $tokens=$null; $errors=$null; "
+                "$ast=[Management.Automation.Language.Parser]::ParseFile("
+                "$env:TEST_INSTALLER, [ref]$tokens, [ref]$errors); "
+                "$activation=$ast.Find({ param($node) "
+                "$node -is [Management.Automation.Language.TryStatementAst] "
+                "-and $node.Body.Statements[0].Extent.Text -like "
+                "'[[]IO.File]::WriteAllText($configFile,*' }, $true); "
+                "function Stop-Agent {}; function Save-State {}; function Task { $null }; "
+                "function Start-ScheduledTask { throw 'Task not found' }; "
+                "$existing=$true; $previousConfig=$null; $previousInstaller=$null; "
+                "$configFile=Join-Path $env:TEST_ROOT 'config.json'; "
+                "try { & ([ScriptBlock]::Create(\"try { throw 'Startup denied' } catch \" "
+                "+ $activation.CatchClauses[0].Body.Extent.Text)) } "
+                "catch { Write-Output $_.Exception.Message }",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env={
+                **os.environ,
+                "TEST_INSTALLER": str(installer),
+                "TEST_ROOT": self.temporary.name,
+            },
+        )
+        self.assertEqual(result.stdout.strip(), "Startup denied")
+
     def test_installer_early_failure_preserves_a_caller_snapshot_directory(self) -> None:
         sentinel = self.home / "keep.txt"
         sentinel.write_text("User data", encoding="utf-8")

@@ -379,6 +379,8 @@ def copy_source(source: Path, destination: Path) -> None:
             "matoloop-agent-installer.py",
             "install-matoloop-agent.sh",
             "install-matoloop-agent.ps1",
+            "matoloop-agent.cmd",
+            "matoloop-agent-cli.ps1",
         },
     }
     generated = shutil.ignore_patterns(

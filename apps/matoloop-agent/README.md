@@ -89,9 +89,10 @@ when their host prerequisites are declined or unsupported.
 
 ## Native Windows installation
 
-Open **Windows PowerShell as Administrator under the account that should own the Agent**.
-Copy the Windows installation command from **Einstellungen > Computer**. The script
-installs its own `uv` and Python under `%LOCALAPPDATA%\matoloop-agent` and creates
+Open **Windows PowerShell as a regular user under the account that should own the Agent**.
+Copy the Windows installation command from **Einstellungen > Computer** and approve
+UAC for task registration with that same account, not another administrator account.
+The script installs its own `uv` and Python under `%LOCALAPPDATA%\matoloop-agent` and creates
 `%USERPROFILE%\mato-loop-agent\workspace` as the default Agent home. A startup
 Scheduled Task runs under the installing account, using a password supplied only
 to Windows Task Scheduler at installation. For cloning and updates, the installer
@@ -99,11 +100,20 @@ uses Git from `PATH`, reuses its private Git, or downloads pinned MinGit 2.56.0.
 for x64 or ARM64 Windows into `tools\git` after checking the archive's SHA-256.
 Network access to the MatoLoop source repository is required; an existing checkout
 can be provided with `-Source`; Git is still used to stamp its source version. No system Git installation
-or global `PATH` change is made. Windows PowerShell is the shell for `shell_run`.
+or machine-wide `PATH` change is made. Only the stable launcher directory is added
+to the user `PATH`, preserving existing variable references and the registry value
+type. Windows PowerShell is the shell for `shell_run`.
 
-After setup, create a computer in the UI and pair from a normal interactive
-PowerShell window with `& "$env:LOCALAPPDATA\matoloop-agent\installer.ps1" pair`.
-Use the same script with `update`, `status`, `uninstall` or `uninstall -Purge`.
+Interactive setup starts pairing with the backend URL supplied; enter the computer
+ID and token from the UI. Restart the terminal to use `matoloop-agent pair`, `update`,
+`status`, `uninstall`, or `uninstall -Purge`. CLI setup finishes before stopping an
+existing Agent; a failed version switch may keep the compatible launcher. Pairing
+failure leaves the installed Agent intact.
+
+**Existing Windows installations need one rerun of the downloaded installation
+command to acquire the CLI launcher.** Do not uninstall or purge first; pairing and
+the workspace are preserved.
+
 The setup also registers an on-demand maintenance task. **Agent aktualisieren**
 in the Computer settings uses that task and the same installer update function;
 both tasks run under the installing account without elevation. Task Scheduler
