@@ -8,18 +8,13 @@ const { api } = vi.hoisted(() => ({
 vi.mock('src/boot/axios', () => ({ api }))
 
 import { useIntegrationStore } from '../src/stores/integrations'
+import { useAuthStore } from '../src/stores/auth'
 
 const searchResponse = {
   configured: true,
   enabled: true,
   effectiveEnabled: true,
   unavailableReason: null,
-  primaryProvider: 'searxng:integration-id',
-  fallbackProvider: 'no_key',
-  providerOptions: [
-    { value: 'no_key', name: 'Websuche ohne API-Key', adapterType: 'ddgs', integrationId: null },
-    { value: 'searxng:integration-id', name: 'Intern', adapterType: 'searxng', integrationId: 'integration-id' }
-  ],
   providers: [
     {
       id: 'integration-id',
@@ -205,6 +200,13 @@ describe('integration store', () => {
     expect(store.adapterAvailable('opencode', 'personal')).toBe(true)
   })
 
+  it('keeps Jina instance-only even for administrators', () => {
+    useAuthStore().isAdmin = true
+    const store = useIntegrationStore()
+    store.catalog = [{ integrationType: 'webfetch', adapterType: 'jina', executionLocation: 'backend', availability: 'instance_only', instanceOnly: true }]
+    expect([store.adapterAvailable('jina', 'instance'), store.adapterAvailable('jina', 'personal')]).toEqual([true, false])
+  })
+
   it('manages personal OpenCode integrations without exposing blank passwords', async () => {
     api.get.mockResolvedValue({ data: codingResponse })
     api.post.mockResolvedValue({ data: codingResponse })
@@ -263,8 +265,6 @@ describe('integration store', () => {
 
     expect(api.get).toHaveBeenCalledWith('/integrations/search', { params: { scope: 'instance' } })
     expect(store.search.providers.map((item) => item.providerType)).toEqual(['searxng'])
-    expect(store.search.primaryProvider).toBe('searxng:integration-id')
-    expect(store.search.providerOptions).toHaveLength(2)
     expect(store.loaded).toBe(true)
     expect(store.loadFailed).toBe(false)
   })
@@ -298,20 +298,6 @@ describe('integration store', () => {
       '/integrations/search/providers', payload, { params: { scope: 'instance' } }
     )
     expect(store.search.providers).toHaveLength(1)
-  })
-
-  it('saves search provider selection in the current integration scope', async () => {
-    api.put.mockResolvedValue({ data: searchResponse })
-    const store = useIntegrationStore()
-    store.selectScope('personal')
-
-    await store.saveSearchSelection('searxng:integration-id', 'no_key')
-
-    expect(api.put).toHaveBeenCalledWith('/integrations/search', {
-      primaryProvider: 'searxng:integration-id',
-      fallbackProvider: 'no_key'
-    }, { params: { scope: 'personal' } })
-    expect(store.search).toEqual(searchResponse)
   })
 
   it('loads and dispatches calendar account operations', async () => {

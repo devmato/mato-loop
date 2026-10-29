@@ -172,7 +172,7 @@ async def _personal_settings(
             "agent_identity": ["display_name", "instructions", "set_as_default"],
             "variables": ["name", "secret", "description", "value_ref"],
             "integrations": adapters,
-            "integrationOptions": ["search_selection", "caldav_defaults"],
+            "integrationOptions": ["caldav_defaults"],
         }
         result = {"areas": {area: areas[area]} if area else areas}
         if area in {None, "agent_identity"}:

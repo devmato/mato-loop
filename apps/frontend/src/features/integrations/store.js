@@ -9,17 +9,7 @@ const emptySearch = () => ({
   enabled: true,
   effectiveEnabled: true,
   unavailableReason: null,
-  providers: [],
-  primaryProvider: 'no_key',
-  fallbackProvider: null,
-  providerOptions: [
-    {
-      value: 'no_key',
-      name: 'Websuche ohne API-Key',
-      adapterType: 'ddgs',
-      integrationId: null
-    }
-  ]
+  providers: []
 })
 
 const emptyCalendar = () => ({
@@ -82,6 +72,7 @@ function contextIsCurrent(store, context) {
 }
 
 function clearIntegrations(store) {
+  store.webfetch = { providers: [] }
   store.search = emptySearch()
   store.calendar = emptyCalendar()
   store.mail = emptyMail()
@@ -100,6 +91,7 @@ function clearIntegrations(store) {
 
 export const useIntegrationStore = defineStore('integrations', {
   state: () => ({
+    webfetch: { providers: [] },
     search: emptySearch(),
     calendar: emptyCalendar(),
     mail: emptyMail(),
@@ -129,6 +121,7 @@ export const useIntegrationStore = defineStore('integrations', {
   }),
   getters: {
     configuredIntegrations: (state) => [
+      ...state.webfetch.providers,
       ...state.search.providers, ...state.calendar.accounts, ...state.mail.accounts,
       ...state.knowledge.bases, ...state.recipes.accounts, ...state.arcane.instances,
       ...state.music.instances, ...state.openscad.instances, ...state.coding.instances,
@@ -138,6 +131,7 @@ export const useIntegrationStore = defineStore('integrations', {
     adapterAvailable: (state) => (adapterType, scope = state.scope) => {
       const adapter = state.catalog.find((item) => item.adapterType === adapterType)
       if (!adapter || state.catalogLoadFailed) return false
+      if (scope === 'personal' && adapter.instanceOnly) return false
       if (scope === 'personal') return adapter.availability === 'full' || useAuthStore().isAdmin && adapter.availability === 'instance_only'
       return !adapter.personalOnly && adapter.executionLocation === 'backend'
         && ['full', 'instance_only'].includes(adapter.availability)
@@ -149,7 +143,7 @@ export const useIntegrationStore = defineStore('integrations', {
         const result = await this.browserStatus(integration.id, true)
         return { type: result.state === 'ready' ? 'positive' : 'warning', message: browserStatusLabel(result) }
       }
-      const method = { search: 'testSearch', calendar: 'testCalendar', mail: 'testMail', support: 'testTbsDesk', knowledge: 'testKnowledge', recipes: 'testRecipes', infrastructure: 'testArcane', music: 'testSonoBin', openscad: 'testOpenScad', coding: 'testOpenCode' }[integration.integrationType]
+      const method = { webfetch: 'testWebfetch', search: 'testSearch', calendar: 'testCalendar', mail: 'testMail', support: 'testTbsDesk', knowledge: 'testKnowledge', recipes: 'testRecipes', infrastructure: 'testArcane', music: 'testSonoBin', openscad: 'testOpenScad', coding: 'testOpenCode' }[integration.integrationType]
       const result = await this[method](integration.id)
       return integration.integrationType === 'openscad' && result?.headlessPreview === false
         ? { type: 'warning', message: 'OpenSCAD ist erreichbar, unterstützt aber keine Headless-Vorschau.' }
@@ -222,6 +216,7 @@ export const useIntegrationStore = defineStore('integrations', {
           this.fetchArcane(),
           this.fetchMusic(),
           this.fetchOpenScad(),
+          ...(context.scope === 'instance' ? [this.fetchWebfetch()] : []),
           ...(context.scope === 'personal' ? [this.fetchCoding(), this.fetchBrowser(), this.fetchTbsDesk()] : [])
         ])
       } catch (error) {
@@ -257,6 +252,27 @@ export const useIntegrationStore = defineStore('integrations', {
     fetchSearch() {
       return this.fetchResource('search', '/integrations/search')
     },
+    fetchWebfetch() {
+      return this.fetchResource('webfetch', '/integrations/webfetch')
+    },
+    async createWebfetch(payload) {
+      const context = scopeContext(this)
+      await api.post('/integrations/webfetch/providers', payload)
+      if (contextIsCurrent(this, context)) await this.fetchWebfetch()
+    },
+    async updateWebfetch(id, payload) {
+      const context = scopeContext(this)
+      await api.put(`/integrations/webfetch/providers/${id}`, payload)
+      if (contextIsCurrent(this, context)) await this.fetchWebfetch()
+    },
+    async removeWebfetch(id) {
+      const context = scopeContext(this)
+      await api.delete(`/integrations/webfetch/providers/${id}`)
+      if (contextIsCurrent(this, context)) await this.fetchWebfetch()
+    },
+    async testWebfetch(id) {
+      return (await api.post(`/integrations/webfetch/providers/${id}/test`)).data
+    },
     async createSearch(payload) {
       const context = scopeContext(this)
       await api.post('/integrations/search/providers', payload, scopeConfig(context.scope))
@@ -272,16 +288,6 @@ export const useIntegrationStore = defineStore('integrations', {
       await api.delete(`/integrations/search/providers/${id}`, scopeConfig(context.scope))
       if (!contextIsCurrent(this, context)) return
       await this.fetchSearch()
-    },
-    async saveSearchSelection(primaryProvider, fallbackProvider) {
-      const context = scopeContext(this)
-      const { data } = await api.put('/integrations/search', {
-        primaryProvider,
-        fallbackProvider
-      }, scopeConfig(context.scope))
-      if (!contextIsCurrent(this, context)) return null
-      this.search = data
-      return data
     },
     async testSearch(id) {
       const scope = this.scope

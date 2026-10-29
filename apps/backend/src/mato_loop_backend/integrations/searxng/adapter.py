@@ -37,4 +37,5 @@ SEARXNG_ADAPTER = IntegrationAdapterDefinition(
     adapter_type="searxng",
     config_model=SearxngConfig,
     contribution_factory=_contributions,
+    instance_only=True,
 )

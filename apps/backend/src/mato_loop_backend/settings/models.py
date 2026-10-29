@@ -910,23 +910,18 @@ class WebSearchToolSettings(BaseModel):
         max_length=100,
         validation_alias=AliasChoices("primary_provider", "primaryProvider"),
     )
-    fallback_provider: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=100,
-        validation_alias=AliasChoices("fallback_provider", "fallbackProvider"),
-    )
 
-    @field_validator("primary_provider", "fallback_provider", mode="before")
+    @field_validator("primary_provider", mode="before")
     @classmethod
     def migrate_duckduckgo_provider(cls, value: Any) -> Any:
         return "no_key" if value == "duckduckgo" else value
 
-    @model_validator(mode="after")
-    def providers_must_differ(self) -> WebSearchToolSettings:
-        if self.fallback_provider == self.primary_provider:
-            raise ValueError("fallback_provider must differ from primary_provider")
-        return self
+
+class WebFetchToolSettings(WebSearchToolSettings):
+    primary_provider: str = Field(
+        default="builtin", min_length=1, max_length=100,
+        validation_alias=AliasChoices("primary_provider", "primaryProvider"),
+    )
 
 
 class MediaToolSettings(BaseModel):
@@ -1284,6 +1279,7 @@ class IntegrationSettingsBase(SettingsDocument):
 class IntegrationSettings(IntegrationSettingsBase):
     settings_key = "integrations"
     _agent_profile_excluded_ids: frozenset[str] = PrivateAttr(default=frozenset())
+    webfetch_integration_id: UUID | None = None
 
     adapter_availability: dict[str, IntegrationAdapterAvailability] = Field(
         default_factory=dict
@@ -1332,6 +1328,12 @@ class IntegrationSettings(IntegrationSettingsBase):
         return self
 
     def availability_for(self, adapter_type: str) -> IntegrationAdapterAvailability:
+        if adapter_type in {"jina", "searxng"}:
+            return (
+                IntegrationAdapterAvailability.DISABLED
+                if self.adapter_availability.get(adapter_type) == IntegrationAdapterAvailability.DISABLED
+                else IntegrationAdapterAvailability.INSTANCE_ONLY
+            )
         return self.adapter_availability.get(
             adapter_type,
             IntegrationAdapterAvailability.INSTANCE_ONLY
@@ -1594,3 +1596,7 @@ class UserPreferences(SettingsDocument):
     dark_mode: bool = False
     session_drawer_open: bool = True
     default_execution_agent_id: UUID | None = None
+    preferred_language: str | None = Field(
+        default=None, min_length=2, max_length=35,
+        pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$",
+    )

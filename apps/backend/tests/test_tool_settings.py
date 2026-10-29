@@ -9,13 +9,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.tool_settings import (
     MediaTimeoutRequest,
+    ToolConfigurationRequest,
     get_tool_availability,
     get_tool_configuration,
     tool_configuration_payload,
+    update_tool_configuration,
 )
 from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
 from mato_loop_backend.settings import (
     AgentProfilePermissions,
+    IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
     ToolExecutionPolicy,
@@ -50,6 +53,24 @@ def test_legacy_duckduckgo_provider_is_migrated_to_no_key_search() -> None:
     )
 
     assert settings.web_search.primary_provider == "no_key"
+
+
+async def test_web_provider_defaults_are_saved_through_tool_configuration(monkeypatch):
+    tools = ToolSettings()
+    reader = IntegrationInstance(name="Reader", integration_type="webfetch", adapter_type="jina", config={"base_url": "https://reader.test"})
+    search = IntegrationInstance(name="Search", integration_type="search", adapter_type="searxng", config={"base_url": "https://search.test"})
+    integrations = IntegrationSettings(instances=[reader, search])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kwargs: integrations if model is IntegrationSettings else tools))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    request = {key: {} for key in (
+        "toolAvailability", "generateImage", "editImage", "generateSpeech",
+        "generateAudio", "transcribeAudio", "analyzeVideo",
+    )}
+    request.update(webSearch={"primaryProvider": f"searxng:{search.id}"}, webfetch={"primaryProvider": f"jina:{reader.id}"})
+
+    result = await update_tool_configuration(ToolConfigurationRequest.model_validate(request), SimpleNamespace(is_admin=True), _db())
+
+    assert (result["webSearch"], result["webfetch"]) == (request["webSearch"], request["webfetch"])
 
 
 @pytest.mark.parametrize("user_agent", [
@@ -489,7 +510,7 @@ def test_agent_profile_can_override_web_capability(capability, policy) -> None:
 
 async def test_get_tool_configuration_returns_defaults(monkeypatch) -> None:
     settings = ToolSettings()
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kwargs: settings if model is ToolSettings else IntegrationSettings()))
 
     result = await get_tool_configuration(
         SimpleNamespace(is_admin=True), _db()

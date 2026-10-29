@@ -15,18 +15,16 @@ from mato_loop_backend.settings.models import IntegrationInstance
 _RECOVERY_ENGINES = "bing,mojeek,presearch"
 
 
-def _http_error_code(status_code: int) -> tuple[str, bool]:
+def _http_error_code(status_code: int) -> str:
     if status_code in {401, 403}:
-        return "integration.authenticationFailed", False
+        return "integration.authenticationFailed"
     if status_code == 404:
-        return "integration.endpointNotFound", False
-    if status_code == 408:
-        return "integration.unavailable", True
+        return "integration.endpointNotFound"
     if status_code == 429:
-        return "integration.rateLimited", True
-    if status_code >= 500:
-        return "integration.unavailable", True
-    return "integration.requestFailed", False
+        return "integration.rateLimited"
+    if status_code == 408 or status_code >= 500:
+        return "integration.unavailable"
+    return "integration.requestFailed"
 
 
 async def search_with_provider(
@@ -51,8 +49,7 @@ async def search_with_provider(
             headers={"Accept-Encoding": "identity"},
         ) as response:
             if response.status_code >= 400:
-                code, transient = _http_error_code(response.status_code)
-                raise SearchIntegrationError(code, transient=transient)
+                raise SearchIntegrationError(_http_error_code(response.status_code))
             if response.headers.get("Content-Encoding", "identity").lower() not in {
                 "",
                 "identity",
@@ -101,7 +98,7 @@ async def search_with_provider(
     except SearchIntegrationError:
         raise
     except httpx.HTTPError as exc:
-        raise SearchIntegrationError("integration.unavailable", transient=True) from exc
+        raise SearchIntegrationError("integration.unavailable") from exc
     if not results and unresponsive_engines:
-        raise SearchIntegrationError("integration.unavailable", transient=True)
+        raise SearchIntegrationError("integration.unavailable")
     return _compact_results(results, search_type=search_type)

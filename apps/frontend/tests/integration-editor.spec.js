@@ -49,16 +49,17 @@ function mount(render, pinia, router) {
   app.mount(root)
 }
 
-async function mountEditor(scope, create = false) {
+async function mountEditor(scope, create = false, type = 'calendar') {
   const pinia = createPinia()
   useAuthStore(pinia).isAdmin = true
   const prefix = scope === 'instance' ? 'admin' : 'settings'
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/integrations', name: `${prefix}-integrations`, component: { render: () => null } },
     { path: '/integrations/new', name: `${prefix}-integration-create`, component: Editor },
+    { path: '/admin/tools', name: 'admin-tools', component: { render: () => null } },
     { path: '/integrations/:integrationId/edit', name: `${prefix}-integration-edit`, component: Editor }
   ] })
-  await router.push(create ? { name: `${prefix}-integration-create`, query: { type: 'calendar', name: 'Neu' } } : `/integrations/${account.id}/edit`)
+  await router.push(create ? { name: `${prefix}-integration-create`, query: { type, name: 'Neu' } } : `/integrations/${account.id}/edit`)
   let page
   mount(() => h(RouterView, null, { default: ({ Component }) => Component && h(Component, { ref: (value) => { page = value?.$?.setupState } }) }), pinia, router)
   await vi.waitUntil(() => root.querySelector('form'))
@@ -119,6 +120,30 @@ it('creates a connection only after completing the page and opens its editor', a
   await fill('Passwort', 'test-password')
   button('Speichern').click()
   await vi.waitFor(() => expect(router.currentRoute.value.params.integrationId).toBe('new-calendar'))
+})
+
+it('creates an instance-wide Jina connection without requiring an API key', async () => {
+  const originalGet = api.get.getMockImplementation()
+  const readers = []
+  api.get.mockImplementation(async (url) => url === '/integrations/catalog'
+    ? { data: { adapters: [...adapters, { integrationType: 'webfetch', adapterType: 'jina', executionLocation: 'backend', availability: 'instance_only', instanceOnly: true }] } }
+    : url === '/integrations/webfetch' ? { data: { providers: readers, integrationId: null } } : originalGet(url))
+  api.post.mockImplementation(async (_url, payload) => {
+    readers.push({ id: 'reader', name: payload.name, integrationType: 'webfetch', providerType: 'jina', enabled: true, config: { baseUrl: payload.base_url } })
+    return { data: {} }
+  })
+  const { router } = await mountEditor('instance', true, 'webfetch')
+  await fill('Jina Reader-Basis-URL', 'https://jina.devmato.net')
+  await fill('Standardzeitlimit', '60')
+  ;[...root.querySelectorAll('[role="switch"]')].find(item => item.textContent.includes('Overlays standardmäßig entfernen')).click()
+  button('Cookie hinzufügen').click()
+  await nextTick()
+  await fill('Zielhost', 'www.golem.de')
+  await fill('Cookie-Name', 'consent')
+  await fill('Cookie-Wert', 'test-consent')
+  button('Speichern').click()
+  await vi.waitFor(() => expect(router.currentRoute.value.params.integrationId).toBe('reader'))
+  expect(api.post).toHaveBeenCalledWith('/integrations/webfetch/providers', { name: 'Neu', base_url: 'https://jina.devmato.net', api_key: null, enabled: true, timeout_seconds: 60, remove_overlay: true, cookies: [{ domain: 'www.golem.de', name: 'consent', value: 'test-consent' }] })
 })
 
 it('retains a failed save and allows cancelling navigation with an unsaved draft', async () => {

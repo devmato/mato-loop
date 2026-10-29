@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import mato_loop_backend.api.integration_access as api_integration_access
 import mato_loop_backend.api.integration_resources as api_integration_resources
 import mato_loop_backend.api.routes.integrations as api_routes_integrations
 import mato_loop_backend.integrations.bookstack.adapter as integrations_bookstack_adapter
@@ -35,7 +34,6 @@ from mato_loop_backend.api.routes.integrations import (
     update_calendar_integration,
     update_integration_access,
     update_search_integration,
-    update_search_selection,
     visible_instance_integrations,
 )
 from mato_loop_backend.db.session import get_db_session
@@ -66,8 +64,6 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     UserIntegrationSettings,
-    UserToolSettings,
-    WebSearchToolSettings,
 )
 from mato_loop_backend.tools.actions import ToolAction
 from mato_loop_backend.tools.catalog import tool_registry
@@ -244,6 +240,24 @@ def test_integration_catalog_requires_authentication(monkeypatch) -> None:
     load.assert_not_awaited()
 
 
+@pytest.mark.parametrize(("method", "path", "payload"), [
+    ("GET", "/webfetch", None),
+    ("POST", "/webfetch/providers", {"name": "Reader", "base_url": "https://reader.test"}),
+    ("PUT", f"/webfetch/providers/{uuid4()}", {"name": "Reader", "base_url": "https://reader.test"}),
+    ("DELETE", f"/webfetch/providers/{uuid4()}", None),
+    ("POST", f"/webfetch/providers/{uuid4()}/test", None),
+])
+def test_jina_management_is_admin_only_and_never_personal(monkeypatch, method, path, payload):
+    db = AsyncMock(spec=AsyncSession)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=IntegrationSettings()))
+    user = UserAccount(id=uuid4(), username="test", password_hash="hash", is_admin=False, is_active=True)
+    with TestClient(_catalog_app(db, user)) as client:
+        assert client.request(method, "/api/integrations" + path, json=payload).status_code == 403
+        user.is_admin = True
+        response = client.request(method, "/api/integrations" + path, json=payload, params={"scope": "personal"})
+        assert response.json()["error"]["code"] == "integration.personalAdapterDisabled"
+
+
 def test_integration_catalog_read_and_admin_update(monkeypatch) -> None:
     db = AsyncMock(spec=AsyncSession)
     settings = IntegrationSettings(
@@ -356,7 +370,7 @@ async def test_disabled_adapter_blocks_create_but_allows_delete(
     user = SimpleNamespace(id=uuid4(), is_admin=scope == "instance")
     db = AsyncMock(spec=AsyncSession)
 
-    with pytest.raises(ApiError, match="integration.adapterDisabled"):
+    with pytest.raises(ApiError, match="integration.adapterDisabled" if scope == "instance" else "integration.personalAdapterDisabled"):
         await create_search_integration(
             _request(), db, scope=scope, user=user
         )
@@ -938,63 +952,14 @@ async def test_non_caldav_default_resources_are_unsupported(monkeypatch) -> None
     assert exc_info.value.code == "integration.resourcePoliciesUnsupported"
 
 
-async def test_personal_search_selection_uses_effective_provider_options(
-    monkeypatch,
-) -> None:
-    owner_id = uuid4()
-    personal_integration = _searxng()
-    personal_integrations = UserIntegrationSettings(instances=[personal_integration])
-    effective_integrations = IntegrationSettings(instances=[personal_integration])
-    tools = UserToolSettings()
-    save = AsyncMock()
-    monkeypatch.setattr(
-        api_integration_access,
-        "_load_scoped_integrations",
-        AsyncMock(return_value=(personal_integrations, owner_id)),
+def test_search_management_never_allows_personal_connections_for_admins(monkeypatch):
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=IntegrationSettings()))
+    user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True, is_active=True)
+    response = TestClient(_catalog_app(AsyncMock(spec=AsyncSession), user)).post(
+        "/api/integrations/search/providers?scope=personal",
+        json=_request().model_dump(mode="json"),
     )
-    monkeypatch.setattr(
-        api_routes_integrations,
-        "load_effective_integrations",
-        AsyncMock(return_value=effective_integrations),
-    )
-    monkeypatch.setattr(
-        api_routes_integrations,
-        "_load_tools",
-        AsyncMock(return_value=tools),
-    )
-    monkeypatch.setattr(SettingsStore, "save", save)
-    db = AsyncMock(spec=AsyncSession)
-    provider_key = f"searxng:{personal_integration.id}"
-
-    result = await update_search_selection(
-        WebSearchToolSettings(
-            primary_provider=provider_key,
-            fallback_provider="no_key",
-        ),
-        db,
-        scope="personal",
-        user=SimpleNamespace(id=owner_id, is_admin=False),
-    )
-
-    assert result["primaryProvider"] == provider_key
-    assert result["fallbackProvider"] == "no_key"
-    assert {option["value"] for option in result["providerOptions"]} == {
-        "no_key",
-        provider_key,
-    }
-    assert tools.web_search.primary_provider == provider_key
-    save.assert_awaited_once_with(db, tools, user_id=owner_id)
-    db.commit.assert_awaited_once()
-
-    with pytest.raises(ApiError) as unavailable:
-        await update_search_selection(
-            WebSearchToolSettings(primary_provider=f"searxng:{uuid4()}"),
-            db,
-            scope="personal",
-            user=SimpleNamespace(id=owner_id, is_admin=False),
-        )
-    assert unavailable.value.code == "integration.providerUnavailable"
-    assert unavailable.value.field == "primary_provider"
+    assert response.json()["error"]["code"] == "integration.personalAdapterDisabled"
 
 
 def test_search_snippet_preserves_escaped_technical_syntax() -> None:
@@ -1076,7 +1041,7 @@ async def test_no_key_provider_supports_image_search(monkeypatch) -> None:
     ]
 
 
-async def test_searxng_reports_unresponsive_engines_as_transient_failure(
+async def test_searxng_reports_unresponsive_engines_as_unavailable(
     monkeypatch,
 ) -> None:
     response = _StreamResponse(
@@ -1097,7 +1062,6 @@ async def test_searxng_reports_unresponsive_engines_as_transient_failure(
         await searxng_client.search_with_provider(_searxng(), "MatoLoop")
 
     assert exc_info.value.code == "integration.unavailable"
-    assert exc_info.value.transient is True
 
 
 async def test_searxng_retries_unresponsive_default_engines(monkeypatch) -> None:
@@ -1210,10 +1174,8 @@ async def test_searxng_rejects_compressed_responses(monkeypatch) -> None:
     assert client.stream.call_args.kwargs["headers"] == {"Accept-Encoding": "identity"}
 
 
-async def test_search_deadline_includes_fallback(monkeypatch) -> None:
-    async def execute(_settings, provider, _query, **_kwargs):
-        if provider == "no_key":
-            raise SearchIntegrationError("integration.unavailable", transient=True)
+async def test_search_deadline_includes_provider_request(monkeypatch) -> None:
+    async def execute(_settings, _provider, _query, **_kwargs):
         await search_module.asyncio.sleep(1)
         return "[]"
 
@@ -1225,14 +1187,12 @@ async def test_search_deadline_includes_fallback(monkeypatch) -> None:
             IntegrationSettings(),
             "query",
             provider="no_key",
-            fallback_provider="fallback",
         )
 
     assert exc_info.value.code == "integration.unavailable"
-    assert exc_info.value.transient is True
 
 
-async def test_search_integration_crud_restores_no_key_default(monkeypatch) -> None:
+async def test_search_integration_crud_keeps_explicit_provider_selection(monkeypatch) -> None:
     settings = IntegrationSettings()
     tools = ToolSettings()
     db = AsyncMock(spec=AsyncSession)
@@ -1254,16 +1214,15 @@ async def test_search_integration_crud_restores_no_key_default(monkeypatch) -> N
         integration_id, _request(name="Privat", enabled=False), db
     )
     assert updated["providers"][0]["name"] == "Privat"
-    assert tools.web_search.primary_provider == "no_key"
-    assert tools.web_search.fallback_provider is None
+    assert tools.web_search.primary_provider == f"searxng:{integration_id}"
 
     await delete_search_integration(integration_id, db)
     assert settings.instances == []
     assert db.commit.await_count == 3
 
 
-async def test_deleting_selected_fallback_removes_it_from_tool_settings(monkeypatch) -> None:
-    integration = _searxng(name="Fallback")
+async def test_legacy_fallback_does_not_change_primary_selection(monkeypatch) -> None:
+    integration = _searxng()
     settings = IntegrationSettings(instances=[integration])
     tools = ToolSettings.model_validate(
         {
@@ -1285,9 +1244,8 @@ async def test_deleting_selected_fallback_removes_it_from_tool_settings(monkeypa
     await delete_search_integration(integration.id, db)
 
     assert tools.web_search.primary_provider == "no_key"
-    assert tools.web_search.fallback_provider is None
     assert not settings.instances
-    assert any(call.args[1] is tools for call in save.await_args_list)
+    assert not any(call.args[1] is tools for call in save.await_args_list)
 
 
 async def test_changing_connection_clears_its_resource_policies(monkeypatch) -> None:
@@ -1317,64 +1275,20 @@ async def test_changing_connection_clears_its_resource_policies(monkeypatch) -> 
     assert not integration.permissions.public_permissions.resource_policies
 
 
-async def test_search_uses_fallback_only_for_temporary_errors(monkeypatch) -> None:
-    fallback = _searxng(name="Fallback")
-    settings = IntegrationSettings(instances=[fallback])
+async def test_search_does_not_switch_provider_on_failure(monkeypatch) -> None:
     execute = AsyncMock(
-        side_effect=[
-            SearchIntegrationError("integration.rateLimited", transient=True),
-            "[]",
-        ]
+        side_effect=SearchIntegrationError("integration.rateLimited")
     )
     monkeypatch.setattr(search_module, "search_with_key", execute)
 
-    result = await search_web(
-        settings,
-        "query",
-        search_type="images",
-        provider="no_key",
-        fallback_provider=f"searxng:{fallback.id}",
-    )
-
-    assert result == "[]"
-    assert [call.args[1] for call in execute.await_args_list] == [
-        "no_key",
-        f"searxng:{fallback.id}",
-    ]
-    assert [call.kwargs["search_type"] for call in execute.await_args_list] == [
-        "images",
-        "images",
-    ]
-
-
-async def test_search_does_not_fallback_for_permanent_errors(monkeypatch) -> None:
-    execute = AsyncMock(
-        side_effect=SearchIntegrationError("integration.authenticationFailed")
-    )
-    monkeypatch.setattr(search_module, "search_with_key", execute)
-
-    with pytest.raises(SearchIntegrationError) as exc_info:
+    with pytest.raises(SearchIntegrationError):
         await search_web(
             IntegrationSettings(),
             "query",
             provider="no_key",
-            fallback_provider=f"searxng:{uuid4()}",
         )
 
-    assert exc_info.value.code == "integration.authenticationFailed"
     execute.assert_awaited_once()
-
-
-async def test_search_rejects_identical_fallback() -> None:
-    with pytest.raises(SearchIntegrationError) as exc_info:
-        await search_web(
-            IntegrationSettings(),
-            "query",
-            provider="no_key",
-            fallback_provider="no_key",
-        )
-
-    assert exc_info.value.code == "tool.invalidArguments"
 
 
 def _calendar_request(

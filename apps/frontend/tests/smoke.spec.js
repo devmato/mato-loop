@@ -42,6 +42,7 @@ describe('MatoLoop frontend scaffold', () => {
 
     expect(routeNames).toEqual(['chat', undefined, 'personal-variables', 'archive', 'settings', 'admin'])
     expect(settingsRoute.children.map((route) => route.name)).toEqual([
+      'settings-general',
       'settings-personalization',
       'settings-providers',
       'settings-model-defaults',

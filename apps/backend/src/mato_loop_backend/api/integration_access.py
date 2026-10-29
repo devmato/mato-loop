@@ -50,6 +50,9 @@ async def _load_scoped_integrations(
         return settings, None
     if user is None:
         raise ApiError(401, "auth.notAuthenticated")
+    adapter = next((item for item in integration_adapters() if item.adapter_type == adapter_type), None)
+    if adapter is not None and adapter.instance_only:
+        raise ApiError(409, "integration.personalAdapterDisabled")
     instance = await SettingsStore.load(db, IntegrationSettings)
     availability = (
         instance.availability_for(adapter_type) if adapter_type is not None else None

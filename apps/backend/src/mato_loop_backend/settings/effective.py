@@ -82,7 +82,6 @@ _INTEGRATION_TOOL_FIELDS = (
     "resource_labels",
     "default_calendar",
     "default_task_list",
-    "web_search",
 )
 
 
@@ -235,6 +234,9 @@ async def load_effective_integrations(
         for item in personal_instances
     ) else False
     for item in personal_instances:
+        adapter = integration_adapter(item.integration_type, item.adapter_type)
+        if adapter is not None and adapter.instance_only:
+            continue
         if (
             instance.availability_for(item.adapter_type)
             != IntegrationAdapterAvailability.FULL

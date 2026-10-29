@@ -417,7 +417,7 @@ async def transcribe_audio(
 ) -> str:
     data = {"model": model, "response_format": "json"}
     if language is not None:
-        data["language"] = language
+        data["language"] = language.partition("-")[0].lower()
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream(

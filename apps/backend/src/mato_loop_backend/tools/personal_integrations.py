@@ -38,12 +38,10 @@ from mato_loop_backend.integrations.opencode.adapter import (
 from mato_loop_backend.integrations.opencode.client import OpenCodeError
 from mato_loop_backend.integrations.openscad.service import OpenScadIntegrationService
 from mato_loop_backend.integrations.registry import integration_adapter
-from mato_loop_backend.integrations.search import search_provider_options
 from mato_loop_backend.integrations.searxng.service import SearchIntegrationService
 from mato_loop_backend.integrations.service import (
     IntegrationSettingsError,
     _load_tools,
-    save_search_selection,
 )
 from mato_loop_backend.integrations.sonobin.adapter import sonobin_base_url
 from mato_loop_backend.integrations.sonobin.service import SonoBinIntegrationService
@@ -55,8 +53,6 @@ from mato_loop_backend.settings import (
     IntegrationSettings,
     SettingsStore,
     UserIntegrationSettings,
-    WebSearchToolSettings,
-    load_effective_integrations,
 )
 from mato_loop_backend.tools.arguments import PersonalSettingsArguments
 from mato_loop_backend.tools.context import ToolContext
@@ -190,40 +186,6 @@ async def _settings(context: ToolContext) -> tuple[IntegrationSettings, UserInte
     return global_settings, personal
 
 
-async def _search_selection(
-    arguments: PersonalSettingsArguments, context: ToolContext,
-    authorize: Callable[..., Awaitable[ToolResult | None]],
-) -> ToolResult:
-    if arguments.integration_id is not None:
-        return ToolResult.error("tool.invalidArguments")
-    action = arguments.action
-    changes = arguments.changes or {}
-    if set(changes) - {"primary_provider", "fallback_provider"}:
-        return ToolResult.error("tool.invalidArguments")
-    denied = await authorize(context, action, "integrations", fields=tuple(sorted(changes)), changes=changes)
-    if denied:
-        return denied
-    available = await load_effective_integrations(context.db, context.session.user_id)
-    options = sorted({str(option["value"]) for option in search_provider_options(available)})
-    tools = await _load_tools(context.db, context.session.user_id, for_update=action == "update")
-    if action == "update":
-        try:
-            choice = WebSearchToolSettings.model_validate({**tools.web_search.model_dump(), **changes})
-        except ValidationError:
-            return ToolResult.error("tool.invalidArguments")
-        try:
-            await save_search_selection(
-                context.db, context.session.user_id, choice, available, tools
-            )
-        except IntegrationSettingsError as exc:
-            return ToolResult.error(exc.code, field=exc.field)
-    return ToolResult.json({
-        "primaryProvider": tools.web_search.primary_provider,
-        "fallbackProvider": tools.web_search.fallback_provider,
-        "availableProviders": options,
-    })
-
-
 async def _caldav_defaults(
     arguments: PersonalSettingsArguments, context: ToolContext,
     authorize: Callable[..., Awaitable[ToolResult | None]],
@@ -277,7 +239,7 @@ async def manage_integrations(
     authorize: Callable[..., Awaitable[ToolResult | None]],
 ) -> ToolResult:
     if arguments.adapter_type == "search_selection":
-        return await _search_selection(arguments, context, authorize)
+        return ToolResult.error("integration.personalAdapterDisabled")
     if arguments.adapter_type == "caldav_defaults":
         return await _caldav_defaults(arguments, context, authorize)
     action = arguments.action

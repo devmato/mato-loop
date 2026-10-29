@@ -221,7 +221,7 @@ Beim Update werden frühere Profilzuordnungen einmalig bereinigt:
 
 ## SearXNG integrieren
 
-Erstellen Sie SearXNG-Verbindungen unter **Integrationen > Verwaltung** und wählen Sie Primär-/Fallback-Suche unter **Einstellungen** auf derselben Seite. Der persönliche oder administrative Bereich bestimmt den Geltungsbereich. Aktivieren Sie am SearXNG-Server die benötigte JSON-Schnittstelle und testen Sie die Verbindung.
+Erstellen Sie globale SearXNG-Verbindungen unter **Administration > Integrationen > Verwaltung**. Den Anbieter wählen Sie unter **Administration > Tools > Einstellungen > Websuche**; die Verbindung enthält einen Link dorthin. Persönliche Suchverbindungen und persönliche Anbieterwahl sind nicht mehr möglich, auch nicht für Administratoren. Bestehende persönliche Werte bleiben gespeichert, werden aber nicht mehr verwendet und nicht automatisch global gemacht. Aktivieren Sie am SearXNG-Server die benötigte JSON-Schnittstelle und testen Sie die Verbindung.
 
 Die eingebaute Suche ohne API-Schlüssel ist keine Integration und steht unabhängig von SearXNG zur Verfügung.
 
@@ -293,9 +293,29 @@ CAD-Rendering zählt als **Schreiben** und benötigt unter den ausgelieferten Gr
 
 ## Webfetch konfigurieren
 
+Unter **Administration > Integrationen** können Sie eine globale **Webabruf**-Verbindung mit **Jina Reader** anlegen. Geben Sie die Basis-URL Ihrer Reader-Instanz (oder `https://r.jina.ai`) und bei Bedarf einen API-Schlüssel an. Unter **Administration > Tools > Einstellungen > Webabrufe und Downloads** wählen Sie **Eingebaut** oder eine Jina-Verbindung als einzigen Anbieter. Die Verbindung enthält einen Link dorthin. Persönliche Jina-Verbindungen und persönliche Anbieterwahl gibt es nicht.
+
+Bei Fehlern wechselt MatoLoop nicht automatisch zu einem anderen Anbieter. Alte Fallback-Werte werden ignoriert, ohne den bisherigen Primäranbieter zu ändern. Direkte Abrufe haben standardmäßig 30 Sekunden Gesamtzeit; Jina 90 Sekunden, davon 10 Sekunden Puffer. Eine ausdrücklich angegebene Tool-Zeitgrenze überschreibt die Gesamtzeit.
+
+In der Jina-Verbindung können Sie das Standardzeitlimit und die Overlay-Entfernung
+vorgeben. Die Sprache stammt aus den persönlichen **Einstellungen > Grundeinstellungen**.
+Optional können Sie Cookies mit Zielhost, Name und Wert hinterlegen. Sie werden
+verschlüsselt gespeichert, nur für den exakten HTTPS-Zielhost übergeben und niemals
+wieder im Klartext angezeigt. Neue Cookie-Einträge ersetzen nach Bestätigung alle
+gespeicherten Cookies; ohne neue Angaben bleiben sie erhalten. API-Schlüssel und
+Cookies können unabhängig voneinander entfernt werden.
+
+Passende Cookies erzwingen einen frischen Browser-Abruf. `engine=curl` ist dafür
+nicht zulässig. Die Reader-Instanz erhält die Cookies und muss deren Browser-Grenzen
+einhalten. Alle berechtigten Nutzer der globalen Verbindung können sie verwenden:
+Speichern Sie hier keine persönlichen Login-Sitzungen. MatoLoop beschafft keine
+Cookies und klickt nicht automatisch auf Zustimmungsschaltflächen.
+
+Jina ruft die angegebene URL selbst ab, einschließlich JavaScript, Weiterleitungen und unterstützter Dokumente/Bilder. Dabei erhält der Dienst die vollständige URL; MatoLoops lokale Adressprüfung und DNS-Bindung gelten nicht für Jinas eigene Abrufe. Die maximale Antwortgröße begrenzt das Reader-Ergebnis. Originaldownloads, Untertitel, Dateiimports und ausdrücklich angeforderte PDF-Seitenbilder bleiben beim direkten Abruf. Jinas Bildauswertung liefert Reader-Inhalt, nicht automatisch Originalbilder als Anhänge.
+
 Die gemeinsamen Einstellungen **Nur öffentliche Zieladressen zulassen**, **User-Agent** und **Maximale Antwortgröße** stehen unter **Administration > Tools > Einstellungen > Webabrufe und Downloads**. Sie gelten für Webseitenabrufe, Dateidownloads und Untertitelabrufe sowie URL-Imports über denselben Abrufweg, beispielsweise bei BookStack-Anhängen. Shell, Computer-Browser, Websuchdienste und konfigurierte Integrationsverbindungen haben eigene Zugriffsregeln. Vorgaben sind öffentliche Zieladressen, User-Agent `MatoLoop/1.0` und 64 MiB.
 
-Webfetch verwendet HTTP mit einem browserähnlichen Verbindungsprofil, ohne JavaScript auszuführen. Die bisherigen JavaScript-Schalter und Hostlisten entfallen. Ein Computer ist nicht erforderlich. Jede Weiterleitung wird separat autorisiert und geprüft; die aktive Adressbeschränkung kann nicht durch eine Freigabe umgangen werden. Abschalten erlaubt jedes vom Backend erreichbare HTTP(S)-Ziel. Große Ergebnisse bleiben hinter einem abrufbaren Ergebnisverweis vollständig gespeichert.
+Der eingebaute Webfetch-Anbieter verwendet HTTP mit einem browserähnlichen Verbindungsprofil, ohne JavaScript auszuführen. Ein Computer ist nicht erforderlich. Beim direkten Abruf wird jede Weiterleitung separat autorisiert und geprüft; die aktive Adressbeschränkung kann nicht durch eine Freigabe umgangen werden. Abschalten erlaubt jedes vom Backend erreichbare HTTP(S)-Ziel. Große Ergebnisse bleiben hinter einem abrufbaren Ergebnisverweis vollständig gespeichert.
 
 Das Recht **Webseiten abrufen** wird im Agentenprofil für private und öffentliche Modelle getrennt gespeichert. Technische Verfügbarkeit und die aktivierte Beschränkung auf öffentliche Adressen können durch kein Profil und keine Freigabe überstimmt werden.
 

@@ -183,6 +183,8 @@ class WebFetchResult:
     images: tuple[WebFetchImage, ...] = ()
     page_count: int | None = None
     unavailable_pages: tuple[int, ...] = ()
+    links: tuple[tuple[str, str], ...] = ()
+    image_links: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

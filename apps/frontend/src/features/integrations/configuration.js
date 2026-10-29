@@ -1,5 +1,6 @@
 export const integrationTypes = [
   { label: 'Websuche', value: 'search' },
+  { label: 'Webabruf', value: 'webfetch' },
   { label: 'Kalender & Aufgaben', value: 'calendar' },
   { label: 'Mail', value: 'mail' },
   { label: 'Support', value: 'support' },
@@ -14,6 +15,7 @@ export const integrationTypes = [
 
 export const providerDefaults = {
   search: { provider: 'searxng', label: 'SearXNG', placeholder: 'https://search.example.com' },
+  webfetch: { provider: 'jina', label: 'Jina Reader', placeholder: 'https://r.jina.ai' },
   calendar: { provider: 'caldav', label: 'CalDAV', placeholder: 'https://calendar.example.com' },
   mail: { provider: 'imap_smtp', label: 'IMAP/SMTP', placeholder: '' },
   support: { provider: 'tbs-desk', label: 'tbs.Desk', placeholder: 'http://192.168.1.30:9000' },

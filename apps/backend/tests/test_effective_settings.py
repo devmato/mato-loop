@@ -83,7 +83,7 @@ def test_integration_settings_normalizes_legacy_availability() -> None:
         partially_allowed.availability_for("openscad")
         == IntegrationAdapterAvailability.FULL
     )
-    assert set(disabled.model_dump()) == {"instances", "adapter_availability"}
+    assert set(disabled.model_dump()) == {"instances", "adapter_availability", "webfetch_integration_id"}
 
 
 @pytest.mark.parametrize("model_trust_enabled", [True, False])
@@ -165,7 +165,10 @@ async def test_effective_integrations_adds_only_allowed_personal_instances(monke
     instance = IntegrationSettings(
         instances=[global_item], adapter_availability={"bookstack": "instance_only"}
     )
-    personal = UserIntegrationSettings(instances=[allowed, blocked])
+    personal = UserIntegrationSettings(instances=[allowed, blocked, IntegrationInstance(
+        name="Personal Reader", integration_type="webfetch", adapter_type="jina",
+        config={"base_url": "https://reader.test"},
+    )])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
     monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
     db = AsyncMock(spec=AsyncSession)
@@ -285,7 +288,7 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_access_l
     assert effective.web_access.user_agent == "Instance Agent"
     assert effective.web_access.max_response_mib == 7
     assert effective.web_access.public_addresses_only is False
-    assert effective.web_search.primary_provider == "searxng:personal"
+    assert effective.web_search.primary_provider == "no_key"
     assert effective.default_calendar == personal.default_calendar
     assert effective.resource_labels == personal.resource_labels
 
@@ -334,7 +337,7 @@ def test_personal_integration_tool_settings_do_not_snapshot_policies() -> None:
     personal = personal_integration_tool_settings(instance)
 
     assert set(personal.model_dump()) == {"resource_labels", "default_calendar", "default_task_list", "web_search"}
-    assert personal.web_search == instance.web_search
+    assert personal.web_search.primary_provider == "no_key"
 
 
 async def test_scoped_integration_management_enforces_admin_and_personal_gates(monkeypatch) -> None:

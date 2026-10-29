@@ -27,7 +27,7 @@ from mato_loop_backend.models import AgentRun, ChatSession, Message, UserAccount
 from mato_loop_backend.providers import azure_speech, lemonade
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import MediaService, TranscriptionResult
-from mato_loop_backend.settings import InstanceLimits, SettingsStore, ToolSettings
+from mato_loop_backend.settings import InstanceLimits, SettingsStore, ToolSettings, UserPreferences
 
 
 def wav_bytes() -> bytes:
@@ -318,20 +318,23 @@ async def test_common_voice_transcription_preserves_persisted_audio_and_is_idemp
 
 
 @pytest.mark.parametrize("adapter", [lemonade, azure_speech])
-async def test_transcription_releases_model_lookup_transaction_before_provider_io(monkeypatch, adapter) -> None:
+@pytest.mark.parametrize(("explicit", "preferred"), [(None, None), (None, "de-DE"), ("en-US", "de-DE")])
+async def test_transcription_releases_model_lookup_transaction_before_provider_io(monkeypatch, adapter, explicit, preferred) -> None:
     db = AsyncMock(spec=AsyncSession)
     resolved = SimpleNamespace(
         base_url="http://media", api_key=None, model=SimpleNamespace(model_id="stt"),
         provider=SimpleNamespace(adapter_type="azure-speech" if adapter is azure_speech else "lemonade"),
     )
     monkeypatch.setattr(MediaService, "resolve_model", AsyncMock(return_value=resolved))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=UserPreferences(preferred_language=preferred)))
 
     async def transcribe(**_kwargs):
         db.commit.assert_awaited_once()
+        assert _kwargs["language"] == (explicit or preferred)
         return "Spoken text"
 
     monkeypatch.setattr(adapter, "transcribe_audio", transcribe)
-    result = await MediaService.transcribe_audio(db, audio=wav_bytes(), user_id=uuid4())
+    result = await MediaService.transcribe_audio(db, audio=wav_bytes(), language=explicit, user_id=uuid4())
     assert result.text == "Spoken text"
 
 

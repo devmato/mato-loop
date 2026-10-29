@@ -4,20 +4,23 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
 
 from mato_loop_backend.integrations.contracts import ToolContribution
+from mato_loop_backend.integrations.jina.adapter import (
+    provider_available as webfetch_provider_available,
+)
+from mato_loop_backend.integrations.jina.adapter import provider_key as webfetch_provider_key
 from mato_loop_backend.integrations.registry import (
     agent_profile_search_available,
     effective_integration_contributions,
     installed_integration_tools,
     integration_adapter,
 )
-from mato_loop_backend.integrations.search import effective_search_providers
 from mato_loop_backend.permissions.policy import PermissionDecision, PermissionRequest
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
@@ -593,6 +596,21 @@ class ToolRegistry:
         definitions, sources, prompt_fragments = self._combined_definitions(
             integration_settings
         )
+        if "webfetch" in definitions and webfetch_provider_key(integration_settings) != "builtin":
+            from mato_loop_backend.tools.arguments import JinaWebFetchArguments
+
+            definitions["webfetch"] = replace(
+                definitions["webfetch"], arguments_model=JinaWebFetchArguments,
+                description=(
+                    "Read pages and documents through Jina Reader as extracted text/Markdown or sanitized HTML, "
+                    "not guaranteed verbatim structured data or validated image attachments. "
+                    "Use download_file for original files. pdf_pages uses direct PDF rendering; omit Reader options. "
+                    "Default to auto unless the user requests a mode. If JavaScript content is incomplete, "
+                    "retry at most once with engine=browser and no_cache=true. "
+                    "Use selectors only for known expected elements. "
+                    "Do not automatically retry HTTP 401/403, login, or CAPTCHA blocks. No audio/video/captions."
+                ),
+            )
         if "customize_matoloop" in definitions:
             # Keep legacy direct calls and saved policies, but offer one settings tool to models.
             definitions.pop("update_agent_identity", None)
@@ -626,6 +644,9 @@ class ToolRegistry:
                 item.name != "web_search" or tool_settings is None
                 or agent_profile_search_available(integration_settings, tool_settings)
             )
+            and (
+                item.name != "webfetch" or webfetch_provider_available(integration_settings)
+            )
         }
         if "context_search" in available_names and tool_settings is not None:
             from mato_loop_backend.tools.context_search import source_available
@@ -633,8 +654,8 @@ class ToolRegistry:
             if not any(source_available(tool_settings, source, memory_enabled=memory_enabled)
                        for source in ("memories", "sessions")):
                 available_names.remove("context_search")
-        search_providers = (
-            effective_search_providers(tool_settings, integration_settings)
+        search_provider = (
+            tool_settings.web_search.primary_provider
             if tool_settings is not None
             else None
         )
@@ -674,17 +695,16 @@ class ToolRegistry:
                 *sources[name],
                 selected_options=(
                     {
-                        "provider": search_providers[0],
-                        "fallback_provider": search_providers[1],
+                        "provider": search_provider,
                         "provider_revision": _provider_revision(
-                            search_providers[0], integration_settings
-                        ),
-                        "fallback_provider_revision": _provider_revision(
-                            search_providers[1], integration_settings
+                            search_provider, integration_settings
                         ),
                     }
-                    if name == "web_search" and search_providers is not None
-                    else {}
+                    if name == "web_search" and search_provider is not None
+                    else {
+                        "provider": webfetch_provider_key(integration_settings),
+                        "provider_revision": _provider_revision(webfetch_provider_key(integration_settings), integration_settings),
+                    } if name == "webfetch" else {}
                 ),
                 default_arguments=default_arguments(name),
             )

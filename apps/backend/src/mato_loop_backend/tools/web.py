@@ -9,14 +9,18 @@ import mato_loop_backend.permissions.resolution as permissions_resolution
 import mato_loop_backend.tools.access as tools_access
 import mato_loop_backend.web.access as web_access
 from mato_loop_backend.files.service import FileRoot
-from mato_loop_backend.integrations.search import effective_search_providers, search_web
+from mato_loop_backend.integrations.search import search_web
 from mato_loop_backend.integrations.youtube_transcript.client import (
     TranscriptError,
     canonicalize_youtube_video_url,
     fetch_youtube_transcript,
 )
-from mato_loop_backend.permissions.policy import transcript_permission, web_search_permission
+from mato_loop_backend.permissions.policy import (
+    transcript_permission,
+    web_search_permission,
+)
 from mato_loop_backend.settings import IntegrationSettings, ToolExecutionPolicy
+from mato_loop_backend.settings.language import preferred_language
 from mato_loop_backend.tools.actions import (
     _SESSION_FILES_WRITE,
     _TRANSCRIPT_ROUTING_INSTRUCTION,
@@ -26,6 +30,7 @@ from mato_loop_backend.tools.actions import (
 from mato_loop_backend.tools.arguments import (
     DownloadFileArguments,
     FetchTranscriptArguments,
+    JinaWebFetchArguments,
     WebFetchArguments,
     WebSearchArguments,
 )
@@ -49,26 +54,20 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
 
     def binding_matches(
         primary_provider: str,
-        fallback_provider: str | None,
         integrations: IntegrationSettings,
     ) -> bool:
         return not context.bound_options or (
             primary_provider == context.bound_options.get("provider")
-            and fallback_provider == context.bound_options.get("fallback_provider")
             and _provider_revision(primary_provider, integrations)
             == context.bound_options.get("provider_revision")
-            and _provider_revision(fallback_provider, integrations)
-            == context.bound_options.get("fallback_provider_revision")
         )
 
     current_integrations = await context.current_integrations()
     current_tools = await tools_access.profile_tool_settings(context)
     if not agent_profile_search_available(current_integrations, current_tools):
         return ToolResult.error("tool.unavailable")
-    primary_provider, fallback_provider = effective_search_providers(
-        current_tools, current_integrations
-    )
-    if not binding_matches(primary_provider, fallback_provider, current_integrations):
+    primary_provider = current_tools.web_search.primary_provider
+    if not binding_matches(primary_provider, current_integrations):
         return ToolResult.error("tool.unavailable")
     if not await tools_access.allow(context, web_search_permission()):
         return ToolResult.error("permission.denied")
@@ -76,17 +75,14 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
     current_tools = await tools_access.profile_tool_settings(context)
     if not agent_profile_search_available(current_integrations, current_tools):
         return ToolResult.error("tool.unavailable")
-    primary_provider, fallback_provider = effective_search_providers(
-        current_tools, current_integrations
-    )
-    if not binding_matches(primary_provider, fallback_provider, current_integrations):
+    primary_provider = current_tools.web_search.primary_provider
+    if not binding_matches(primary_provider, current_integrations):
         return ToolResult.error("tool.unavailable")
     content = await search_web(
         current_integrations,
         arguments.query,
         search_type=arguments.search_type,
         provider=primary_provider,
-        fallback_provider=fallback_provider,
     )
     try:
         items = json.loads(content)
@@ -122,29 +118,67 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
 
 
 async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolResult:
+    from mato_loop_backend.integrations.jina import client as jina_client
+    from mato_loop_backend.integrations.jina import service as jina_service
+    from mato_loop_backend.integrations.jina.adapter import (
+        JinaConfig,
+        provider_available,
+        provider_key,
+        selected_provider,
+    )
+    from mato_loop_backend.integrations.service import IntegrationSettingsError
+
     await web_access.ensure_webfetch_binding_is_current(context)
     access = context.tool_settings.web_access.model_copy(deep=True)
+    integrations = await context.current_integrations()
+    primary = provider_key(integrations)
+    revision = _provider_revision(primary, integrations)
+    if not provider_available(integrations) or (context.bound_options and (
+        context.bound_options.get("provider") != primary
+        or context.bound_options.get("provider_revision") != revision
+    )):
+        raise WebFetchError("tool.unavailable")
 
     async def authorize_url(url: str) -> None:
         await web_access.authorize_webfetch_target(context, url)
         if context.tool_settings.web_access != access:
             raise WebFetchError("tool.unavailable")
+        current = await context.current_integrations()
+        if (provider_key(current) != primary
+                or _provider_revision(primary, current) != revision
+                or not provider_available(current)):
+            raise WebFetchError("tool.unavailable")
 
-    result = await fetch_web(
-        arguments.url,
-        format=arguments.format,
-        timeout=arguments.timeout,
-        public_addresses_only=access.public_addresses_only,
-        authorize_url=authorize_url,
-        max_response_bytes=access.max_response_mib * 1024 * 1024,
-        pdf_vision_handler=context.pdf_vision_handler,
-        pdf_pages=arguments.pdf_pages,
-        user_agent=access.user_agent,
-    )
-    if not result.content.strip() and not result.images:
-        return ToolResult.error(
-            "webfetch.emptyResponse", params={"statusCode": result.status_code}
+    provider = None if arguments.pdf_pages else selected_provider(integrations)
+    if provider is not None:
+        url = canonicalize_url(arguments.url, preserve_fragment=True)
+        await authorize_url(url)
+        try:
+            secrets = await jina_service.credentials(context.db, provider)
+        except IntegrationSettingsError as exc:
+            raise WebFetchError(exc.code) from exc
+        options = arguments.model_dump(exclude=WebFetchArguments.model_fields.keys()) if isinstance(arguments, JinaWebFetchArguments) else {}
+        result = await jina_client.fetch(
+            JinaConfig.model_validate(provider.config), url, api_key=secrets.api_key,
+            cookies=secrets.cookies, locale=await preferred_language(context.db, context.session.user_id),
+            format=arguments.format, timeout=arguments.timeout,
+            max_response_bytes=access.max_response_mib * 1024 * 1024,
+            user_agent=access.user_agent, **options,
         )
+    else:
+        result = await fetch_web(
+            arguments.url,
+            format=arguments.format,
+            timeout=arguments.timeout or 30,
+            public_addresses_only=access.public_addresses_only,
+            authorize_url=authorize_url,
+            max_response_bytes=access.max_response_mib * 1024 * 1024,
+            pdf_vision_handler=context.pdf_vision_handler,
+            pdf_pages=arguments.pdf_pages,
+            user_agent=access.user_agent,
+        )
+    if not result.content.strip() and not result.images:
+        raise WebFetchError("webfetch.emptyResponse", params={"statusCode": result.status_code})
     canonical_source_url = canonicalize_url(result.final_url, preserve_fragment=True)
     source = {
         "sourceId": evidence_source_id(canonical_source_url),
@@ -176,6 +210,8 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
         "contentType": result.content_type,
         "outputFormat": result.output_format,
         "content": result.content,
+        **({"links": dict(result.links)} if result.links else {}),
+        **({"imageLinks": dict(result.image_links)} if result.image_links else {}),
         "attachments": [
             {
                 "filename": image.filename,

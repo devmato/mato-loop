@@ -653,6 +653,10 @@ class MediaService:
         if not isinstance(audio, bytes) or not audio or len(audio) > lemonade.MAX_AUDIO_BYTES:
             raise ProviderError("Invalid audio input", code="provider.configurationInvalid")
         language = _optional_language(language)
+        if language is None:
+            from mato_loop_backend.settings.language import preferred_language
+
+            language = await preferred_language(db, user_id)
         resolved = await cls.resolve_model(
             db,
             ModelCapability.AUDIO_TRANSCRIPTION,

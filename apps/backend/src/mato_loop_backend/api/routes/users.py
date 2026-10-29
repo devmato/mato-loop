@@ -36,6 +36,7 @@ from mato_loop_backend.security import (
     revoke_login_sessions,
     verify_password,
 )
+from mato_loop_backend.settings import SettingsStore, UserPreferences
 
 router = APIRouter(prefix="/users")
 logger = logging.getLogger(__name__)
@@ -74,6 +75,37 @@ class PasswordChangeRequest(BaseModel):
 
     current_password: str = Field(min_length=1, max_length=1024)
     new_password: str = Field(min_length=10, max_length=1024)
+
+
+class UserPreferencesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preferred_language: str | None = Field(
+        default=None, alias="preferredLanguage", min_length=2, max_length=35,
+        pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$",
+    )
+
+
+@router.get("/me/preferences")
+async def get_user_preferences(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings = await SettingsStore.load(db, UserPreferences, user_id=user.id)
+    return {"preferredLanguage": settings.preferred_language}
+
+
+@router.put("/me/preferences")
+async def update_user_preferences(
+    payload: UserPreferencesRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings = await SettingsStore.load(db, UserPreferences, user_id=user.id, for_update=True)
+    settings.preferred_language = payload.preferred_language
+    await SettingsStore.save(db, settings, user_id=user.id)
+    await db.commit()
+    return {"preferredLanguage": settings.preferred_language}
 
 
 def _payload(user: UserAccount) -> dict[str, str | bool]:

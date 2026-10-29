@@ -20,7 +20,7 @@ import mato_loop_backend.api.integration_access as api_integration_access
 import mato_loop_backend.api.integration_resources as api_integration_resources
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.integration_access import IntegrationSettingsDocument, SettingsApiScope
-from mato_loop_backend.api.integration_resources import ToolSettingsDocument, logger
+from mato_loop_backend.api.integration_resources import logger
 from mato_loop_backend.api.permission_settings import _load_profile_access
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution import ExecutionClient, ExecutionClientError
@@ -48,6 +48,9 @@ from mato_loop_backend.integrations.caldav.service import (
 from mato_loop_backend.integrations.caldav.service import (
     caldav_defaults_payload as _default_resources_payload,
 )
+from mato_loop_backend.integrations.jina import client as jina_client
+from mato_loop_backend.integrations.jina import service as jina_service
+from mato_loop_backend.integrations.jina.adapter import JinaConfig, JinaCookie, JinaOptions
 from mato_loop_backend.integrations.mail.adapter import (
     MAIL_CREDENTIAL_KIND,
     MailConfig,
@@ -82,17 +85,12 @@ from mato_loop_backend.integrations.registry import (
     integration_adapters,
     validate_integration,
 )
-from mato_loop_backend.integrations.search import (
-    SearchIntegrationError,
-    effective_search_providers,
-    search_provider_options,
-)
+from mato_loop_backend.integrations.search import SearchIntegrationError
 from mato_loop_backend.integrations.searxng.client import search_with_provider
 from mato_loop_backend.integrations.searxng.service import SearchIntegrationService
 from mato_loop_backend.integrations.service import (
     IntegrationSettingsError,
     _load_tools,
-    save_search_selection,
 )
 from mato_loop_backend.integrations.sonobin.adapter import sonobin_base_url
 from mato_loop_backend.integrations.sonobin.service import SonoBinIntegrationService
@@ -105,8 +103,6 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolSettings,
     UserIntegrationSettings,
-    WebSearchToolSettings,
-    load_effective_integrations,
     load_effective_tools,
 )
 from mato_loop_backend.settings.effective import (
@@ -121,6 +117,7 @@ from mato_loop_backend.settings.models import (
     TrustLevel,
 )
 from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.web.fetch import WebFetchError
 
 router = APIRouter(prefix="/integrations", dependencies=[Depends(require_user)])
 
@@ -137,6 +134,13 @@ class SearchIntegrationRequest(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     base_url: HttpUrl
     enabled: bool = True
+
+
+class JinaIntegrationRequest(JinaOptions):
+    name: str = Field(min_length=1, max_length=160)
+    api_key: str | None = Field(default=None, max_length=10_000)
+    enabled: bool = True
+    cookies: list[JinaCookie] | None = Field(default=None, max_length=50)
 
 
 class CalendarIntegrationRequest(BaseModel):
@@ -383,6 +387,7 @@ def _catalog_item(adapter, settings: IntegrationSettings) -> dict:
         "executionLocation": adapter.execution_location,
         "availability": settings.availability_for(adapter.adapter_type).value,
         **({"personalOnly": True} if adapter.personal_only else {}),
+        **({"instanceOnly": True} if adapter.instance_only else {}),
     }
 
 
@@ -392,6 +397,7 @@ def _personal_settings_payload(settings: IntegrationSettings) -> dict:
         for adapter in integration_adapters()
         if settings.availability_for(adapter.adapter_type)
         == IntegrationAdapterAvailability.FULL
+        and not adapter.instance_only
     )
     return {"enabled": bool(allowed), "allowedAdapterTypes": allowed}
 
@@ -404,6 +410,10 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
         "providerType": provider.adapter_type,
         "enabled": provider.enabled,
         "hasCredential": provider.credential_id is not None,
+        **({
+            "hasCookies": bool(provider.config.get("cookie_domains")),
+            "hasApiKey": provider.config.get("has_api_key", provider.credential_id is not None),
+        } if provider.adapter_type == "jina" else {}),
         "config": (
             {
                 "imapHost": provider.config.get("imap_host"),
@@ -421,6 +431,11 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
                 if provider.adapter_type == "sonobin" else (
                     provider.config.get("base_url") or provider.config.get("endpoint")
                 ),
+                **({
+                    "timeoutSeconds": provider.config.get("timeout_seconds", 90),
+                    "removeOverlay": provider.config.get("remove_overlay", False),
+                    "cookieDomains": provider.config.get("cookie_domains", []),
+                } if provider.adapter_type == "jina" else {}),
                 **(
                     {"username": provider.config.get("username")}
                     if "username" in provider.config
@@ -431,15 +446,11 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
     }
 
 
-def search_settings_payload(
-    settings: IntegrationSettingsDocument,
-    tools: ToolSettingsDocument | None = None,
-    provider_settings: IntegrationSettings | None = None,
-) -> dict:
+def search_settings_payload(settings: IntegrationSettingsDocument) -> dict:
     providers = [
         instance for instance in settings.instances if instance.integration_type == "search"
     ]
-    payload = {
+    return {
         **(
             {
                 "personalIntegrationsEnabled": _personal_settings_payload(settings)[
@@ -458,17 +469,6 @@ def search_settings_payload(
         "unavailableReason": None,
         "providers": [_provider_payload(provider) for provider in providers],
     }
-    if tools is not None:
-        available_settings = provider_settings or settings
-        primary, fallback = effective_search_providers(tools, available_settings)
-        payload.update(
-            {
-                "primaryProvider": primary,
-                "fallbackProvider": fallback,
-                "providerOptions": search_provider_options(available_settings),
-            }
-        )
-    return payload
 
 
 def calendar_settings_payload(settings: IntegrationSettings) -> dict:
@@ -693,6 +693,8 @@ async def update_integration_catalog(
     if adapter is None or not integration_adapter_type_registered(adapter_type):
         raise ApiError(409, "integration.providerUnsupported")
     if (
+        adapter.instance_only and payload.availability == IntegrationAdapterAvailability.FULL
+    ) or (
         (adapter.execution_location == "agent" or adapter.personal_only)
         and payload.availability == IntegrationAdapterAvailability.INSTANCE_ONLY
     ):
@@ -798,43 +800,99 @@ async def set_integration_enabled(
     return {"id": str(integration_id), "enabled": payload.enabled}
 
 
+def webfetch_settings_payload(settings: IntegrationSettings) -> dict:
+    return {
+        "providers": [_provider_payload(item) for item in settings.instances
+                      if item.integration_type == "webfetch" and item.adapter_type == "jina"],
+    }
+
+
+@router.get("/webfetch")
+async def get_webfetch_integrations(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    _admin: Annotated[UserAccount, Depends(require_admin)],
+    scope: SettingsApiScope = "instance",
+) -> dict:
+    settings, _ = await api_integration_access._load_scoped_integrations(db, scope, _admin)
+    if scope != "instance":
+        raise ApiError(409, "integration.personalAdapterDisabled")
+    return webfetch_settings_payload(settings)
+
+
+@router.post("/webfetch/providers", status_code=status.HTTP_201_CREATED)
+async def create_jina_integration(
+    payload: JinaIntegrationRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    _admin: Annotated[UserAccount, Depends(require_admin)],
+    scope: SettingsApiScope = "instance",
+) -> dict:
+    await api_integration_access._load_scoped_integrations(db, scope, _admin, adapter_type="jina", mutation=True)
+    try:
+        settings = await jina_service.JinaIntegrationService.save(db, None, **payload.model_dump(mode="json"))
+    except IntegrationSettingsError as exc:
+        raise ApiError(409, exc.code, field=exc.field) from exc
+    return webfetch_settings_payload(settings)
+
+
+@router.put("/webfetch/providers/{integration_id}")
+async def update_jina_integration(
+    integration_id: UUID,
+    payload: JinaIntegrationRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    _admin: Annotated[UserAccount, Depends(require_admin)],
+    scope: SettingsApiScope = "instance",
+) -> dict:
+    await api_integration_access._load_scoped_integrations(db, scope, _admin, adapter_type="jina", mutation=True)
+    try:
+        settings = await jina_service.JinaIntegrationService.save(db, integration_id, **payload.model_dump(mode="json"))
+    except IntegrationSettingsError as exc:
+        raise ApiError(404 if exc.code == "integration.notFound" else 409, exc.code, field=exc.field) from exc
+    return webfetch_settings_payload(settings)
+
+
+@router.delete("/webfetch/providers/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_jina_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    _admin: Annotated[UserAccount, Depends(require_admin)],
+    scope: SettingsApiScope = "instance",
+) -> None:
+    if scope != "instance":
+        raise ApiError(409, "integration.personalAdapterDisabled")
+    try:
+        await jina_service.JinaIntegrationService.delete(db, integration_id)
+    except IntegrationSettingsError as exc:
+        raise ApiError(404, exc.code) from exc
+
+
+@router.post("/webfetch/providers/{integration_id}/test")
+async def test_jina_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    _admin: Annotated[UserAccount, Depends(require_admin)],
+    scope: SettingsApiScope = "instance",
+) -> dict:
+    settings, _ = await api_integration_access._load_scoped_integrations(db, scope, _admin, adapter_type="jina")
+    try:
+        instance = jina_service.find(settings, integration_id)
+        secrets = await jina_service.credentials(db, instance)
+        await jina_client.fetch(
+            JinaConfig.model_validate(instance.config), "https://example.com/",
+            api_key=secrets.api_key, max_response_bytes=1024 * 1024,
+        )
+    except (IntegrationSettingsError, WebFetchError) as exc:
+        raise ApiError(502, exc.code) from exc
+    return {"ok": True}
+
+
 @router.get("/search")
 async def get_search_integrations(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings, owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
-    tools = await _load_tools(db, owner_id)
-    available_settings = (
-        await load_effective_integrations(db, owner_id)
-        if owner_id is not None
-        else settings
-    )
-    return search_settings_payload(settings, tools, available_settings)
-
-
-@router.put("/search")
-async def update_search_selection(
-    payload: WebSearchToolSettings,
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    scope: SettingsApiScope = "instance",
-    user: Annotated[UserAccount | None, Depends(require_user)] = None,
-) -> dict:
-    settings, owner_id = await api_integration_access._load_scoped_integrations(
-        db, scope, user, for_update=True, mutation=True
-    )
-    available_settings = (
-        await load_effective_integrations(db, owner_id)
-        if owner_id is not None
-        else settings
-    )
-    tools = await _load_tools(db, owner_id, for_update=True)
-    try:
-        await save_search_selection(db, owner_id, payload, available_settings, tools)
-    except IntegrationSettingsError as exc:
-        raise ApiError(409, exc.code, field=exc.field) from exc
-    return search_settings_payload(settings, tools, available_settings)
+    settings, _ = await api_integration_access._load_scoped_integrations(db, scope, user)
+    return search_settings_payload(settings)
 
 
 @router.get("/openscad")

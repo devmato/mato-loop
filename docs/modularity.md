@@ -79,7 +79,7 @@ root-level adapter file. `client.py`, `service.py`, and other modules belong in
 that same package when needed. Transport reuse across products is explicit:
 SonoBin uses the bounded MCP client and service without presenting itself as
 an MCP connector. The root `search.py` coordinates no-key search, SearXNG and
-fallback selection; SearXNG's configuration and HTTP client stay in `searxng/`.
+provider selection; SearXNG's configuration and HTTP client stay in `searxng/`.
 The unregistered YouTube transcript helper has its own package too. API routes,
 frontend components, tool names, permissions, and persisted adapter IDs do not
 move with Python modules.

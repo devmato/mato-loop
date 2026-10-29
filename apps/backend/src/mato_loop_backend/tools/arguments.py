@@ -600,7 +600,10 @@ class WebSearchArguments(ToolArguments):
 class WebFetchArguments(ToolArguments):
     url: str = Field(min_length=1, max_length=1_200)
     format: Literal["markdown", "text", "html"] = "markdown"
-    timeout: int = Field(default=30, ge=1, le=120)
+    timeout: int | None = Field(
+        default=None, ge=1, le=120,
+        description="Total timeout in seconds. Omit for the configured provider default.",
+    )
     pdf_pages: list[Annotated[int, Field(ge=1)]] = Field(
         default_factory=list,
         max_length=8,
@@ -613,6 +616,25 @@ class WebFetchArguments(ToolArguments):
     @classmethod
     def normalize_pdf_pages(cls, value: list[int]) -> list[int]:
         return sorted(set(value))
+
+
+class JinaWebFetchArguments(WebFetchArguments):
+    engine: Literal["auto", "browser", "curl"] = Field(
+        default="auto", description="Browser renders JavaScript, not automatic consent/login. Stored cookies require browser; auto selects it, curl is rejected for those targets.",
+    )
+    remove_overlay: bool | None = Field(default=None, description="Remove overlays; omit for the connection default.")
+    no_cache: bool = Field(default=False, description="Bypass Reader's existing cache for fresh content.")
+    target_selector: str | None = Field(default=None, min_length=1, max_length=1000, pattern=r"^[^\x00-\x1f\x7f]+$", description="CSS selector for the content to extract; also waits for it.")
+    wait_for_selector: str | None = Field(default=None, min_length=1, max_length=1000, pattern=r"^[^\x00-\x1f\x7f]+$", description="CSS selector to wait for before extraction.")
+    remove_selector: str | None = Field(default=None, min_length=1, max_length=1000, pattern=r"^[^\x00-\x1f\x7f]+$", description="CSS selector for elements to exclude.")
+    with_links_summary: bool = Field(default=False, description="Include the page's link overview.")
+    with_images_summary: bool = Field(default=False, description="Include image URLs, not image attachments or generated descriptions.")
+
+    @model_validator(mode="after")
+    def pdf_pages_use_direct_fetch(self) -> JinaWebFetchArguments:
+        if self.pdf_pages and self.model_fields_set - WebFetchArguments.model_fields.keys():
+            raise ValueError("Reader options cannot be combined with direct PDF page rendering")
+        return self
 
 
 class DownloadFileArguments(ToolArguments):

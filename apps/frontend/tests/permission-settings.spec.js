@@ -16,6 +16,7 @@ import IntegrationPage from '../src/features/integrations/IntegrationAccessPage.
 import IntegrationPermissionEditor from '../src/features/integrations/IntegrationPermissionEditor.vue'
 import ProfileIntegrationDefault from '../src/features/integrations/ProfileIntegrationDefault.vue'
 import GeneralPage from '../src/features/settings/GeneralSettingsPage.vue'
+import UserGeneralPage from '../src/features/settings/UserGeneralSettingsPage.vue'
 import { api } from 'src/boot/axios'
 import { useAuthStore } from '../src/stores/auth'
 import { useIntegrationStore } from '../src/stores/integrations'
@@ -42,7 +43,7 @@ async function mount(Page, props, path, name, pinia = createPinia()) {
   app.use(pinia).use(router).use(Quasar, quasarOptions)
   app.config.globalProperties.$q.notify = vi.fn()
   app.mount(root)
-  return { page: () => page, pinia }
+  return { page: () => page, pinia, router }
 }
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks() })
 
@@ -72,6 +73,19 @@ it('saves the public address and agent updates and links to provider and tool se
   await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/general-settings', { publicBaseUrl: null, agentAutoUpdateEnabled: false }))
 })
 
+it('saves a personal language without changing instance settings', async () => {
+  api.get.mockResolvedValue({ data: { preferredLanguage: null } })
+  api.put.mockResolvedValue({ data: { preferredLanguage: 'de-DE' } })
+  await mount(UserGeneralPage, {}, '/tools', 'settings-tools')
+  const control = await vi.waitUntil(() => root.querySelector('[role="combobox"]:not([disabled])'))
+  control.click()
+  const german = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.textContent.includes('Deutsch')))
+  german.click()
+  await vi.waitUntil(() => !root.querySelector('button').disabled)
+  root.querySelector('button').click()
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/users/me/preferences', { preferredLanguage: 'de-DE' }))
+})
+
 it.each([true, false])('saves the base behavior while retaining visible global overrides (model distinction: %s)', async (modelTrustEnabled) => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   const catalog = [{ id: 'processes', label: 'Prozesse', tools: ['Shell', 'Terminal'].map(label => ({ name: label, label, actions: [action('shell.write')] })) }]
@@ -80,6 +94,8 @@ it.each([true, false])('saves the base behavior while retaining visible global o
     ['ask_delete', 'Automatisch außer Löschen'], ['auto_all', 'Vollautomatisch']
   ].map(([value, label]) => ({ value, label, baseline: [{ category: 'read', label: 'Lesen', policy: 'ask' }], additionalPermissions: value === 'balanced' ? ['Session-Dateien lesen, bearbeiten und organisieren'] : [], additionalConfirmations: ['ask_changes', 'ask_delete', 'auto_all'].includes(value) ? ['Variablen und Secrets verwenden'] : [] }))
   let current = { ...rights(), privatePermissions: { ...branch(), policies: { 'shell.write': 'disabled' } }, publicPermissions: { ...branch(), policies: { 'shell.write': 'auto' } }, personalSettingsEnabled: false, groups: [], privateGroups: catalog, publicGroups: catalog, shellPrefixes: { read: [], write: [] }, webAccess: { userAgent: 'MatoLoop/1.0', publicAddressesOnly: true }, toolPermissionPresets: { private: 'ask_changes', public: 'balanced' }, presetOptions }
+  current.webfetch = { primaryProvider: 'builtin' }
+  current.webfetchProviderOptions = [{ value: 'builtin', name: 'Eingebaut' }, { value: 'jina:reader', name: 'Reader' }]
   const chosen = { private: 'ask_delete', ...(modelTrustEnabled ? { public: 'balanced' } : {}) }
   api.get.mockImplementation(async url => ({ data: url === '/agent-profiles' ? { agents: [], effectiveAgents: [] } : current }))
   api.put.mockImplementation(async (_url, payload) => {
@@ -107,6 +123,7 @@ it.each([true, false])('saves the base behavior while retaining visible global o
   document.querySelector('.q-dialog [aria-label="Dialog schließen"]').click()
   await vi.waitUntil(() => !document.querySelector('.q-dialog'))
   if (modelTrustEnabled) await choose('Öffentlich', 'Ausgewogen')
+  page().form.configuration.webfetch.primaryProvider = 'jina:reader'
   ;[...root.querySelectorAll('[role="switch"]')].find(item => item.textContent.includes('Nur öffentliche Zieladressen zulassen')).click()
   for (const [label, value] of [['User-Agent', 'Shared/2.0'], ['Maximale Antwortgröße', '7']]) {
     const input = [...root.querySelectorAll('.q-field')].find(field => field.querySelector('.q-field__label')?.textContent === label).querySelector('input')
@@ -114,7 +131,7 @@ it.each([true, false])('saves the base behavior while retaining visible global o
     input.dispatchEvent(new Event('input', { bubbles: true }))
   }
   root.querySelector('button').click()
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/tools/configuration', expect.objectContaining({ toolPermissionPresets: chosen, webAccess: { userAgent: 'Shared/2.0', maxResponseMiB: 7, publicAddressesOnly: false } })))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/tools/configuration', expect.objectContaining({ toolPermissionPresets: chosen, webAccess: { userAgent: 'Shared/2.0', maxResponseMiB: 7, publicAddressesOnly: false }, webfetch: { primaryProvider: 'jina:reader' } })))
   const gate = await vi.waitUntil(() => root.querySelector('[aria-label="Tool-Rechte für persönliche Agentenprofile anpassen erlauben"]:not(.disabled)'))
   gate.click()
   await vi.waitUntil(() => !root.querySelector('button').disabled)
@@ -275,6 +292,18 @@ it('retains the profile across tabs and removes only its own availability overri
   await vi.waitFor(() => expect(page().payload().toolAvailability).toEqual({}))
   await page().selectSection('management')
   expect([page().selectedId, page().payload().shellPrefixes]).toEqual([ownId, { read: [['git', 'status']], write: [] }])
+})
+
+it('loads global web providers when navigating back from profile tool settings', async () => {
+  api.get.mockImplementation(async url => ({ data: url === '/agent-profiles'
+    ? { agents: [{ id: ownId, name: 'Eigener Agent', scope: 'instance' }] }
+    : { ...rights(), groups: [], groupsByTrust: { private: [], public: [] } } }))
+  const { page, router } = await mount(ToolPage, { admin: true }, `/admin/tools?profileId=${ownId}`, 'admin-tools')
+  await vi.waitUntil(() => page().saved && !page().loading)
+
+  await router.replace({ name: 'admin-tools' })
+
+  await vi.waitFor(() => expect([...root.querySelectorAll('.q-field__label')].filter(label => label.textContent === 'Anbieter')).toHaveLength(2))
 })
 
 it('sets profile resource availability after finding an MCP tool by technical name', async () => {

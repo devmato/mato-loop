@@ -16,6 +16,7 @@ from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.public_url import resolve_public_base_url
 from mato_loop_backend.settings import (
     GeneralSettings,
+    IntegrationSettings,
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
@@ -90,7 +91,7 @@ async def test_model_trust_switch_preserves_stored_general_settings(monkeypatch,
 
 def tool_request(settings, **updates):
     payload = tool_configuration_payload(settings)
-    for key in ("groups", "privateGroups", "publicGroups", "toolPermissionPresets", "presetOptions"):
+    for key in ("groups", "privateGroups", "publicGroups", "toolPermissionPresets", "presetOptions", "webSearchProviderOptions", "webfetchProviderOptions"):
         payload.pop(key)
     return ToolConfigurationRequest.model_validate({**payload, **updates})
 
@@ -110,7 +111,7 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, tr
         tool_availability={"shell_run": False}, shell_prefixes={"read": [["git", "status"]]},
     )
     before = tools.model_dump()
-    documents = {GeneralSettings: GeneralSettings(), ToolSettings: tools}
+    documents = {GeneralSettings: GeneralSettings(), ToolSettings: tools, IntegrationSettings: IntegrationSettings()}
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: documents[kind]))
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "save", save)
@@ -137,7 +138,7 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, tr
     after[f"{trust}_permission_preset"] = before[f"{trust}_permission_preset"]
     assert after == before
     assert result["toolPermissionPresets"][trust] == preset
-    assert {type(call.args[1]) for call in save.await_args_list} == {ToolSettings}
+    assert {type(call.args[1]) for call in save.await_args_list} == {ToolSettings, IntegrationSettings}
     db.commit.assert_awaited_once()
 
     policies["filesystem.read"] = ToolExecutionPolicy.DISABLED
@@ -145,11 +146,11 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, tr
     assert result["toolPermissionPresets"][trust] == preset
     getattr(tools, f"{trust}_permissions").policies.pop("filesystem.read")
     assert tool_execution_policy(tools, "filesystem.read") == read
-    assert len(save.await_args_list) == 2
+    assert len(save.await_args_list) == 4
 
 
 async def test_disabled_model_distinction_preserves_public_tool_permissions(monkeypatch):
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: GeneralSettings(modelTrustEnabled=False) if kind is GeneralSettings else ToolSettings()))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: GeneralSettings(modelTrustEnabled=False) if kind is GeneralSettings else kind()))
     with pytest.raises(ApiError, match="validation.invalidChoice"):
         await update_tool_configuration(
             tool_request(ToolSettings(), toolPermissionPresets={"public": "auto_all"}), SimpleNamespace(is_admin=True), AsyncMock()
@@ -164,7 +165,7 @@ async def test_disabled_model_distinction_preserves_public_tool_permissions(monk
 ])
 async def test_global_tool_saves_preserve_unsubmitted_configuration(monkeypatch, availability, invalid):
     tools = ToolSettings(tool_availability={"browser": False}, web_access={"userAgent": "Shared/2.0", "maxResponseMiB": 7, "publicAddressesOnly": False})
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=tools))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: tools if kind is ToolSettings else kind()))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     request = ToolConfigurationRequest.model_validate(tool_request(tools, toolAvailability=availability).model_dump(by_alias=True, exclude={"web_access"}))
     if invalid:

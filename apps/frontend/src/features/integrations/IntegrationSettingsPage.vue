@@ -121,45 +121,10 @@
       </template>
     </q-banner>
 
-    <q-card v-if="section === 'general'" flat class="app-surface q-mb-md">
-      <q-card-section>
-        <div class="text-subtitle1 text-weight-bold">{{ admin ? 'Globale Suchprovider' : 'Persönliche Suchprovider' }}</div>
-        <div class="text-body2 app-muted q-mt-xs">
-          Primären Dienst und optionalen Fallback für die Websuche auswählen.
-        </div>
-      </q-card-section>
-      <q-separator />
-      <q-card-section class="row q-col-gutter-md">
-        <div class="col-12 col-md-6">
-          <AppSelect dense
-            :model-value="searchSelection.primaryProvider"
-            outlined
-            emit-value
-            map-options
-            label="Primärprovider"
-            :options="searchProviderOptions"
-            :loading="searchSelectionSaving"
-            :disable="integrations.loading || searchSelectionSaving"
-            @update:model-value="setPrimarySearchProvider"
-          />
-        </div>
-        <div class="col-12 col-md-6">
-          <AppSelect dense
-            :model-value="searchSelection.fallbackProvider"
-            outlined
-            emit-value
-            map-options
-            clearable
-            label="Fallback-Provider"
-            hint="Wird nur bei temporären Fehlern des Primärproviders verwendet."
-            :options="fallbackSearchProviderOptions"
-            :loading="searchSelectionSaving"
-            :disable="integrations.loading || searchSelectionSaving"
-            @update:model-value="setFallbackSearchProvider"
-          />
-        </div>
-      </q-card-section>
-    </q-card>
+    <q-banner v-if="section === 'general'" rounded class="app-surface-tonal q-mb-md">
+      Die Anbieter für Websuche und Webabrufe werden instanzweit in den allgemeinen Tool-Einstellungen festgelegt.
+      <template v-if="auth.isAdmin" #action><q-btn flat no-caps color="primary" label="Tool-Einstellungen öffnen" :to="{ name: 'admin-tools' }" /></template>
+    </q-banner>
 
     <q-card v-show="showInstances" flat class="app-surface integration-list-card">
       <q-list separator>
@@ -259,24 +224,16 @@ const executionAgents = useExecutionAgentStore()
 const dialogOpen = ref(false)
 const removingId = ref(null)
 const togglingId = ref(null)
-const searchSelectionSaving = ref(false)
 const section = ref(route.query.tab === 'management' ? 'management' : 'general')
 const instanceIntegrations = computed(() => [
+  ...integrations.webfetch.providers,
   ...integrations.search.providers, ...integrations.calendar.accounts,
   ...integrations.mail.accounts, ...integrations.knowledge.bases,
   ...integrations.recipes.accounts, ...integrations.arcane.instances, ...integrations.music.instances
 ])
 const storedPersonalIntegrations = ref([])
-const searchSelection = ref({ primaryProvider: 'no_key', fallbackProvider: null, providerOptions: [{ name: 'Websuche ohne API-Key', value: 'no_key' }] })
 const showDetailPage = computed(() => route.name !== (admin ? 'admin-integrations' : 'settings-integrations'))
 const showInstances = computed(() => section.value === 'management')
-const searchProviderOptions = computed(() => searchSelection.value.providerOptions.map((provider) => ({
-  label: provider.integrationId ? `${provider.name} · SearXNG` : provider.name,
-  value: provider.value
-})))
-const fallbackSearchProviderOptions = computed(() => searchProviderOptions.value.filter(
-  (provider) => provider.value !== searchSelection.value.primaryProvider
-))
 const personalIntegrations = computed(
   () => [
     ...instanceIntegrations.value,
@@ -306,6 +263,7 @@ const canCreateIntegration = computed(() => (
 ))
 
 function availabilityOptions(adapter) {
+  if (adapter.instanceOnly) return backendAvailabilityOptions.filter(option => option.value !== 'full')
   return adapter.executionLocation === 'agent' || adapter.personalOnly
     ? agentAvailabilityOptions
     : backendAvailabilityOptions
@@ -332,32 +290,6 @@ async function toggleIntegration(integration, enabled) {
   }
 }
 
-async function saveSearchSelection(primaryProvider, fallbackProvider) {
-  searchSelectionSaving.value = true
-  try {
-    const { data } = await api.put('/integrations/search', { primaryProvider, fallbackProvider }, { params: { scope: admin ? 'instance' : 'personal' } })
-    searchSelection.value = data
-    $q.notify({ type: 'positive', message: 'Suchprovider gespeichert' })
-  } catch {
-    // The central API interceptor displays the error as a toast.
-  } finally {
-    searchSelectionSaving.value = false
-  }
-}
-
-async function setPrimarySearchProvider(primaryProvider) {
-  await saveSearchSelection(
-    primaryProvider,
-    searchSelection.value.fallbackProvider === primaryProvider
-      ? null
-      : searchSelection.value.fallbackProvider
-  )
-}
-
-async function setFallbackSearchProvider(fallbackProvider) {
-  await saveSearchSelection(searchSelection.value.primaryProvider, fallbackProvider)
-}
-
 function openCreateDialog() {
   integrations.selectScope(admin ? 'instance' : 'personal')
   dialogOpen.value = true
@@ -365,13 +297,14 @@ function openCreateDialog() {
 
 function providerLabel(providerType) {
   return {
-    searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', 'tbs-desk': 'tbs.Desk', bookstack: 'BookStack', mealie: 'Mealie', arcane: 'Arcane', sonobin: 'SonoBin', openscad: 'OpenSCAD', opencode: 'OpenCode', browser: 'Chromium'
+    jina: 'Jina Reader', searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', 'tbs-desk': 'tbs.Desk', bookstack: 'BookStack', mealie: 'Mealie', arcane: 'Arcane', sonobin: 'SonoBin', openscad: 'OpenSCAD', opencode: 'OpenCode', browser: 'Chromium'
   }[providerType] || providerType
 }
 
 function typeLabel(integrationType) {
   return {
     search: 'Websuche',
+    webfetch: 'Webabruf',
     calendar: 'Kalender & Aufgaben',
     mail: 'E-Mail',
     support: 'Support',
@@ -422,6 +355,7 @@ async function removeIntegration(integration) {
   removingId.value = integration.id
   try {
     if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
+    else if (integration.integrationType === 'webfetch') await integrations.removeWebfetch(integration.id)
     else if (integration.integrationType === 'mail') await integrations.removeMail(integration.id)
     else if (integration.integrationType === 'support') await integrations.removeTbsDesk(integration.id)
     else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
@@ -447,7 +381,6 @@ async function reload() {
       integrations.fetchAll(),
       executionAgents.fetchAll()
     ])
-    searchSelection.value = { ...integrations.search }
     const visible = (await api.get('/integrations/visible')).data
     storedPersonalIntegrations.value = visible.filter((item) => item.scope === 'personal')
   } catch {

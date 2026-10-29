@@ -1,5 +1,9 @@
 export const settingsRoutes = [
   {
+    path: 'general', name: 'settings-general', component: () => import('./UserGeneralSettingsPage.vue'),
+    meta: { settingsLabel: 'Grundeinstellungen', settingsIcon: 'settings' }
+  },
+  {
     path: 'personalization', name: 'settings-personalization',
     component: () => import('src/features/personalization/PersonalizationSettingsPage.vue'),
     meta: { settingsLabel: 'Personalisierung', settingsIcon: 'manage_accounts' }

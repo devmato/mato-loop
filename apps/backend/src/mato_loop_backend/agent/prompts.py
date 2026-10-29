@@ -409,8 +409,8 @@ def general_system_prompt(
                 "Fetch exact pages for prices, availability, compatibility, variants, and specifications; never merge "
                 "model codes, and qualify or omit absent claims.",
                 "Reuse fetched evidence; follow toolResultReference for omitted sections when possible. "
-                "Refetch only for new or updated evidence.",
-                "Webfetch does not execute JavaScript. "
+                "Refetch only for new or updated evidence, or once with changed options to recover incomplete extraction.",
+                "Webfetch uses the configured fetch provider. "
                 "For general research, prefer another suitable source over a blocked page.",
                 "Never invent image URLs. Fetch the exact URL, prefer its attachment as research input, and "
                 "do not repeat the remote URL. Request pdf_pages for PDF layouts.",

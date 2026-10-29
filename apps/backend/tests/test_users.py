@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import users as user_routes
 from mato_loop_backend.models import Project, UserAccount
+from mato_loop_backend.settings import SettingsStore, UserPreferences
 
 
 def _user(*, admin: bool = False, active: bool = True, password_hash: str | None = "hash"):
@@ -29,6 +30,26 @@ def test_update_requires_an_actual_value() -> None:
         user_routes.UserUpdateRequest()
     with pytest.raises(ValidationError):
         user_routes.UserUpdateRequest(is_admin=None)
+
+
+async def test_language_preference_is_owner_bound_and_preserves_other_preferences(monkeypatch):
+    user = _user()
+    settings = UserPreferences(dark_mode=True)
+    load = AsyncMock(return_value=settings)
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(SettingsStore, "save", save)
+    db = AsyncMock(spec=AsyncSession)
+    result = await user_routes.update_user_preferences(user_routes.UserPreferencesRequest(preferredLanguage="de-DE"), user, db)
+    assert (result, settings.dark_mode, load.await_args.kwargs, save.await_args.kwargs) == (
+        {"preferredLanguage": "de-DE"}, True, {"user_id": user.id, "for_update": True}, {"user_id": user.id},
+    )
+
+
+@pytest.mark.parametrize("value", ["", "de_DE", "de\r\nX: 1", "x" * 36])
+def test_language_preference_rejects_invalid_tags(value):
+    with pytest.raises(ValidationError):
+        user_routes.UserPreferencesRequest(preferredLanguage=value)
 
 
 async def test_create_user_maps_duplicate_username(monkeypatch) -> None:

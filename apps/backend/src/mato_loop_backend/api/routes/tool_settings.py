@@ -13,6 +13,11 @@ from mato_loop_backend.api.permission_settings import (
     _validate_permissions,
 )
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.integrations.jina.adapter import provider_key as webfetch_provider_key
+from mato_loop_backend.integrations.jina.adapter import (
+    provider_options as webfetch_provider_options,
+)
+from mato_loop_backend.integrations.search import search_provider_options
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
@@ -21,6 +26,7 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolSettings,
     WebAccessSettings,
+    WebSearchToolSettings,
     load_effective_tools,
 )
 from mato_loop_backend.settings.models import (
@@ -30,6 +36,7 @@ from mato_loop_backend.settings.models import (
     ShellPrefixSettings,
     ToolPermissionPreset,
     TrustLevel,
+    WebFetchToolSettings,
 )
 from mato_loop_backend.tools.catalog import tool_registry
 
@@ -67,6 +74,8 @@ class ToolConfigurationRequest(BaseModel):
         default_factory=WebAccessSettings,
         validation_alias=AliasChoices("webAccess", "web_access"),
     )
+    web_search: WebSearchToolSettings = Field(default_factory=WebSearchToolSettings, alias="webSearch")
+    webfetch: WebFetchToolSettings = Field(default_factory=WebFetchToolSettings)
     generate_image: MediaTimeoutRequest = Field(
         validation_alias=AliasChoices("generateImage", "generate_image")
     )
@@ -91,9 +100,10 @@ class ToolConfigurationRequest(BaseModel):
     )
 
 
-def tool_configuration_payload(settings: ToolSettings) -> dict:
+def tool_configuration_payload(settings: ToolSettings, integrations: IntegrationSettings | None = None) -> dict:
     from mato_loop_backend.settings.tool_presets import preset_catalog
 
+    integrations = integrations or IntegrationSettings()
     defaults = settings.model_copy(deep=True)
     defaults.private_permissions = AgentProfilePermissions()
     defaults.public_permissions = AgentProfilePermissions()
@@ -113,6 +123,10 @@ def tool_configuration_payload(settings: ToolSettings) -> dict:
         "publicPermissions": _tool_permissions_payload(settings.public_permissions, tool_registry.catalog(defaults, IntegrationSettings())),
         "shellPrefixes": settings.shell_prefixes.model_dump(),
         "webAccess": settings.web_access.model_dump(mode="json", by_alias=True),
+        "webSearch": {"primaryProvider": settings.web_search.primary_provider},
+        "webfetch": {"primaryProvider": webfetch_provider_key(integrations)},
+        "webSearchProviderOptions": search_provider_options(integrations),
+        "webfetchProviderOptions": webfetch_provider_options(integrations),
         **{alias: {"timeoutSeconds": getattr(settings, field).timeout_seconds} for field, alias in MEDIA_FIELDS.items()},
         "privateGroups": tool_registry.catalog(defaults.model_copy(deep=True).select_trust(TrustLevel.PRIVATE), IntegrationSettings()),
         "publicGroups": tool_registry.catalog(defaults.model_copy(deep=True).select_trust(TrustLevel.PUBLIC), IntegrationSettings()),
@@ -144,7 +158,9 @@ async def get_tool_configuration(
 ) -> dict:
     if not user.is_admin:
         raise ApiError(403, "auth.adminRequired")
-    return tool_configuration_payload(await SettingsStore.load(db, ToolSettings))
+    return tool_configuration_payload(
+        await SettingsStore.load(db, ToolSettings), await SettingsStore.load(db, IntegrationSettings),
+    )
 
 
 @router.put("/configuration")
@@ -156,7 +172,26 @@ async def update_tool_configuration(
     if not user.is_admin:
         raise ApiError(403, "auth.adminRequired")
     general = await SettingsStore.load(db, GeneralSettings, for_update=True) if payload.tool_permission_presets else None
+    integrations = await SettingsStore.load(db, IntegrationSettings, for_update=True)
     settings = await SettingsStore.load(db, ToolSettings, for_update=True)
+    for field, options in (
+        ("web_search", search_provider_options(integrations)),
+        ("webfetch", webfetch_provider_options(integrations)),
+    ):
+        if field not in payload.model_fields_set:
+            continue
+        selection = getattr(payload, field)
+        available = {item["value"] for item in options}
+        previous = settings.web_search.primary_provider if field == "web_search" else webfetch_provider_key(integrations)
+        if selection.primary_provider not in available and selection.primary_provider != previous:
+            raise ApiError(409, "integration.providerUnavailable", field=f"{field}.primary_provider")
+        if field == "web_search":
+            settings.web_search = selection
+        else:
+            integrations.webfetch_integration_id = (
+                UUID(selection.primary_provider.removeprefix("jina:"))
+                if selection.primary_provider != "builtin" else None
+            )
     if general is not None and not general.model_trust_enabled and payload.tool_permission_presets.get(TrustLevel.PUBLIC, settings.public_permission_preset) != settings.public_permission_preset:
         raise ApiError(422, "validation.invalidChoice", field="toolPermissionPresets")
     known_tools = {
@@ -188,8 +223,10 @@ async def update_tool_configuration(
     for trust, preset in payload.tool_permission_presets.items():
         setattr(settings, f"{trust.value}_permission_preset", preset)
     await SettingsStore.save(db, settings)
+    if "webfetch" in payload.model_fields_set:
+        await SettingsStore.save(db, integrations)
     await db.commit()
-    return tool_configuration_payload(settings)
+    return tool_configuration_payload(settings, integrations)
 
 
 class ProfileToolPermissionsRequest(BaseModel):

@@ -1,4 +1,5 @@
 const fieldLabels = {
+  cookies: 'Die Cookie-Konfiguration',
   activeFile: 'Die aktive Datei',
   active_file: 'Die aktive Datei',
   analysisModelKey: 'Das Analysemodell',

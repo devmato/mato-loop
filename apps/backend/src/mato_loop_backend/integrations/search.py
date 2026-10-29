@@ -19,7 +19,6 @@ from mato_loop_backend.integrations.searxng.adapter import search_provider_key
 from mato_loop_backend.settings.models import (
     IntegrationInstance,
     IntegrationSettings,
-    ToolSettings,
 )
 from mato_loop_backend.web.evidence import evidence_source_id
 from mato_loop_backend.web.fetch import WebFetchError, canonicalize_url, normalize_source_title
@@ -31,10 +30,9 @@ SEARCH_DEADLINE_SECONDS = 35
 
 
 class SearchIntegrationError(RuntimeError):
-    def __init__(self, code: str, *, transient: bool = False) -> None:
+    def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
-        self.transient = transient
 
 
 def search_available(_settings: IntegrationSettings) -> bool:
@@ -61,34 +59,6 @@ def search_provider_options(settings: IntegrationSettings) -> list[dict[str, str
         if contribution.tool_name == "web_search" and contribution.option_name == "provider"
     )
     return options
-
-
-def effective_search_providers(
-    tool_settings: ToolSettings, integration_settings: IntegrationSettings
-) -> tuple[str, str | None]:
-    available = {
-        str(option["value"]) for option in search_provider_options(integration_settings)
-    }
-    primary = tool_settings.web_search.primary_provider
-    if primary not in available:
-        primary = "no_key"
-    fallback = tool_settings.web_search.fallback_provider
-    if fallback not in available or fallback == primary:
-        fallback = None
-    return primary, fallback
-
-
-def normalize_search_tool_settings(
-    tool_settings: ToolSettings, integration_settings: IntegrationSettings
-) -> bool:
-    primary, fallback = effective_search_providers(tool_settings, integration_settings)
-    changed = (
-        tool_settings.web_search.primary_provider != primary
-        or tool_settings.web_search.fallback_provider != fallback
-    )
-    tool_settings.web_search.primary_provider = primary
-    tool_settings.web_search.fallback_provider = fallback
-    return changed
 
 
 def search_provider(
@@ -203,7 +173,7 @@ async def search_without_api_key(
             results = await asyncio.to_thread(execute)
     except Exception as exc:
         logger.warning("No-key web search failed: %s", type(exc).__name__)
-        raise SearchIntegrationError("integration.unavailable", transient=True) from exc
+        raise SearchIntegrationError("integration.unavailable") from exc
     return _compact_results(results, search_type=search_type)
 
 
@@ -230,21 +200,11 @@ async def search_web(
     *,
     search_type: Literal["web", "images"] = "web",
     provider: str = "no_key",
-    fallback_provider: str | None = None,
 ) -> str:
-    if fallback_provider == provider:
-        raise SearchIntegrationError("tool.invalidArguments")
     try:
         async with asyncio.timeout(SEARCH_DEADLINE_SECONDS):
-            try:
-                return await search_with_key(
-                    settings, provider, query, search_type=search_type
-                )
-            except SearchIntegrationError as exc:
-                if fallback_provider is None or not exc.transient:
-                    raise
             return await search_with_key(
-                settings, fallback_provider, query, search_type=search_type
+                settings, provider, query, search_type=search_type
             )
     except TimeoutError as exc:
-        raise SearchIntegrationError("integration.unavailable", transient=True) from exc
+        raise SearchIntegrationError("integration.unavailable") from exc

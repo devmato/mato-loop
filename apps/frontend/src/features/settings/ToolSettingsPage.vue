@@ -47,17 +47,27 @@
           </div>
         </q-card-section>
       </q-card>
-      <q-card v-if="admin && section === 'general' && form.configuration.webAccess" flat class="app-surface q-mb-md">
-        <q-card-section>
-          <div class="text-subtitle1 text-weight-bold q-mb-sm">Webabrufe und Downloads</div>
-          <q-toggle v-model="form.configuration.webAccess.publicAddressesOnly" color="primary" label="Nur öffentliche Zieladressen zulassen" :disable="loading || saving" />
-          <div class="text-caption app-muted">Begrenzt Webseitenabrufe, Dateidownloads und Untertitelabrufe auf öffentliche Netzwerkadressen, auch beim URL-Import in Integrationen. Shell, Computer-Browser und Verbindungen zu konfigurierten Diensten haben eigene Zugriffsregeln.</div>
-          <div class="row q-col-gutter-md q-mt-sm">
-            <q-input v-model.trim="form.configuration.webAccess.userAgent" class="col-12 col-md-8" outlined maxlength="512" label="User-Agent" :rules="[userAgentRule]" :disable="loading || saving" />
-            <q-input v-model.number="form.configuration.webAccess.maxResponseMiB" class="col-12 col-md-4" outlined type="number" min="1" max="256" suffix="MiB" label="Maximale Antwortgröße" :rules="[responseLimitRule]" :disable="loading || saving" />
-          </div>
-        </q-card-section>
-      </q-card>
+      <template v-if="admin && section === 'general' && form.configuration.webSearch && form.configuration.webfetch">
+        <q-card v-for="provider in providerFields" :key="provider.key" flat class="app-surface q-mb-md">
+          <q-card-section>
+            <div class="text-subtitle1 text-weight-bold q-mb-sm">{{ provider.label }}</div>
+            <div class="row q-col-gutter-md">
+              <AppSelect v-model="form.configuration[provider.key].primaryProvider" class="col-12 col-md-6" dense outlined emit-value map-options label="Anbieter" :options="providerOptions(provider.key)" :disable="loading || saving" />
+            </div>
+          </q-card-section>
+          <template v-if="provider.key === 'webfetch' && form.configuration.webAccess">
+            <q-separator />
+            <q-card-section>
+              <q-toggle v-model="form.configuration.webAccess.publicAddressesOnly" color="primary" label="Nur öffentliche Zieladressen zulassen" :disable="loading || saving" />
+              <div class="text-caption app-muted">Begrenzt direkte Webseitenabrufe, Dateidownloads und Untertitelabrufe auf öffentliche Netzwerkadressen, auch beim URL-Import in Integrationen. Jina Reader, Shell, Computer-Browser und Verbindungen zu konfigurierten Diensten haben eigene Zugriffsregeln.</div>
+              <div class="row q-col-gutter-md q-mt-sm">
+                <q-input v-model.trim="form.configuration.webAccess.userAgent" class="col-12 col-md-8" outlined maxlength="512" label="User-Agent" :rules="[userAgentRule]" :disable="loading || saving" />
+                <q-input v-model.number="form.configuration.webAccess.maxResponseMiB" class="col-12 col-md-4" outlined type="number" min="1" max="256" suffix="MiB" label="Maximale Antwortgröße" :rules="[responseLimitRule]" :disable="loading || saving" />
+              </div>
+            </q-card-section>
+          </template>
+        </q-card>
+      </template>
       <PersonalSettingsGate v-if="admin && section === 'general'" v-model="form.personalSettingsEnabled" title="Tool-Rechte für persönliche Agentenprofile anpassen erlauben" description="Benutzer können Tools, Shell-Präfixe und Aktionsrechte ihrer eigenen Profile anpassen." :disabled="saving || loading" />
       <ToolConfigurationRules v-if="section === 'availability' && selectedId" :key="selectedId" v-model="form.configuration" :groups="permissionGroups.private" :inherited-shell-prefixes="inheritedShellPrefixes" :inherited-availability="inheritedAvailability" :global-availability="globalAvailability" :disabled="loading || saving || loadFailed" />
       <template v-if="section === 'availability' && !selectedId">
@@ -183,6 +193,15 @@ const presetInfo = ref(null)
 const presetDialogOpen = ref(false)
 const mediaByName = { generate_image: 'generateImage', edit_image: 'editImage', generate_speech: 'generateSpeech', generate_audio: 'generateAudio', transcribe_audio: 'transcribeAudio', analyze_video: 'analyzeVideo', analyze_audio: 'analyzeAudio' }
 const mediaFields = Object.values(mediaByName)
+const providerFields = [{ key: 'webSearch', label: 'Websuche' }, { key: 'webfetch', label: 'Webabrufe und Downloads' }]
+const webProviderOptions = ref({ webSearch: [], webfetch: [] })
+function providerOptions(field) {
+  const options = webProviderOptions.value[field].map(item => ({ label: item.name, value: item.value }))
+  for (const value of Object.values(form.configuration[field] || {})) {
+    if (value && !options.some(item => item.value === value)) options.push({ label: 'Nicht verfügbarer Anbieter', value, disable: true })
+  }
+  return options
+}
 const shellDialogOpen = ref(false)
 const shellDraft = ref({ shellCustom: true, shellRead: '', shellWrite: '' })
 const timeoutRule = value => Number.isInteger(value) && value >= 10 && value <= 3600 || '10 bis 3600 Sekunden eingeben.'
@@ -198,7 +217,11 @@ function applyShellPrefixes() {
   shellDialogOpen.value = false
 }
 const emptyPermissions = () => ({ privatePermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} }, publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} } })
-const form = reactive({ personalSettingsEnabled: false, permissions: emptyPermissions(), configuration: { toolAvailability: {}, shellPrefixes: null } })
+const form = reactive({ personalSettingsEnabled: false, permissions: emptyPermissions(), configuration: {
+  toolAvailability: {}, shellPrefixes: null,
+  webSearch: { primaryProvider: 'no_key' },
+  webfetch: { primaryProvider: 'builtin' }
+} })
 const hasOverrides = computed(() => ['privatePermissions', 'publicPermissions'].some(branch => Object.keys(form.permissions[branch].policies).length))
 const payload = () => ({
   ...form.permissions,
@@ -240,6 +263,12 @@ async function loadPermissions() {
       form.personalSettingsEnabled = data.personalSettingsEnabled
       technicalGroups.value = tools.configurationGroups
       Object.assign(form.configuration, { shellPrefixes: data.shellPrefixes || { read: [], write: [] }, webAccess: { ...tools.configurationWebAccess }, ...Object.fromEntries(mediaFields.map(field => [field, { ...tools[field] }])) })
+      form.configuration.webSearch = { primaryProvider: 'no_key', ...data.webSearch }
+      form.configuration.webfetch = { primaryProvider: 'builtin', ...data.webfetch }
+      webProviderOptions.value = {
+        webSearch: data.webSearchProviderOptions || [{ value: 'no_key', name: 'Websuche ohne API-Key' }],
+        webfetch: data.webfetchProviderOptions || [{ value: 'builtin', name: 'Eingebaut' }]
+      }
     }
     saved.value = JSON.stringify(payload())
   } catch { if (token === loadToken) loadFailed.value = true }

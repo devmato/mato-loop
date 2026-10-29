@@ -319,10 +319,7 @@ def test_profile_selection_covers_execution_builtin_and_option_tools(kind, adapt
         filtered = filter_agent_profile_integrations(settings, profile)
         assert not effective_integration_contributions(filtered).tool_options
         tools.web_search.primary_provider = "no_key"
-        tools.web_search.fallback_provider = f"searxng:{integration.id}"
-        available = tool_registry.effective(settings, tool_settings=tools).tools["web_search"]
-        assert available.selected_options["provider"] == "no_key"
-        assert available.selected_options["fallback_provider"] is None
+        assert "web_search" in tool_registry.effective(settings, tool_settings=tools).tools
 
 
 async def tool_context(monkeypatch, settings, profile, call):

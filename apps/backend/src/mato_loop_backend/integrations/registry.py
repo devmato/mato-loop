@@ -12,6 +12,7 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationContributions,
     ToolContribution,
 )
+from mato_loop_backend.integrations.jina.adapter import JINA_ADAPTER
 from mato_loop_backend.integrations.mail.adapter import MAIL_ADAPTER
 from mato_loop_backend.integrations.mcp.adapter import MCP_ADAPTER
 from mato_loop_backend.integrations.mealie.adapter import MEALIE_ADAPTER
@@ -32,12 +33,14 @@ from mato_loop_backend.tools.actions import ToolAction
 def agent_profile_search_available(
     settings: IntegrationSettings, tools: ToolSettings
 ) -> bool:
-    """Do not replace a profile-excluded primary search provider with no-key search."""
-    primary = tools.web_search.primary_provider
-    return primary.split(":", 1)[-1] not in settings._agent_profile_excluded_ids
+    from mato_loop_backend.integrations.search import search_provider_options
+
+    available = {item["value"] for item in search_provider_options(settings)}
+    return tools.web_search.primary_provider in available
 
 
 _ADAPTERS = {
+    ("webfetch", "jina"): JINA_ADAPTER,
     ("search", "searxng"): SEARXNG_ADAPTER,
     ("calendar", "caldav"): CALDAV_ADAPTER,
     ("mail", "imap_smtp"): MAIL_ADAPTER,

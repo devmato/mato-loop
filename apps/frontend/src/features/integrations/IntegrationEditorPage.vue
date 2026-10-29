@@ -23,6 +23,10 @@
       <q-form v-if="!loading && !loadFailed && !blocked" v-show="section === 'settings'" ref="formRef" :inert="saving || testing" @submit.prevent="save">
         <q-card flat class="app-surface">
         <q-card-section class="q-gutter-md">
+            <q-banner v-if="['search', 'webfetch'].includes(form.integration_type)" rounded class="app-surface-tonal">
+              Der Anbieter wird in den allgemeinen Tool-Einstellungen festgelegt.
+              <template #action><q-btn flat no-caps color="primary" label="Tool-Einstellungen öffnen" :to="{ name: 'admin-tools' }" /></template>
+            </q-banner>
             <q-input dense
               v-model="form.name"
               outlined
@@ -66,7 +70,7 @@
               />
             </template>
             <q-banner
-              v-if="['recipes', 'coding', 'infrastructure'].includes(form.integration_type) && form.base_url.trim().toLowerCase().startsWith('http://')"
+              v-if="['recipes', 'coding', 'infrastructure', 'webfetch'].includes(form.integration_type) && form.base_url.trim().toLowerCase().startsWith('http://')"
               dense
               rounded
               class="app-surface-tonal"
@@ -200,15 +204,36 @@
               :rules="isEditing ? [] : [requiredRule]"
             />
             <q-input dense
-              v-if="form.integration_type === 'infrastructure'"
+              v-if="['infrastructure', 'webfetch'].includes(form.integration_type)"
               v-model="form.apiKey"
               outlined
               type="password"
-              :label="integration?.hasCredential ? 'Neuer API-Schlüssel (optional)' : 'API-Schlüssel'"
-              hint="Unter Arcane → Einstellungen → API Keys erstellen. Für die gewünschten Umgebungen Docker-Rechte vergeben."
+              :label="hasApiKey ? 'Neuer API-Schlüssel (optional)' : 'API-Schlüssel'"
+              :hint="form.integration_type === 'webfetch' ? (hasApiKey ? 'Leer lassen, um den gespeicherten Schlüssel beizubehalten.' : 'Optional, beispielsweise für höhere Jina-Kontingente.') : 'Unter Arcane → Einstellungen → API Keys erstellen. Für die gewünschten Umgebungen Docker-Rechte vergeben.'"
+              :disable="form.integration_type === 'webfetch' && form.removeApiKey"
               lazy-rules
-              :rules="isEditing ? [] : [requiredRule]"
+              :rules="isEditing || form.integration_type === 'webfetch' ? [] : [requiredRule]"
             />
+            <q-toggle v-if="form.integration_type === 'webfetch' && hasApiKey" v-model="form.removeApiKey" color="negative" label="Gespeicherten API-Schlüssel entfernen" />
+            <template v-if="form.integration_type === 'webfetch'">
+              <q-input v-model.number="form.readerTimeout" outlined type="number" min="1" max="120" label="Standardzeitlimit" suffix="Sekunden" :rules="[value => Number.isInteger(value) && value >= 1 && value <= 120 || '1 bis 120 Sekunden eingeben.']" />
+              <q-toggle v-model="form.removeOverlay" color="primary" label="Overlays standardmäßig entfernen" />
+              <div class="text-caption app-muted">Entfernt überlagernde Elemente, erteilt aber keine Zustimmung. Sprache: persönliche Grundeinstellungen; Abrufmodus: automatisch, vom Agenten je Abruf änderbar.</div>
+              <q-separator />
+              <div class="text-subtitle2">Cookies</div>
+              <div class="text-body2 app-muted">Verschlüsselt gespeichert und nur für den exakten Zielhost über HTTPS verwendet. Die Reader-Instanz erhält diese Cookies; alle berechtigten Benutzer dieser globalen Verbindung können sie nutzen. Keine persönlichen Login-Sitzungen hinterlegen.</div>
+              <div class="text-caption app-muted">Passende Cookies verwenden den Browser-Modus ohne Cache. „Automatisch“ wählt ihn dafür; „curl“ ist mit diesen Cookies nicht verfügbar.</div>
+              <div class="text-caption app-muted">Reader kann rohe Zeichen wie +, / oder = in Cookie-Werten nicht unverändert übertragen. Solche Werte werden abgelehnt. Werte nicht selbst umkodieren.</div>
+              <div v-if="integration?.hasCookies" class="text-caption">Gespeicherte Zielhosts: {{ integration.config.cookieDomains.join(', ') }}. Werte werden nicht angezeigt. Neue Cookies ersetzen alle gespeicherten Cookies; ohne neue Angaben bleiben sie erhalten.</div>
+              <q-toggle v-if="integration?.hasCookies" v-model="form.removeCookies" color="negative" label="Gespeicherte Cookies entfernen" />
+              <div v-for="(cookie, index) in form.cookies" :key="index" class="row items-start q-col-gutter-sm">
+                <q-input v-model.trim="cookie.domain" class="col-12 col-md-4" outlined label="Zielhost" placeholder="www.golem.de" maxlength="253" :rules="[requiredRule]" :disable="form.removeCookies" />
+                <q-input v-model.trim="cookie.name" class="col-12 col-md-3" outlined label="Cookie-Name" maxlength="256" :rules="[requiredRule]" :disable="form.removeCookies" />
+                <q-input v-model="cookie.value" class="col-10 col-md-4" outlined type="password" label="Cookie-Wert" maxlength="8192" :rules="[requiredRule]" :disable="form.removeCookies" autocomplete="off" />
+                <div class="col-2 col-md-1"><q-btn flat round icon="delete_outline" aria-label="Neuen Cookie verwerfen" @click="form.cookies.splice(index, 1)" /></div>
+              </div>
+              <q-btn outline no-caps icon="add" label="Cookie hinzufügen" :disable="form.removeCookies || form.cookies.length >= 50" @click="form.cookies.push({ domain: '', name: '', value: '' })" />
+            </template>
             <q-input dense
               v-if="form.integration_type === 'music'"
               v-model="form.bearerToken"
@@ -299,7 +324,7 @@ const baseUrlLabel = computed(
 const baseUrlPlaceholder = computed(
   () => providerDefaults[form.integration_type]?.placeholder
 )
-const requiresHttps = computed(() => !['search', 'recipes', 'coding', 'support', 'infrastructure'].includes(form.integration_type))
+const requiresHttps = computed(() => !['search', 'recipes', 'coding', 'support', 'infrastructure', 'webfetch'].includes(form.integration_type))
 const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', support: 'confirmation_number', music: 'library_music', infrastructure: 'dns', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
 const securityOptions = [
   { label: 'TLS', value: 'tls' },
@@ -313,6 +338,7 @@ const executionAgentOptions = computed(() => {
   return options
 })
 const form = reactive(defaultForm())
+const hasApiKey = computed(() => form.integration_type === 'webfetch' ? integration.value?.hasApiKey ?? integration.value?.hasCredential : integration.value?.hasCredential)
 const discovering = ref(false)
 const discovery = ref(null)
 let discoveryVersion = 0
@@ -342,6 +368,11 @@ function defaultForm() {
     token_secret: '',
     token: '',
     apiKey: '',
+    removeApiKey: false,
+    readerTimeout: 90,
+    removeOverlay: false,
+    cookies: [],
+    removeCookies: false,
     bearerToken: '',
     executionAgentId: null,
     binaryPath: '/usr/bin/openscad',
@@ -497,6 +528,15 @@ async function save() {
       }
       if (integration.value) await integrations.updateSonoBin(integration.value.id, payload)
       else await integrations.createSonoBin(payload)
+    } else if (form.integration_type === 'webfetch') {
+      if (integration.value?.hasCookies && (form.removeCookies || form.cookies.length) && !await confirm('Die gespeicherten Cookies werden durch diese Angaben ersetzt. Fortfahren?', 'Cookies ersetzen?', { okLabel: 'Ersetzen', okColor: 'negative' })) return
+      const payload = {
+        name: form.name.trim(), base_url: form.base_url.trim(), api_key: form.removeApiKey ? '' : form.apiKey || null, enabled: form.enabled,
+        timeout_seconds: form.readerTimeout, remove_overlay: form.removeOverlay,
+        cookies: form.removeCookies ? [] : form.cookies.length ? form.cookies : null
+      }
+      if (integration.value) await integrations.updateWebfetch(integration.value.id, payload)
+      else await integrations.createWebfetch(payload)
     } else if (form.integration_type === 'infrastructure') {
       const payload = { name: form.name.trim(), base_url: form.base_url.trim(), api_key: form.apiKey, enabled: form.enabled }
       if (integration.value) await integrations.updateArcane(integration.value.id, payload)
@@ -573,6 +613,8 @@ function assignForm(value = null) {
     token: '',
     apiKey: '',
     bearerToken: '',
+    readerTimeout: value.config?.timeoutSeconds ?? 90,
+    removeOverlay: value.config?.removeOverlay ?? false,
     executionAgentId: value.executionAgentId
       || value.config?.executionAgentId
       || null,
@@ -585,6 +627,7 @@ function assignForm(value = null) {
     form.provider_type = providerDefaults[type]?.provider || ''
     form.name = typeof route.query.name === 'string' ? route.query.name : providerDefaults[type]?.label || ''
     if (type === 'coding') form.username = 'opencode'
+    if (type === 'webfetch') form.base_url = 'https://r.jina.ai'
   }
   saved.value = JSON.stringify(form)
   if (['openscad', 'browser'].includes(form.integration_type)) void fetchComputers()

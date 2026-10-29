@@ -2075,7 +2075,7 @@ def test_global_policy_removes_tools_requiring_a_disabled_action() -> None:
     assert "write_file" in offered
 
 
-async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
+async def test_web_search_does_not_replace_a_removed_provider(
     tmp_path, monkeypatch
 ) -> None:
     integration = IntegrationInstance(
@@ -2106,41 +2106,13 @@ async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
     monkeypatch.setattr(
         SettingsStore, "load", AsyncMock(side_effect=load_settings)
     )
-    search = AsyncMock(
-        return_value=json.dumps(
-            [
-                {
-                    "sourceId": "src-test",
-                    "title": "MatoLoop",
-                    "url": "https://example.test/source",
-                    "snippet": "Beschreibung",
-                }
-            ]
-        )
-    )
+    search = AsyncMock()
     monkeypatch.setattr(mock_tools_web, 'search_web', search)
 
     result = await effective.execute(call, context)
 
-    assert result.is_error is False
-    assert result.metadata == {
-        "resultCount": 1,
-        "evidenceUrls": ["https://example.test/source"],
-        "sources": [
-            {
-                "sourceId": "src-test",
-                "url": "https://example.test/source",
-                "kind": "search",
-                "title": "MatoLoop",
-            }
-        ],
-    }
-    assert search.await_args.kwargs == {
-        "search_type": "web",
-        "provider": "no_key",
-        "fallback_provider": None,
-    }
-    assert search.await_args.args[1] == "OpenWrt TL-MR6400 support status 2024 2025"
+    assert result.metadata["errorCode"] == "tool.unavailable"
+    search.assert_not_awaited()
 
 
 async def test_web_search_rejects_changed_bound_provider_configuration(
@@ -2915,6 +2887,10 @@ async def test_personal_integration_create_dispatches_to_owned_service(
 
     result = await tool_registry.execute(call, context)
 
+    if adapter_type == "searxng":
+        assert result.metadata["errorCode"] == "integration.personalAdapterDisabled"
+        create.assert_not_awaited()
+        return
     assert not result.is_error, result.content
     assert create.await_count == 1
     assert create.await_args.kwargs.get("owner_id", create.await_args.kwargs.get("user_id")) == context.session.user_id
@@ -2986,30 +2962,20 @@ async def test_personal_integration_delete_disabled_existing_entry(monkeypatch, 
     delete.assert_awaited_once_with(ANY, item.id, owner_id=context.session.user_id)
 
 
-async def test_personal_search_selection_rejects_unavailable_provider(monkeypatch, tmp_path) -> None:
-    from mato_loop_backend.settings import UserToolSettings
-    from mato_loop_backend.tools import personal_integrations
-
+async def test_personal_search_selection_is_not_available(monkeypatch, tmp_path) -> None:
     call = ToolCall("search-selection", "customize_matoloop", {
         "action": "update", "area": "integrations", "adapter_type": "search_selection",
         "changes": {"primary_provider": "searxng:missing"},
     })
     context = _context(tmp_path, call)
     monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
-    monkeypatch.setattr(personal_integrations, "load_effective_integrations", AsyncMock(return_value=IntegrationSettings()))
-    monkeypatch.setattr(personal_integrations, "_load_tools", AsyncMock(return_value=UserToolSettings()))
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "save", save)
 
     result = await tool_registry.execute(call, context)
 
-    assert result.metadata["errorCode"] == "integration.providerUnavailable"
+    assert result.metadata["errorCode"] == "integration.personalAdapterDisabled"
     save.assert_not_awaited()
-
-    call.arguments["changes"] = {"primary_provider": "no_key"}
-    result = await tool_registry.execute(call, context)
-    assert not result.is_error
-    assert save.await_args.kwargs["user_id"] == context.session.user_id
 
 
 async def test_personal_calendar_default_requires_discovered_owned_resource(monkeypatch, tmp_path) -> None:
@@ -5319,10 +5285,9 @@ def test_webfetch_schema_has_the_expected_contract() -> None:
     assert "verbatim text" in schema["description"]
     assert all(name in schema["description"] for name in ("JSON", "CSV", "XML", "NDJSON"))
     assert schema["parameters"]["properties"]["timeout"] == {
-        "default": 30,
-        "maximum": 120,
-        "minimum": 1,
-        "type": "integer",
+        "default": None,
+        "anyOf": [{"maximum": 120, "minimum": 1, "type": "integer"}, {"type": "null"}],
+        "description": "Total timeout in seconds. Omit for the configured provider default.",
     }
 
 

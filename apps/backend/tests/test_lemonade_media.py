@@ -152,6 +152,7 @@ async def test_transcription_sends_wav_multipart_and_reads_text(monkeypatch) -> 
         assert b"Whisper-Tiny" in request.content
         assert b'filename="audio.wav"' in request.content
         assert b"RIFFaudio" in request.content
+        assert b'name="language"\r\n\r\nde\r\n' in request.content
         return httpx.Response(200, json={"text": "Guten Morgen"})
 
     _mock_client(monkeypatch, handler)
@@ -161,7 +162,7 @@ async def test_transcription_sends_wav_multipart_and_reads_text(monkeypatch) -> 
         api_key=None,
         model="Whisper-Tiny",
         audio=b"RIFFaudio",
-        language="de",
+        language="de-DE",
     )
 
     assert text == "Guten Morgen"
