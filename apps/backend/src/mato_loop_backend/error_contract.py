@@ -125,7 +125,7 @@ _MESSAGES = {
     "personalVariable.notFound": "The personal variable was not found.",
     "personalVariable.valueInvalid": "The personal variable value is invalid.",
     "personalVariable.valueRequired": "A value is required for this change.",
-    "secret.valueRefUnavailable": "The run-local secret is unavailable or belongs to another run.",
+    "secret.valueRefUnavailable": "The protected value is no longer available. Request it again.",
     "variable.sharedTerminalUnsupported": "Personal variables are not supported in an attached terminal.",
     "session.computerRequired": "Plan and Build require a computer. Select a connected computer and working directory, then retry this request.",
     "session.computerOffline": "The selected computer is offline. Connect it or select another computer, then retry this request.",

@@ -1036,6 +1036,23 @@ CASES = (
         forbidden_tools=("question", "shell_run", "session_tool_result_read"),
     ),
     PromptCase(
+        id="rejected_credentials_refresh_existing_name",
+        kind="general",
+        user=(
+            "Melde dich an https://login.example.test an und prüfe meinen Kontostatus. "
+            "POST /login mit username/password ist dokumentiert. Der Benutzername ist korrekt; "
+            "falls die Anmeldung scheitert, frage mich nach einem neuen Passwort."
+        ),
+        tools=("question", "secret_input", "shell_run"),
+        working_directory="/home/user/project",
+        system_options={"session_environment": {name: {"valueRef": ref} for name, ref in _LOGIN_ENVIRONMENT.items()}},
+        continuation=_exchange("shell_run", {
+            "command": "python3 login.py", "environment": _LOGIN_ENVIRONMENT,
+        }, json.dumps({"exitCode": 1, "output": {"stdout": "HTTP 401: invalid password"}})),
+        expected_tool="secret_input", expected_tool_call_count=1,
+        forbidden_tools=("question", "shell_run"),
+    ),
+    PromptCase(
         id="invalid_credential_reference_repairs_named_argument",
         kind="general",
         user=f"Prüfe mit genau diesem Befehl, ob beide Login-Variablen verfügbar sind: {_LOGIN_COMMAND}",
@@ -4365,6 +4382,7 @@ _SEMANTIC_CONTRACTS = (
             "missing_shell_credentials_use_secret_input",
             "answered_credentials_continue_in_same_run",
             "expired_credentials_are_requested_again",
+            "rejected_credentials_refresh_existing_name",
             "invalid_credential_reference_repairs_named_argument",
         ),
     ),
@@ -7117,6 +7135,13 @@ def evaluate(
     if case.expected_tool in names:
         call = next(call for call in result.tool_calls if call.name == case.expected_tool)
         arguments = _validated_arguments(call)
+        if case.id == "rejected_credentials_refresh_existing_name":
+            inputs = arguments.get("inputs")
+            if not isinstance(inputs, list) or not any(
+                isinstance(item, dict) and item.get("name") == "LOGIN_PASSWORD" and item.get("refresh") is True
+                for item in inputs
+            ):
+                failures.append("secret_input must refresh LOGIN_PASSWORD")
         for key, values in case.argument_contains.items():
             actual = str(arguments.get(key, ""))
             for value in values:

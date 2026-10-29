@@ -107,7 +107,7 @@ async def collect_secret_input(
            if context.one_time_secrets.get(UUID(ref.removeprefix("run-secret:"))) is not None},
         **session_secrets.references(context.session.id),
     }
-    missing = [item for item in arguments.inputs if item.name not in known]
+    missing = [item for item in arguments.inputs if item.refresh or item.name not in known]
     if not missing:
         return ToolResult.json({
             "environment": {item.name: known[item.name] for item in arguments.inputs},
@@ -156,6 +156,14 @@ async def collect_secret_input(
         apply_run_session_settings(context.session, run)
         if context.session.preferred_execution_agent_id != administrator.agent_id:
             return ToolResult.error("permission.denied")
+    for item in missing:
+        if item.refresh:
+            reference = known.pop(item.name, None)
+            if reference is not None:
+                session_secrets.discard(context.session.id, item.name, reference)
+            run_reference = context.run_secret_refs.pop(item.name, None)
+            if run_reference is not None:
+                context.one_time_secrets.pop(UUID(run_reference.removeprefix("run-secret:")), None)
     remembered = {
         item.name: answers.answers[item.name][0]
         for item in provided
@@ -359,17 +367,16 @@ VARIABLE_WRITE = ToolDefinition(
 
 SECRET_INPUT = ToolDefinition(
             "secret_input",
-            "Ask once for all missing credentials, including usernames. Values are not returned. The user may "
-            "keep selected fields temporarily for this session; other references remain reusable throughout the "
-             "current run. Continue the requested work in this run before a final answer. "
-             "Call alone, then pass references to tools that accept protected text "
-            "parts, shell_run.environment, or the personal settings tool. "
-            "For the selected computer's administrator password, set administrator=true and masked=true "
-            "on that field, then pass its reference as sudo_password_ref to elevated tools. "
-            "Elevated tools also request missing administrator input directly; use this tool for advance or grouped input. "
-             "Submitting this field authenticates only; elevated actions require separate authorization. "
-            "Reuse the exact name/reference pairs instead of asking again. Set masked false only for values the user may see while "
-            "typing. Use customize_matoloop only for explicitly requested durable storage.",
+            "Collect usernames and secrets; return references, never values. "
+            "Reuse references by default. After rejected authentication, set refresh=true on affected fields; keep their names. "
+            "Submitting refresh invalidates old references, including skipped fields; cancellation keeps them. "
+            "References last for this run unless remembered for this session. "
+            "Call alone; continue work before answering. Pass references to protected text parts, "
+            "shell_run.environment, or customize_matoloop. Use masked=false for visible input only. "
+            "For selected-computer administrator input, set administrator=true, masked=true; "
+            "pass the reference as sudo_password_ref. Elevated tools request missing passwords directly. "
+            "Input grants no action rights. "
+            "Durable storage via customize_matoloop requires an explicit user request.",
             SecretInputArguments,
             collect_secret_input,
             group="agent",

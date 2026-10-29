@@ -124,7 +124,10 @@ export const useApprovalStore = defineStore('approvals', {
       }
     },
     async revoke(sessionId, grantId) {
-      await api.delete(`/approvals/sessions/${sessionId}/permissions/${grantId}`)
+      const resource = grantId.startsWith('session-secret:')
+        ? `secrets/${grantId.slice('session-secret:'.length)}`
+        : `permissions/${grantId}`
+      await api.delete(`/approvals/sessions/${sessionId}/${resource}`)
       this.grantRevision += 1
       this.grants = this.grants.filter((item) => item.id !== grantId)
       this.grantsLoading = false
@@ -132,7 +135,7 @@ export const useApprovalStore = defineStore('approvals', {
     async revokeAll(sessionId) {
       await api.delete(`/approvals/sessions/${sessionId}/permissions`)
       this.grantRevision += 1
-      this.grants = this.grants.filter((item) => item.sessionId !== sessionId || item.runId || item.derived || item.readOnly)
+      this.grants = this.grants.filter((item) => item.sessionId !== sessionId || item.runId || item.derived || item.readOnly || item.source === 'session_input')
       this.grantsLoading = false
     }
   }

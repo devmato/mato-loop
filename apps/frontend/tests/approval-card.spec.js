@@ -145,6 +145,22 @@ describe('approval card', () => {
     expect([derived.textContent.includes('Herkunft: Standard'), derived.querySelector('button')]).toEqual([true, null])
   })
 
+  it('deletes a remembered session value through its confirmation and secret endpoint', async () => {
+    useChatStore().current = { id: 'session-1' }
+    responses['/approvals/sessions/session-1/permissions'] = [{
+      id: 'session-secret:token', sessionId: 'session-1', source: 'session_input',
+      resourceType: 'session_secret', resourceDisplay: 'TOKEN'
+    }]
+    await mountView(() => h(SessionApp))
+    app.config.globalProperties.$q.notify = vi.fn()
+    const remove = await vi.waitUntil(() => root.querySelector('[aria-label="Session-Wert TOKEN löschen"]'))
+    remove.click()
+    await vi.waitFor(() => expect(root.querySelector('[aria-label="Session-Wert TOKEN löschen"]')).toBeNull())
+    expect([confirm.mock.calls[0][1], api.delete.mock.calls]).toEqual([
+      'Session-Wert löschen', [['/approvals/sessions/session-1/secrets/token']]
+    ])
+  })
+
   it('hides stale grant binding claims after a failed refresh on computer change', async () => {
     useChatStore().current = { id: 'session-1', preferredExecutionAgentId: 'old' }
     responses['/approvals/sessions/session-1/permissions'] = [{

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import Text
@@ -13,6 +13,7 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import (
     _permission_payload,
     all_permissions,
+    delete_session_secret,
     list_permissions,
     pending_approvals,
     revoke_permissions,
@@ -90,10 +91,35 @@ async def test_permissions_include_only_names_of_remembered_session_values(monke
         {
             "id": reference, "sessionId": str(session.id),
             "resourceType": "session_secret", "resourceDisplay": name,
-            "source": "session_input", "scope": "session", "readOnly": True,
+            "source": "session_input", "scope": "session",
         }
         for name, reference in references.items()
     ]
+
+
+@pytest.mark.parametrize("target", ["owned", "foreign_session", "foreign_secret"])
+async def test_delete_session_secret_is_owner_and_session_bound(monkeypatch, target):
+    user = UserAccount(id=uuid4())
+    session = ChatSession(id=uuid4(), user_id=user.id if target != "foreign_session" else uuid4())
+    store = SessionSecretStore()
+    own = store.put(session.id, {"TOKEN": "private token"})
+    other_id = uuid4()
+    other = store.put(other_id, {"TOKEN": "other token"})
+    monkeypatch.setattr("mato_loop_backend.api.routes.approvals.session_secrets", store)
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    reference = (other if target == "foreign_secret" else own)["TOKEN"]
+    secret_id = UUID(reference.removeprefix("session-secret:"))
+
+    if target == "owned":
+        await delete_session_secret(session.id, secret_id, user, db)
+    else:
+        with pytest.raises(ApiError):
+            await delete_session_secret(session.id, secret_id, user, db)
+
+    assert (store.references(session.id), store.references(other_id)) == (
+        {} if target == "owned" else own, other,
+    )
 
 
 async def test_pending_approval_payload_includes_request_and_source_session() -> None:

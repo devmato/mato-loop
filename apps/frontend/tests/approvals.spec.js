@@ -209,7 +209,7 @@ describe('inline approvals', () => {
       { id: 'grant-3', sessionId: 'session-2' },
       { id: 'grant-4', sessionId: 'session-1', runId: 'run-1' },
       { id: 'temporary:read', sessionId: 'session-1', derived: true },
-      { id: 'session-secret:token', sessionId: 'session-1', readOnly: true }
+      { id: 'session-secret:token', sessionId: 'session-1', source: 'session_input' }
     ]
 
     await approvals.revokeAll('session-1')
@@ -219,7 +219,7 @@ describe('inline approvals', () => {
       { id: 'grant-3', sessionId: 'session-2' },
       { id: 'grant-4', sessionId: 'session-1', runId: 'run-1' },
       { id: 'temporary:read', sessionId: 'session-1', derived: true },
-      { id: 'session-secret:token', sessionId: 'session-1', readOnly: true }
+      { id: 'session-secret:token', sessionId: 'session-1', source: 'session_input' }
     ])
   })
 

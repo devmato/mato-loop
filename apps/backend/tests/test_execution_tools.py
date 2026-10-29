@@ -7,7 +7,7 @@ from io import BytesIO
 from threading import Event
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from PIL import Image
@@ -21,7 +21,7 @@ from mato_loop_backend.agent.repository_instructions import repository_instructi
 from mato_loop_backend.agent.run_contracts import ApprovalResolution
 from mato_loop_backend.agent.run_support import _external_working_directory_policy, _tool_policy
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.session_secrets import session_secrets
+from mato_loop_backend.agent.session_secrets import SessionSecretStore, session_secrets
 from mato_loop_backend.agent.subagents import permission_snapshot
 from mato_loop_backend.execution import (
     DirectoryResult,
@@ -2241,6 +2241,40 @@ async def test_secret_references_keep_only_selected_fields_for_session(
         "secret.valueRefUnavailable"
     )
     session_secrets.clear_session(context.session.id)
+
+
+@pytest.mark.parametrize("remembered", [False, True])
+@pytest.mark.parametrize("answer", [[], ["corrected password"]])
+async def test_secret_input_refresh_replaces_or_discards_rejected_credentials(tmp_path, monkeypatch, remembered, answer):
+    store = SessionSecretStore()
+    monkeypatch.setattr(mock_tools_interaction, "session_secrets", store)
+    call = ToolCall("refresh", "secret_input", {"inputs": [{
+        "name": "PASSWORD", "label": "Password", "question": "Enter a new password", "refresh": True,
+    }]})
+    context = _context(tmp_path, call, FakeExecutionClient({}, set()))
+    old_id = uuid4()
+    if remembered:
+        reference = store.put(context.session.id, {"PASSWORD": "rejected password"})["PASSWORD"]
+        old_id = UUID(reference.removeprefix("session-secret:"))
+    else:
+        context.run_secret_refs["PASSWORD"] = f"run-secret:{old_id}"
+        context.one_time_secrets[old_id] = "rejected password"
+    context.question_handler = AsyncMock(return_value=ProtectedQuestionResolution(
+        {"PASSWORD": answer}, frozenset({"PASSWORD"}) if not remembered and answer else frozenset(),
+    ))
+
+    result = json.loads((await _tools(set()).execute(call, context)).content)
+    new_reference = result["environment"].get("PASSWORD")
+    new_value = (
+        store.resolve(context.session.id, UUID(new_reference.removeprefix("session-secret:"))) if not remembered
+        else context.one_time_secrets.get(UUID(new_reference.removeprefix("run-secret:")))
+    ) if new_reference else None
+
+    assert (
+        context.question_handler.await_count,
+        store.resolve(context.session.id, old_id), context.one_time_secrets.get(old_id),
+        new_value, result["unanswered"],
+    ) == (1, None, None, answer[0] if answer else None, [] if answer else ["PASSWORD"])
 
 
 @pytest.mark.parametrize("classification", ["read", "write"])

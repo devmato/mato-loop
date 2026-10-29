@@ -42,6 +42,16 @@ def _case(case_id: str):
     return next(case for case in CASES if case.id == case_id)
 
 
+def test_credential_refresh_must_target_the_rejected_password() -> None:
+    result = ProviderResult(tool_calls=[ToolCall("refresh", "secret_input", {"inputs": [
+        {"name": "LOGIN_PASSWORD", "label": "Password", "question": "Enter password", "refresh": False},
+        {"name": "UNRELATED_TOKEN", "label": "Token", "question": "Enter token", "refresh": True},
+    ]})])
+    assert evaluate(_case("rejected_credentials_refresh_existing_name"), result) == [
+        "secret_input must refresh LOGIN_PASSWORD"
+    ]
+
+
 def test_scoped_plan_and_child_cases_use_real_profiles_and_reject_extra_work() -> None:
     for name in (
         "plan_assessment_matches_requested_feature",
@@ -2359,10 +2369,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 138
-    assert payload["contractCount"] == 384
-    assert "Cases: 246" in report
+    assert payload["contractCount"] == 385
+    assert "Cases: 247" in report
     assert "Semantic contracts: 138" in report
-    assert "All inventory rows: 384" in report
+    assert "All inventory rows: 385" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

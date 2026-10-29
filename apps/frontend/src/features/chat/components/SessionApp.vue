@@ -95,10 +95,10 @@
                     color="negative"
                     :loading="revokingId === grant.id"
                     :disable="Boolean(revokingId)"
-                    :aria-label="`${grantDisplay(grant).label} widerrufen`"
+                    :aria-label="grant.source === 'session_input' ? `Session-Wert ${grant.resourceDisplay} löschen` : `${grantDisplay(grant).label} widerrufen`"
                     @click="revoke(grant)"
                   >
-                    <q-tooltip>Freigabe widerrufen</q-tooltip>
+                    <q-tooltip>{{ grant.source === 'session_input' ? 'Session-Wert löschen' : 'Freigabe widerrufen' }}</q-tooltip>
                   </q-btn>
                 </q-item-section>
               </q-item>
@@ -132,7 +132,7 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const revokingId = ref(null)
 const sessionGrants = computed(() => approvals.grantsForSession(chat.current?.id))
-const explicitGrants = computed(() => sessionGrants.value.filter(grant => !grant.derived && !grant.readOnly))
+const explicitGrants = computed(() => sessionGrants.value.filter(grant => !grant.derived && !grant.readOnly && grant.source !== 'session_input'))
 const grantContext = computed(() => JSON.stringify([
   chat.current?.id, chat.current?.agentProfileId, chat.current?.modelId, chat.current?.sessionProfile,
   chat.current?.preferredExecutionAgentId, chat.current?.currentDirectory
@@ -162,16 +162,19 @@ async function revoke(grant) {
   const sessionId = chat.current?.id
   if (!sessionId) return
   const display = grantDisplay(grant)
+  const sessionValue = grant.source === 'session_input'
   const accepted = await confirm(
-    `Soll die Freigabe „${display.label}“ für ${[display.value, grant.executionAgentName || grant.executionAgentId, grant.command].filter(Boolean).join(' · ')} widerrufen werden?`,
-    'Freigabe widerrufen',
-    { okLabel: 'Widerrufen', okColor: 'negative' }
+    sessionValue
+      ? `Soll der gemerkte Session-Wert „${display.value}“ gelöscht werden? Die bisherige Referenz ist danach nicht mehr verwendbar. Bereits gestartete Aktionen werden nicht rückgängig gemacht.`
+      : `Soll die Freigabe „${display.label}“ für ${[display.value, grant.executionAgentName || grant.executionAgentId, grant.command].filter(Boolean).join(' · ')} widerrufen werden?`,
+    sessionValue ? 'Session-Wert löschen' : 'Freigabe widerrufen',
+    { okLabel: sessionValue ? 'Löschen' : 'Widerrufen', okColor: 'negative' }
   )
   if (!accepted) return
   revokingId.value = grant.id
   try {
     await approvals.revoke(sessionId, grant.id)
-    $q.notify({ type: 'positive', message: 'Freigabe widerrufen' })
+    $q.notify({ type: 'positive', message: sessionValue ? 'Session-Wert gelöscht' : 'Freigabe widerrufen' })
   } finally {
     revokingId.value = null
   }

@@ -91,6 +91,9 @@ describe('API error messages', () => {
   })
 
   it('translates stable domain error codes', () => {
+    expect(apiErrorMessage({ error: { code: 'secret.valueRefUnavailable' } })).toBe(
+      'Der geschützte Wert ist nicht mehr verfügbar. Bitte erneut eingeben.'
+    )
     expect(apiErrorMessage({ error: { code: 'permission.preflightUnavailable' } })).toBe(
       'Dieser Zugriff konnte nicht vorab vorbereitet werden. Bei der Ausführung kann eine Freigabe erforderlich sein.'
     )

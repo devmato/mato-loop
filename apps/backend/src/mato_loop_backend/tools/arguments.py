@@ -541,6 +541,10 @@ class SecretInputField(ToolArguments):
         description="Optional purpose for session reuse; never include the value.",
     )
     masked: bool = True
+    refresh: bool = Field(
+        default=False,
+        description="Request a new value for this name instead of reusing a stored value. Use after rejected authentication.",
+    )
     administrator: bool = Field(
         default=False,
         description="Authenticate to the selected computer with this password input; actions require separate authorization.",

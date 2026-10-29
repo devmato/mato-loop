@@ -340,7 +340,7 @@ async def list_permissions(
         {
             "id": reference, "sessionId": str(session.id),
             "resourceType": "session_secret", "resourceDisplay": name,
-            "source": "session_input", "scope": "session", "readOnly": True,
+            "source": "session_input", "scope": "session",
         }
         for name, reference in session_secrets.references(session.id).items()
     ]
@@ -412,6 +412,29 @@ async def all_permissions(
         }
         for grant, session, source in rows
     ]
+
+
+@router.delete(
+    "/sessions/{session_id}/secrets/{secret_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_session_secret(
+    session_id: UUID,
+    secret_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> None:
+    try:
+        session = await get_owned_session(db, session_id, user.id)
+    except SessionServiceError as exc:
+        raise ApiError(exc.status_code, exc.code) from exc
+    if session is None or session.user_id != user.id:
+        raise ApiError(404, "session.notFound")
+    reference = f"session-secret:{secret_id}"
+    for name, stored_reference in session_secrets.references(session_id).items():
+        if stored_reference == reference:
+            session_secrets.discard(session_id, name, reference)
+            return
+    raise ApiError(404, "secret.valueRefUnavailable")
 
 
 @router.delete(

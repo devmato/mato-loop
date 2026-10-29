@@ -46,6 +46,13 @@ skipped questions unless requested. An empty durable-storage answer creates or u
 must send a change of direction as a normal chat message rather than entering it in a credential
 field.
 
+`secret_input` reuses existing run/session values by name unless a field sets `refresh: true`.
+After authentication rejects credentials, the model must refresh the affected fields under their
+existing names. Submitting the protected question invalidates the previous run and session
+references for refreshed fields, including skipped fields; rejection or expiry leaves them unchanged.
+New values use the user's current remember selection. Owners can also delete individual remembered
+values under Session permissions; bulk permission revocation does not remove them.
+
 Ordinary question delivery is channel-neutral. A run started from a paired messaging endpoint persists a
 versioned question envelope in that endpoint's outbox. Providers may render the envelope with
 native controls and direct-reply text input, but all interactions use the same backend state
