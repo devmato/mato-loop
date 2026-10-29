@@ -573,8 +573,9 @@ describe('voice attachment composer', () => {
     expect(sentMessages[2].options).toEqual({ interrupt: true })
   })
 
-  it('never renders a composer while a direct child session URL redirects to its parent inspector', async () => {
+  it('shows a disabled composer during loading and hides it before redirecting a child session', async () => {
     chat.outboxLoaded = true
+    chat.drafts.newSession.message = 'Entwurf einer neuen Session'
     let releaseChild
     let releaseRedirect
     const stopGuard = router.beforeEach((to) => to.query.subagent === 'session-1'
@@ -585,7 +586,8 @@ describe('voice attachment composer', () => {
         : url.endsWith('/children') ? [] : { items: [] } }))
     showPage.value = true
     await vi.waitFor(() => expect(releaseChild).toBeTypeOf('function'))
-    expect(root.querySelector('.chat-composer')).toBeNull()
+    const input = root.querySelector('.chat-composer__input')
+    expect(input && { disabled: input.disabled, value: input.value }).toEqual({ disabled: true, value: '' })
     releaseChild({ id: 'session-1', readOnly: true, parentSessionId: 'parent', messages: [] })
     await vi.waitFor(() => expect(releaseRedirect).toBeTypeOf('function'))
     expect(chat.current).toBeNull()

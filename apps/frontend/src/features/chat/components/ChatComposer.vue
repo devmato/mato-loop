@@ -71,7 +71,7 @@
             class="chat-composer__fields"
             :session="session"
             :disabled="inputDisabled"
-            :agent-profile-id="chat.activeAgentProfileId"
+            :agent-profile-id="session ? chat.activeAgentProfileId : null"
             :fields="['agent', 'model', 'reasoning']"
             compact
             @update="$emit('update', $event)"
@@ -291,7 +291,7 @@ const audioScope = computed(() => ({
   projectId: chat.sessionsProjectId,
   ownerUserId: chat.draftOwnerUserId
 }))
-const currentDictation = computed(() => chat.getAudioDictation(audioScope.value.sessionId, audioScope.value.projectId))
+const currentDictation = computed(() => props.session && chat.getAudioDictation(audioScope.value.sessionId, audioScope.value.projectId))
 const recordingDuration = computed(() => formatAttachmentDuration(recordingDurationMs.value) || '0:00')
 const effectiveModelId = computed(() => sessionModel(props.session, providers, chat.activeAgentProfileId).modelId)
 const selectedModelConfig = computed(() => providers.models.find((model) => (

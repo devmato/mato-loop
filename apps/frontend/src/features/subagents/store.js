@@ -250,7 +250,8 @@ export const useSubagentStore = defineStore('subagents', () => {
       streamResearchSources.value = mergeResearchSources([], payload.researchSources)
       processOutputs.value = {}
       completedToolCallId.value = null
-      if (payload.events?.length) activity.value = emptyActivity(activity.value.revision + 1)
+      // Rebuild the presentation without discarding the current run clock.
+      if (payload.events?.length) activity.value = mergeAgentActivity(activity.value, { phase: 'idle' })
       for (const item of payload.events || []) {
         connection.dispatchEvent(new MessageEvent(item.type, { data: JSON.stringify(item) }))
       }

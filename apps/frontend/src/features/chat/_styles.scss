@@ -366,17 +366,6 @@
   gap: 8px;
 }
 
-.chat-composer-skeleton {
-  width: min(900px, calc(100% - 16px));
-  min-height: 112px;
-  margin: 0 auto max(16px, env(safe-area-inset-bottom));
-  padding: 18px;
-}
-
-.chat-composer-skeleton .row {
-  flex-wrap: wrap;
-}
-
 .chat-composer__input {
   max-height: 240px;
   overflow-y: auto;

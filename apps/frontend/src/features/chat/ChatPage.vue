@@ -340,20 +340,8 @@
       </div>
     </q-scroll-area>
 
-    <div v-if="chat.loading" class="chat-composer-region" aria-hidden="true">
-      <q-card flat bordered class="chat-composer__card chat-composer-skeleton">
-        <q-skeleton type="text" width="52%" height="28px" />
-        <div class="row items-center q-mt-md q-gutter-sm">
-          <q-skeleton type="rect" width="160px" height="40px" />
-          <q-skeleton type="rect" width="180px" height="40px" />
-          <q-space />
-          <q-skeleton type="QBtn" />
-        </div>
-      </q-card>
-    </div>
-
     <div
-      v-else-if="!chat.loadError && !chat.current?.readOnly && !chat.current?.archived && (!routeSessionId || chat.current)"
+      v-if="!chat.loadError && !chat.current?.readOnly && !chat.current?.archived && (chat.loading || !routeSessionId || chat.current)"
       class="chat-composer-region"
     >
       <transition name="chat-scroll-jump">
@@ -444,17 +432,17 @@
         />
         <ChatComposer
           ref="composer"
-          :autofocus="!showHome"
-          :session="chat.activeContext"
-          :draft="chat.activeDraft"
-          :disabled="changingDraftProject || !chat.outboxLoaded
+          :autofocus="!chat.loading && !showHome"
+          :session="chat.loading ? null : chat.activeContext"
+          :draft="chat.loading ? '' : chat.activeDraft"
+          :disabled="chat.loading || changingDraftProject || !chat.outboxLoaded
             || chat.outboxSaving
             || chat.historyActionPending
             || (!chat.current && chat.activeQueuedMessages.length > 0)"
-          :running="chat.running"
+          :running="!chat.loading && chat.running"
           :stopping="chat.stopping"
           :queue-mode="chat.messageQueueActive"
-          :attachments="chat.activeAttachmentDraft"
+          :attachments="chat.loading ? emptyItems : chat.activeAttachmentDraft"
           @add-attachments="addAttachmentFiles"
           @remove-attachment="chat.removeAttachmentFile"
           @send="send"

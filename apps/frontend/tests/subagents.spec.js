@@ -11,7 +11,7 @@ import { useChatStore } from '../src/features/chat/store'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'
 import { buildChatTranscript } from '../src/utils/chat-transcript'
-import { agentRunPresentation } from '../src/utils/agent-activity'
+import { activityDurationMs, agentRunPresentation } from '../src/utils/agent-activity'
 
 class EventSourceMock {
   static instances = []
@@ -64,6 +64,24 @@ afterEach(() => {
 })
 
 describe('read-only subagents', () => {
+  it.each(['parent', 'child'])('keeps the current run duration when replaying a snapshot for %s', async (consumer) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-12T12:00:30.000Z'))
+    Object.assign(run, { activeDurationMs: 30_000, activeDurationRunning: true, activeTimingRevision: 1 })
+    chat.current = { id: 'parent', messages: [] }
+    chat.watchRun('parent', 'parent-run', run)
+    await store.open('parent', 'child')
+    const target = consumer === 'parent' ? chat : store
+    const source = EventSourceMock.instances[consumer === 'parent' ? 0 : 1]
+    vi.setSystemTime(new Date('2026-09-12T12:00:35.000Z'))
+    source.emit('run.snapshot', { events: [
+      { type: 'run.started', activeDurationMs: 0, activeDurationRunning: true, activeTimingRevision: 1 },
+      { type: 'run.phase', phase: 'waiting_model' }
+    ] })
+
+    expect(activityDurationMs(target.activity, target.running)).toBe(35_000)
+  })
+
   it.each(['parent', 'child'])('replaces snapshot buffers and clears finished compaction for %s', async (consumer) => {
     chat.current = { id: 'parent', messages: [] }
     chat.watchRun('parent', 'parent-run', { status: 'running' })

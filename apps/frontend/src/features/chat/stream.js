@@ -103,7 +103,8 @@ export const streamActions = {
         this.runWarnings = []
         this.processOutputs = {}
         this.completedToolCallId = null
-        if (payload.events?.length) this.clearActivity()
+        // Rebuild the presentation without discarding the current run clock.
+        if (payload.events?.length) this.setActivity('idle')
         for (const item of payload.events || []) {
           source.dispatchEvent(new MessageEvent(item.type, { data: JSON.stringify(item) }))
         }
