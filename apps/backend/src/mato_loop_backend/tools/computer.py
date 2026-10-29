@@ -79,10 +79,16 @@ async def _list_execution_agents(
         ExecutionAgent.user_id == context.session.user_id,
         ExecutionAgent.revoked_at.is_(None),
     ).order_by(ExecutionAgent.created_at, ExecutionAgent.id))).all()
+    integrations = await context.configured_integrations()
     return ToolResult.json({"items": [
         {"id": str(agent.id), "alias": agent.display_name, "platform": agent.platform,
          "connected": execution_agent_connections.is_connected(agent.id),
-         "selected": agent.id == context.session.preferred_execution_agent_id}
+         "selected": agent.id == context.session.preferred_execution_agent_id,
+         "integrations": [
+             {"type": item.integration_type, "name": item.name}
+             for item in integrations.instances
+             if item.enabled and item.execution_agent_id == agent.id
+         ]}
         for agent in agents
     ]})
 
@@ -434,7 +440,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
 
 LIST_EXECUTION_AGENTS = ToolDefinition(
             "list_execution_agents",
-            "List your available MatoLoop Agents and the current session selection.",
+            "List computers, session selection and enabled profile-visible integrations. Configuration only, not readiness or permission.",
             ListExecutionAgentsArguments, _list_execution_agents,
             group="agent", label="Computer anzeigen", icon="computer",
             actions=(_EXECUTION_AGENTS_LIST,),

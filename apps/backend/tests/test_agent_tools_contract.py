@@ -437,7 +437,10 @@ def _session_read_records(context: ToolContext, messages: list[Message], runs=()
 
 @pytest.mark.parametrize("alias", ["Server", ""])
 @pytest.mark.parametrize("saved_settings", [False, True])
-async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkeypatch, tmp_path, alias, saved_settings) -> None:
+@pytest.mark.parametrize("browser_mode", ["enabled", "disabled", "profile_excluded"])
+async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkeypatch, tmp_path, alias, saved_settings, browser_mode) -> None:
+    from mato_loop_backend.settings.models import IntegrationPermissions, general_profile
+
     assert tool_execution_policy(ToolSettings().select_trust(TrustLevel.PRIVATE), "execution_agent.list") == ToolExecutionPolicy.AUTO
     assert tool_execution_policy(ToolSettings().select_trust(TrustLevel.PUBLIC), "execution_agent.list") == ToolExecutionPolicy.ASK
     assert all(
@@ -448,6 +451,17 @@ async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkey
     listing = ToolCall("list", "list_execution_agents", {})
     context = _context(tmp_path, listing)
     first.user_id = context.session.user_id
+    profile = context.tool_settings._agent_profile = general_profile()
+    browser = IntegrationInstance(
+        name="Browser", integration_type="browser", adapter_type="browser", execution_agent_id=first.id,
+        enabled=browser_mode != "disabled",
+        profile_permissions={profile.id: IntegrationPermissions(available=browser_mode != "profile_excluded")},
+    )
+    monkeypatch.setattr("mato_loop_backend.tools.context.load_effective_integrations", AsyncMock(return_value=IntegrationSettings(instances=[
+        browser,
+        browser.model_copy(update={"id": uuid4(), "execution_agent_id": uuid4()}),
+        IntegrationInstance(name="Calendar", integration_type="calendar", adapter_type="caldav"),
+    ])))
     context.db.scalars.return_value = Mock(all=Mock(return_value=[first]))
     monkeypatch.setattr(mock_tools_computer.execution_agent_connections, "is_connected", lambda agent_id: agent_id == first.id)
 
@@ -456,6 +470,7 @@ async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkey
     assert json.loads(result.content)["items"] == [{
         "id": str(first.id), "alias": alias or "host", "platform": "linux",
         "connected": True, "selected": False,
+        "integrations": [{"type": "browser", "name": "Browser"}] if browser_mode == "enabled" else [],
     }]
     assert context.ask_handler.await_args.args[0].resource_scope == str(context.session.user_id)
     assert "execution_agents.user_id" in str(context.db.scalars.await_args.args[0])

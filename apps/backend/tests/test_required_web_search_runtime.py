@@ -330,7 +330,10 @@ async def test_runtime_rebinds_computer_after_exclusive_switch_without_new_run(m
 
     assert len(requests) == 3
     assert "No MatoLoop Agent is selected" in requests[0]["messages"][0]["content"]
-    assert "list_execution_agents, then select a connected computer" in requests[0]["messages"][0]["content"]
+    assert (
+        "For computer/browser tasks with no computer, list_execution_agents, then select_execution_agent. "
+        "Browser use needs an enabled browser integration on that computer."
+    ) in requests[0]["messages"][0]["content"]
     second = requests[1]["messages"][0]["content"]
     assert f'"id": "{new_id}"' in second
     assert '"currentDirectory": "/srv/new"' in second

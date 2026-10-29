@@ -683,7 +683,8 @@ def general_system_prompt(
         dynamic_parts.append("No MatoLoop Agent is selected for this session.")
     if {"list_execution_agents", "select_execution_agent"} <= offered_tool_names:
         parts.append(
-            "For computer/browser tasks with no computer, list_execution_agents, then select a connected computer."
+            "For computer/browser tasks with no computer, list_execution_agents, then select_execution_agent. "
+            "Browser use needs an enabled browser integration on that computer."
         )
     if "select_execution_agent" in offered_tool_names:
         parts.append(

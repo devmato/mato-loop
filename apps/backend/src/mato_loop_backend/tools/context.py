@@ -109,7 +109,7 @@ class ToolContext:
     arguments_edited_handler: ArgumentsEditedHandler | None = None
     repository_target_paths: tuple[str, ...] = ()
 
-    async def current_integrations(self) -> IntegrationSettings:
+    async def configured_integrations(self) -> IntegrationSettings:
         from mato_loop_backend.agent.subagents import integration_ceiling_ids
 
         settings = await load_effective_integrations(self.db, self.session.user_id)
@@ -120,13 +120,16 @@ class ToolContext:
                 profile = await load_agent_profile(self.db, self.session.user_id, profile_id)
             except AgentProfileUnavailable:
                 return filter_agent_profile_integrations(settings, None, allowed_ids=())
-        settings = filter_agent_profile_integrations(
+        return filter_agent_profile_integrations(
             settings, profile,
             allowed_ids=(
                 () if self.tool_settings._agent_profile_unavailable
                 else integration_ceiling_ids(self.tool_settings._delegation_ceiling)
             ),
         )
+
+    async def current_integrations(self) -> IntegrationSettings:
+        settings = await self.configured_integrations()
         if any(item.adapter_type == "browser" for item in settings.instances):
             for item in settings.instances:
                 if item.adapter_type == "browser":

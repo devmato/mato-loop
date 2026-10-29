@@ -232,6 +232,8 @@ The file browser keeps `.scad` editable as UTF-8 source and offers an explicit 3
 
 ## Browser
 
+`list_execution_agents` includes the enabled, profile-visible integrations bound to each owned computer, even before a computer is selected. This is configuration metadata, not a readiness check or permission grant; browser use still requires selecting the computer and following the existing tool-loading and authorization rules.
+
 Browser is a personal-only, Linux agent-bound integration with one immutable instance assignment per owned MatoLoop Agent. It reuses global adapter availability, profile integration selection and trust-scoped policies. `browser.use` covers all ordinary browser actions and website JavaScript; `browser.code` adds unrestricted Python execution. Both use the `write` category and distinct grant resources. Browser use defaults to AUTO for Build-based profiles except in `ask_all`, and ASK otherwise. Python defaults to ASK in every profile. Explicit connection/profile rules remain binding. Native and container agents offer the same headless browser and optional viewer. Model tools do not require an open viewer. Plan, Build, and Sysadmin exclude the integration by default unless enabled through the existing profile settings.
 
 Optional native setup runs only from the integration's dedicated interactive setup dialog using the fixed packaged script; agent images already contain the runtime. Disposable website profiles are isolated per chat/computer binding. See [Browser architecture and operations](browser.md) for actual Compose security settings, viewer lifetime, clipboard/file transfers, and action snapshot limits.
