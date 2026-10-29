@@ -56,7 +56,7 @@
         </template>
       </q-banner>
       <q-separator />
-      <q-expansion-item icon="tune" label="Modelle" header-class="text-weight-medium">
+      <q-expansion-item :duration="0" icon="tune" label="Modelle" header-class="text-weight-medium">
         <q-card-section class="row q-col-gutter-sm q-pt-none">
           <div class="col-12 col-sm-6">
             <AppSelect
@@ -115,7 +115,7 @@
       </q-tabs>
       <q-separator />
 
-      <q-tab-panels v-model="tab" animated class="col bg-transparent">
+      <q-tab-panels v-model="tab" class="col bg-transparent">
         <q-tab-panel name="files" class="q-pa-none column no-wrap">
           <template v-if="coding.content">
             <q-toolbar>
@@ -189,7 +189,7 @@
               <q-item v-if="!coding.plans.length" class="q-pa-lg">
                 <q-item-section class="text-center app-muted">Noch keine Pläne gespeichert. Erstelle sie im Projektchat.</q-item-section>
               </q-item>
-              <q-expansion-item v-for="plan in coding.plans" :key="plan.id" group="coding-plans">
+              <q-expansion-item v-for="plan in coding.plans" :key="plan.id" :duration="0" group="coding-plans">
                 <template #header>
                   <q-item-section avatar>
                     <q-checkbox dense v-model="selectedPlans" :val="plan.id" :aria-label="`Plan ${plan.title} auswählen`" @click.stop />
@@ -254,7 +254,7 @@
       <q-inner-loading :showing="coding.loading && !coding.loaded" />
     </template>
 
-    <q-dialog v-model="bindingDialogOpen" :maximized="$q.screen.lt.sm" :persistent="bindingSaving">
+    <q-dialog v-model="bindingDialogOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="bindingSaving">
       <q-card class="integration-dialog app-surface column">
         <q-form class="col column no-wrap" @submit.prevent="saveBinding">
           <q-card-section>

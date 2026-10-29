@@ -18,7 +18,7 @@
       </q-list>
       <q-inner-loading :showing="store.loading" />
     </q-card>
-    <q-dialog v-model="dialogOpen" :maximized="$q.screen.lt.sm" persistent>
+    <q-dialog v-model="dialogOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" persistent>
       <q-card class="app-surface column no-wrap full-width">
         <q-form class="column no-wrap full-height" @submit.prevent="save">
           <q-card-section class="row items-center"><div class="text-h6 col">Sessionvorlage</div><q-btn flat round dense icon="close" aria-label="Dialog schließen" :disable="store.saving" @click="close" /></q-card-section>
@@ -31,7 +31,7 @@
               <AppSelect v-model="form.messageSize" outlined dense emit-value map-options label="Nachrichtengröße" :options="[{ label: 'Standard', value: 'standard' }, { label: 'Klein', value: 'small' }]" hint="Klein reduziert die Schriftgröße und die Abstände der Nachrichten sowie die Schriftgröße im Eingabefeld am Desktop." persistent-hint :disable="store.saving" />
               <div class="text-subtitle2">Modell für die gesamte Session</div>
               <ChatModelFields :model-value="form" :inherited="defaults" :disabled="store.saving" @update:model-value="Object.assign(form, $event)" />
-              <q-expansion-item label="Modell-Overrides je Agent" icon="smart_toy">
+              <q-expansion-item :duration="0" label="Modell-Overrides je Agent" icon="smart_toy">
                 <q-card-section v-for="id in form.agentIds || []" :key="id">
                   <div class="text-subtitle2 q-mb-sm">{{ agentOptions.find((item) => item.value === id)?.label || 'Nicht verfügbarer Agent' }}</div>
                   <ChatModelFields :model-value="form.agentModels?.[id] || {}" :inherited="{ modelId: form.modelId || models.effective.profileModels?.[id]?.modelId || defaults.modelId, reasoningEffort: form.reasoningEffort || models.effective.profileModels?.[id]?.reasoningEffort || defaults.reasoningEffort }" :disabled="store.saving" @update:model-value="setOverride(id, $event)" />

@@ -23,7 +23,7 @@
     </template>
   </PermissionFields>
 
-  <q-dialog v-model="dialogOpen" :maximized="$q.screen.lt.sm" aria-labelledby="permission-override-title">
+  <q-dialog v-model="dialogOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" aria-labelledby="permission-override-title">
     <q-card class="app-surface column no-wrap full-width">
       <q-card-section class="row items-center">
         <div id="permission-override-title" class="text-h6 col">Eigene Regel {{ editing ? 'bearbeiten' : 'hinzufügen' }}</div>

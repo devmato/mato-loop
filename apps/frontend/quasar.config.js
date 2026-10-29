@@ -34,6 +34,7 @@ export default configure(() => ({
   framework: {
     config: {
       dark: 'auto',
+      ripple: false,
       notify: {
         position: 'top-right'
       }

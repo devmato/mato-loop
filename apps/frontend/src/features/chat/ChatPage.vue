@@ -468,6 +468,7 @@
       </template>
     </q-splitter>
     <q-dialog
+      :transition-duration="0"
       :model-value="Boolean(approvalDraftPreview)"
       maximized
       aria-labelledby="approval-draft-preview-title"

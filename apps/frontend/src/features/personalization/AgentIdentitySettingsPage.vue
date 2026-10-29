@@ -78,7 +78,7 @@
         </q-card>
       </template>
     </template>
-    <q-dialog v-model="dialogOpen" :maximized="$q.screen.lt.sm" :persistent="identity.settingsSaving" aria-labelledby="persona-dialog-title">
+    <q-dialog v-model="dialogOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="identity.settingsSaving" aria-labelledby="persona-dialog-title">
       <q-card class="app-surface column no-wrap full-width">
         <q-form class="column no-wrap full-height" @submit.prevent="saveDialog">
           <q-card-section class="row items-center no-wrap">

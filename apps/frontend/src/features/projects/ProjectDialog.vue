@@ -1,5 +1,5 @@
 <template>
-  <q-dialog v-model="open" :maximized="$q.screen.lt.sm" :persistent="saving">
+  <q-dialog v-model="open" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="saving">
     <q-card class="integration-dialog app-surface column">
       <q-form class="col column no-wrap" @submit.prevent="save">
         <q-card-section>

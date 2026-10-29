@@ -122,6 +122,7 @@
         <q-inner-loading :showing="profile.loading" />
 
         <q-dialog
+          :transition-duration="0"
           v-model="addFieldDialogOpen"
           :maximized="$q.screen.lt.sm"
           aria-labelledby="add-profile-field-title"

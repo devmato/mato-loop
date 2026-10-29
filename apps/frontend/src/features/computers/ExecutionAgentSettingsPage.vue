@@ -133,7 +133,7 @@
       </template>
     </ExecutionAgentConfigDialog>
 
-    <q-dialog v-model="pairingDialogOpen" :maximized="$q.screen.lt.sm" :persistent="saving">
+    <q-dialog v-model="pairingDialogOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="saving">
       <q-card class="execution-agent-dialog">
         <q-form @submit.prevent="createPairingToken">
           <q-card-section>
@@ -160,7 +160,7 @@
       </q-card>
     </q-dialog>
 
-    <q-dialog v-model="tokenDialogOpen" persistent :maximized="$q.screen.lt.sm" @hide="pairingResult = null">
+    <q-dialog v-model="tokenDialogOpen" :transition-duration="0" persistent :maximized="$q.screen.lt.sm" @hide="pairingResult = null">
       <q-card class="execution-agent-dialog">
         <q-card-section>
           <div class="text-h6">Kopplungstoken</div>
@@ -403,6 +403,7 @@ async function requestMaintenance(agent, action) {
       if (password) notifyError(error)
       password = await new Promise((resolve) => {
         $q.dialog({
+          transitionDuration: 0,
           color: 'primary',
           title: 'sudo-Passwort benötigt',
           message: `Gib das sudo-Passwort auf „${agentDisplayName(agent)}“ für diese Wartung ein. Es wird nur für diesen Auftrag verwendet.`,

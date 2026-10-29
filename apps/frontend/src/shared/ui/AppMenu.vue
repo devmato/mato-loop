@@ -1,5 +1,5 @@
 <template>
-  <q-menu ref="menu" v-bind="$attrs" class="app-popup-surface app-action-menu" :offset="offset">
+  <q-menu ref="menu" v-bind="$attrs" :transition-duration="0" class="app-popup-surface app-action-menu" :offset="offset">
     <slot />
   </q-menu>
 </template>

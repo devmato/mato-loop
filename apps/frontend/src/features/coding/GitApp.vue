@@ -87,7 +87,7 @@
       </q-tab-panel>
     </q-tab-panels>
 
-    <q-dialog v-model="remoteOpen" :maximized="$q.screen.lt.sm" :persistent="saving">
+    <q-dialog v-model="remoteOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="saving">
       <q-card class="integration-dialog app-surface column">
         <q-form class="col column no-wrap" @submit.prevent="saveRemote">
           <q-card-section><div class="text-h6">Remote einrichten</div></q-card-section>

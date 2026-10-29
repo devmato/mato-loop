@@ -28,7 +28,7 @@
     </template>
     </template>
   </q-card>
-  <q-expansion-item v-for="resource in resources" :key="resource.key" :label="resource.label" icon="folder_open" class="app-surface q-mb-md">
+  <q-expansion-item v-for="resource in resources" :key="resource.key" :duration="0" :label="resource.label" icon="folder_open" class="app-surface q-mb-md">
     <template #header>
       <q-item-section avatar><q-icon name="folder_open" /></q-item-section>
       <q-item-section>

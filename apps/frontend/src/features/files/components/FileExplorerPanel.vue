@@ -243,7 +243,7 @@
         />
       </div>
     </q-scroll-area>
-    <q-dialog v-model="renameDialogOpen" :persistent="renaming">
+    <q-dialog v-model="renameDialogOpen" :transition-duration="0" :persistent="renaming">
       <q-card class="file-rename-dialog">
         <q-form @submit.prevent="renameEntry">
           <q-card-section>
@@ -277,7 +277,7 @@
       </q-card>
     </q-dialog>
 
-    <q-dialog v-model="createDialogOpen" :persistent="creating">
+    <q-dialog v-model="createDialogOpen" :transition-duration="0" :persistent="creating">
       <q-card class="file-create-dialog">
         <q-form @submit.prevent="createFile">
           <q-card-section>
@@ -689,6 +689,7 @@ async function setWorkdir() {
 
 function openAbsolutePath() {
   $q.dialog({
+    transitionDuration: 0,
     color: 'primary',
     title: 'Absoluten Pfad öffnen',
     prompt: {

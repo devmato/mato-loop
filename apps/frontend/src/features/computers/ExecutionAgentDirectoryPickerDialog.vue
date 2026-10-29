@@ -1,5 +1,6 @@
 <template>
   <q-dialog
+    :transition-duration="0"
     :model-value="modelValue"
     :maximized="$q.screen.lt.sm"
     @hide="close"
@@ -181,6 +182,7 @@ async function load(path, append = false) {
 
 function createDirectory() {
   $q.dialog({
+    transitionDuration: 0,
     title: 'Neuen Ordner anlegen',
     prompt: {
       model: '',

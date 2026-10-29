@@ -1,5 +1,5 @@
 <template>
-  <q-dialog :model-value="modelValue" :maximized="$q.screen.lt.sm" @update:model-value="$emit('update:modelValue', $event)">
+  <q-dialog :model-value="modelValue" :transition-duration="0" :maximized="$q.screen.lt.sm" @update:model-value="$emit('update:modelValue', $event)">
     <q-card class="integration-dialog app-surface column no-wrap">
       <q-card-section class="row items-center">
         <div class="text-h6 col">Integration hinzufügen</div>

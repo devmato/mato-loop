@@ -8,6 +8,7 @@ export function useConfirm() {
   ) {
     return new Promise((resolve) => {
       Dialog.create({
+        transitionDuration: 0,
         title,
         message,
         ok: { label: okLabel, color: okColor, unelevated: true, noCaps: true },

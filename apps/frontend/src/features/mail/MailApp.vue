@@ -190,7 +190,7 @@
       </div>
     </template>
 
-    <q-dialog v-model="composeOpen" :maximized="$q.screen.lt.sm" :persistent="composeSaving">
+    <q-dialog v-model="composeOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="composeSaving">
       <q-card class="mail-compose app-surface column">
         <q-card-section class="row items-center no-wrap">
           <div class="text-h6">{{ compose.token ? 'Entwurf bearbeiten' : 'E-Mail verfassen' }}</div>

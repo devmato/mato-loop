@@ -8,7 +8,7 @@
     <template v-else>
       <h2 class="text-subtitle1"><q-icon name="folder_open" class="q-mr-sm" />Projekte</h2>
       <q-list bordered separator class="rounded-borders q-mb-lg" v-if="archive.projects.length">
-        <q-expansion-item v-for="project in archive.projects" :key="project.id" @show="loadSessions(project.id)">
+        <q-expansion-item v-for="project in archive.projects" :key="project.id" :duration="0" @show="loadSessions(project.id)">
           <template #header>
             <q-item-section>{{ project.name }}</q-item-section>
             <q-item-section side><q-btn flat round icon="unarchive" :loading="restoring === project.id" aria-label="Projekt wiederherstellen" @click.stop="restoreProject(project)" /></q-item-section>

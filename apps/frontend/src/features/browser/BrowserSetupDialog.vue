@@ -1,5 +1,5 @@
 <template>
-  <q-dialog :model-value="modelValue" :maximized="$q.screen.lt.sm" @update:model-value="$emit('update:modelValue', $event)" @show="initialize" @hide="dispose">
+  <q-dialog :model-value="modelValue" :transition-duration="0" :maximized="$q.screen.lt.sm" @update:model-value="$emit('update:modelValue', $event)" @show="initialize" @hide="dispose">
     <q-card class="app-surface column no-wrap" :style="$q.screen.lt.sm ? undefined : { width: '900px', maxWidth: '95vw', height: '80dvh' }">
       <q-card-section class="row items-center no-wrap">
         <div class="text-h6 col">Browser einrichten</div>

@@ -1,5 +1,6 @@
 <template>
   <q-expansion-item
+    :duration="0"
     icon="tune"
     label="Erweiterte Laufzeit"
     caption="Kontext, Ausgabelänge und Modellfähigkeiten"

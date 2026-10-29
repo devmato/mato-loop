@@ -82,6 +82,7 @@ it('browses, creates and selects directories on the chosen execution agent', asy
   document.querySelector('[aria-label="Neuen Ordner anlegen"]').click()
   await vi.waitFor(() => expect(document.querySelector('.q-dialog input')).not.toBeNull())
   const input = document.querySelector('.q-dialog input')
+  await vi.waitFor(() => expect(document.activeElement).toBe(input), { timeout: 100 })
   input.value = 'new-folder'
   input.dispatchEvent(new Event('input', { bubbles: true }))
   const createButton = [...document.querySelectorAll('button')].find((item) => item.textContent === 'Anlegen')

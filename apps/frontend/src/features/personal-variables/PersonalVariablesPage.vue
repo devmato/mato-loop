@@ -45,7 +45,7 @@
       <q-inner-loading :showing="variables.loading" />
     </q-card>
 
-    <q-dialog v-model="dialogOpen" :maximized="$q.screen.lt.sm" @hide="clearValue">
+    <q-dialog v-model="dialogOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" @hide="clearValue">
       <q-card class="column no-wrap" style="width: 560px; max-width: 100vw">
         <q-card-section class="row items-center no-wrap">
           <div class="text-h6">{{ selected ? 'Variable bearbeiten' : 'Variable hinzufügen' }}</div>

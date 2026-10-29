@@ -1,5 +1,6 @@
 <template>
   <q-expansion-item
+    :duration="0"
     v-model="expanded" dense expand-separator
     :icon="schedule.kind === 'once' ? 'event' : 'update'"
     :label="scheduleSummary(schedule)" :caption="caption"
@@ -25,7 +26,7 @@
             <q-input v-model.number="schedule.monthDay" :readonly="readonly" outlined dense type="number" min="1" max="31" label="Tag im Monat" hint="In Monaten ohne diesen Tag entfällt der Termin." @update:model-value="applySchedulePreset(schedule)" />
           </div>
           <div v-if="schedule.preset === 'custom'" class="col-12">
-            <q-expansion-item dense label="Zeitregel bearbeiten" caption="Für besondere Wiederholungen">
+            <q-expansion-item :duration="0" dense label="Zeitregel bearbeiten" caption="Für besondere Wiederholungen">
               <q-input v-model="schedule.cron" :readonly="readonly" outlined dense label="Zeitregel" maxlength="255" class="q-mt-sm" hint="Fünf Angaben: Minute, Stunde, Tag, Monat, Wochentag." />
             </q-expansion-item>
           </div>
@@ -34,7 +35,7 @@
           <q-input v-model="schedule.runAt" :readonly="readonly" outlined dense stack-label type="datetime-local" step="any" label="Datum und Uhrzeit" />
         </div>
       </div>
-      <q-expansion-item v-model="schedule.advanced" dense label="Weitere Einstellungen" class="q-mt-sm">
+      <q-expansion-item v-model="schedule.advanced" :duration="0" dense label="Weitere Einstellungen" class="q-mt-sm">
         <div class="q-pt-sm q-gutter-sm">
           <template v-if="schedule.kind === 'cron'">
             <q-input v-model="schedule.timezone" :readonly="readonly" outlined dense label="Zeitzone" placeholder="Europe/Berlin" />

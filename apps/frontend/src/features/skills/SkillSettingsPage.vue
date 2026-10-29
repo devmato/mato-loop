@@ -74,7 +74,7 @@
       <q-inner-loading :showing="skills.loading" />
     </q-card>
 
-    <q-dialog v-model="importOpen" :persistent="skills.saving">
+    <q-dialog v-model="importOpen" :transition-duration="0" :persistent="skills.saving">
       <q-card class="q-pa-md">
         <div class="text-h6">Skill importieren</div>
         <p>{{ admin ? 'Global – für alle Benutzer' : 'Persönlicher Skill' }}</p>

@@ -1,5 +1,5 @@
 <template>
-  <q-dialog v-model="renameOpen">
+  <q-dialog v-model="renameOpen" :transition-duration="0">
     <q-card class="session-rename-dialog app-surface">
       <q-form @submit.prevent="emit('rename')">
         <q-card-section>
@@ -31,7 +31,7 @@
     </q-card>
   </q-dialog>
 
-  <q-dialog v-model="moveOpen">
+  <q-dialog v-model="moveOpen" :transition-duration="0">
     <q-card class="session-rename-dialog app-surface">
       <q-form @submit.prevent="emit('move')">
         <q-card-section>

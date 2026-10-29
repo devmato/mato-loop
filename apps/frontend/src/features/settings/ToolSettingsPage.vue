@@ -104,7 +104,7 @@
       </template>
       <q-inner-loading :showing="loading" />
     </q-form>
-    <q-dialog v-model="presetDialogOpen" :maximized="$q.screen.lt.sm" aria-labelledby="preset-info-title">
+    <q-dialog v-model="presetDialogOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" aria-labelledby="preset-info-title">
       <q-card v-if="presetInfo" class="app-surface column no-wrap full-width">
         <q-card-section class="row items-center no-wrap">
           <div id="preset-info-title" class="text-h6 col">{{ presetInfo.label }}</div>
@@ -132,7 +132,7 @@
         <q-card-actions align="right"><q-btn v-close-popup flat no-caps label="Schließen" /></q-card-actions>
       </q-card>
     </q-dialog>
-    <q-dialog v-model="shellDialogOpen" :maximized="$q.screen.lt.sm" aria-labelledby="shell-prefixes-title">
+    <q-dialog v-model="shellDialogOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" aria-labelledby="shell-prefixes-title">
       <q-card class="app-surface column no-wrap full-width">
         <q-card-section class="row items-center"><div id="shell-prefixes-title" class="text-h6 col">Shell-Präfixe</div><q-btn v-close-popup flat round dense icon="close" aria-label="Dialog schließen" /></q-card-section>
         <q-card-section class="col scroll"><ShellPrefixFields v-model="shellDraft" /></q-card-section>

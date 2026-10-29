@@ -298,7 +298,7 @@
       </AppStateMessage>
     </div>
 
-    <q-dialog v-model="conflictOpen" :maximized="$q.screen.lt.sm" aria-labelledby="file-conflict-title">
+    <q-dialog v-model="conflictOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" aria-labelledby="file-conflict-title">
       <q-card class="file-revisions-dialog app-surface column no-wrap">
         <q-toolbar>
           <q-toolbar-title id="file-conflict-title" class="text-subtitle1 text-weight-bold">Änderungen vergleichen</q-toolbar-title>
@@ -320,6 +320,7 @@
     </q-dialog>
 
     <q-dialog
+      :transition-duration="0"
       v-model="revisionsOpen"
       :maximized="$q.screen.lt.sm"
       aria-labelledby="file-revisions-title"

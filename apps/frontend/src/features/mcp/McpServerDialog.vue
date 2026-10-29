@@ -1,5 +1,5 @@
 <template>
-  <q-dialog :model-value="modelValue" :maximized="$q.screen.lt.sm" :persistent="saving" @hide="close">
+  <q-dialog :model-value="modelValue" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="saving" @hide="close">
     <q-card class="integration-dialog app-surface column">
       <q-card-section class="row items-start no-wrap q-gutter-md">
         <q-avatar color="primary" text-color="white" icon="hub" />

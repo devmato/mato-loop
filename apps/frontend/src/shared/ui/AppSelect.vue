@@ -3,6 +3,7 @@
     dense
     hide-bottom-space
     v-bind="$attrs"
+    :transition-duration="0"
     :behavior="behavior || ($q.screen.lt.sm ? 'dialog' : 'menu')"
     :popup-content-class="['app-popup-surface app-select-popup q-pa-xs', popupContentClass].filter(Boolean).join(' ')"
     options-selected-class="app-menu-item--active"

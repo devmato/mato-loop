@@ -87,7 +87,7 @@
       </template>
     </article>
 
-    <q-dialog v-model="attachmentDialog" maximized transition-show="fade" transition-hide="fade" @hide="selectedAttachment = null">
+    <q-dialog v-model="attachmentDialog" :transition-duration="0" maximized @hide="selectedAttachment = null">
       <q-card v-if="selectedAttachment" class="app-file-dialog">
         <FileViewerPanel
           :image="selectedAttachment.kind === 'image' ? {

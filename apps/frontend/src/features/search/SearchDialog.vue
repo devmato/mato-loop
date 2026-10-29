@@ -1,5 +1,6 @@
 <template>
   <q-dialog
+    :transition-duration="0"
     v-model="search.dialogOpen"
     :position="$q.screen.lt.md ? 'standard' : 'top'"
     :maximized="$q.screen.lt.md"

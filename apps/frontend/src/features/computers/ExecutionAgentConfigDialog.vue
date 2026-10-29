@@ -1,5 +1,6 @@
 <template>
   <q-dialog
+    :transition-duration="0"
     :model-value="modelValue"
     :maximized="$q.screen.lt.sm"
     :persistent="blocked"

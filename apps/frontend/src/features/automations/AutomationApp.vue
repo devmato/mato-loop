@@ -60,7 +60,7 @@
               <h3 class="text-subtitle2 text-weight-bold q-my-none col">Auftrag</h3>
               <q-btn v-if="!archived && !editingTask" flat dense no-caps icon="edit" label="Bearbeiten" @click="editingTask = true" />
               <q-btn flat round dense icon="info_outline" aria-label="Hinweis zum Auftrag">
-                <q-popup-proxy><q-banner class="app-surface">Der gespeicherte Auftrag wird in diesem Gespräch ausgeführt. Chatnachrichten ändern ihn nicht automatisch, können aber spätere Antworten beeinflussen.</q-banner></q-popup-proxy>
+                <q-popup-proxy :transition-duration="0"><q-banner class="app-surface">Der gespeicherte Auftrag wird in diesem Gespräch ausgeführt. Chatnachrichten ändern ihn nicht automatisch, können aber spätere Antworten beeinflussen.</q-banner></q-popup-proxy>
               </q-btn>
             </div>
             <div v-if="editingTask" class="q-gutter-sm">
@@ -89,7 +89,7 @@
             <div v-for="trigger in triggerOptions" :key="trigger.value">
               <q-checkbox v-model="form.triggers" :val="trigger.value" :label="trigger.label" :disable="archived" dense class="q-my-xs" />
             </div>
-            <q-expansion-item v-model="optionsOpen" dense label="Weitere Optionen" class="q-mt-md">
+            <q-expansion-item v-model="optionsOpen" :duration="0" dense label="Weitere Optionen" class="q-mt-md">
               <div class="q-pa-sm q-gutter-sm">
                 <q-toggle v-model="form.enabled" :disable="archived" dense label="Automatische Starts aktiv" />
                 <q-btn v-if="definition" flat dense no-caps color="negative" icon="delete_outline" label="Automation entfernen" :disable="saving" @click="remove(definition)" />

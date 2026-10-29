@@ -73,7 +73,7 @@
         flat
         class="app-surface provider-card"
       >
-        <q-expansion-item v-model="expandedProviders[provider.id]" expand-separator switch-toggle-side header-class="settings-list-item items-start" :toggle-aria-label="`Modelle für ${provider.name} anzeigen`">
+        <q-expansion-item v-model="expandedProviders[provider.id]" :duration="0" expand-separator switch-toggle-side header-class="settings-list-item items-start" :toggle-aria-label="`Modelle für ${provider.name} anzeigen`">
           <template #header>
             <q-item-section avatar>
               <q-avatar color="primary" text-color="white" :icon="providerIcon(provider)" />

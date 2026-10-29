@@ -49,12 +49,11 @@
     </div>
 
     <q-dialog
+      :transition-duration="0"
       v-if="route.name === 'chat' && $q.screen.lt.md"
       :model-value="controlCenterVisible"
       aria-label="Control Center"
       maximized
-      transition-show="slide-left"
-      transition-hide="slide-right"
       @update:model-value="setControlCenterOpen"
     >
       <q-card class="app-file-dialog">

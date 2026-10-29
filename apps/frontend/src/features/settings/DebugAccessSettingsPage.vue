@@ -49,7 +49,7 @@
       <q-inner-loading :showing="access.loading" />
     </q-card>
 
-    <q-dialog v-model="tokenDialogOpen" persistent :maximized="$q.screen.lt.sm" @hide="token = ''">
+    <q-dialog v-model="tokenDialogOpen" :transition-duration="0" persistent :maximized="$q.screen.lt.sm" @hide="token = ''">
       <q-card class="app-surface">
         <q-card-section>
           <div class="text-h6">Debug-Token</div>

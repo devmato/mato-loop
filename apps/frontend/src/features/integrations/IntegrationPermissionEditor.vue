@@ -44,7 +44,7 @@
       </div>
     </template>
   </PermissionFields>
-  <q-dialog v-model="open" :maximized="$q.screen.lt.sm" aria-labelledby="integration-rule-title">
+  <q-dialog v-model="open" :transition-duration="0" :maximized="$q.screen.lt.sm" aria-labelledby="integration-rule-title">
     <q-card class="app-surface column no-wrap full-width">
       <q-card-section class="row items-center">
         <div id="integration-rule-title" class="text-h6 col">{{ draft.capability === 'tool_loading' ? 'Tool-Ladeverhalten anpassen' : draft.capability === 'availability' ? 'Verfügbarkeit anpassen' : editing ? 'Eigene Regel bearbeiten' : 'Eigene Regel hinzufügen' }}</div>

@@ -9,7 +9,7 @@
       v-html="rendered.html"
     />
 
-    <q-dialog v-model="mermaidDialog" maximized transition-show="fade" transition-hide="fade" @hide="clearMermaidImage">
+    <q-dialog v-model="mermaidDialog" :transition-duration="0" maximized @hide="clearMermaidImage">
       <q-card v-if="mermaidImage" class="app-file-dialog">
         <ImageViewerPanel
           :image="mermaidImage"

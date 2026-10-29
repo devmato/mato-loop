@@ -21,7 +21,7 @@
     <q-card v-if="loaded" flat class="app-surface">
       <q-card-section>
         <div class="row items-center no-wrap">
-          <q-select class="col q-mr-sm" dense outlined label="Datei" :model-value="selectedPath" :options="editingSkill?.resourcePaths || ['SKILL.md']" :disable="busy" @update:model-value="selectFile" />
+          <q-select class="col q-mr-sm" dense outlined label="Datei" :transition-duration="0" :model-value="selectedPath" :options="editingSkill?.resourcePaths || ['SKILL.md']" :disable="busy" @update:model-value="selectFile" />
           <q-btn v-if="editingSkill" flat round icon="download" aria-label="Datei herunterladen" :disable="busy" @click="downloadResource" />
           <q-btn v-if="editingSkill && !readonly" flat round icon="add" aria-label="Datei hinzufügen" :disable="writeBlocked" @click="uploadOpen = true" />
           <q-btn v-if="editingSkill && selectedPath !== 'SKILL.md' && !readonly" flat round color="negative" icon="delete_outline" aria-label="Datei löschen" :disable="writeBlocked" @click="deleteResource" />
@@ -34,7 +34,7 @@
     </q-card>
     <q-inner-loading :showing="loading" />
 
-    <q-dialog v-model="uploadOpen" :persistent="skills.saving">
+    <q-dialog v-model="uploadOpen" :transition-duration="0" :persistent="skills.saving">
       <q-card class="q-pa-md">
         <div class="text-h6 q-mb-md">Paketdatei hinzufügen oder ersetzen</div>
         <q-input v-model="uploadPath" outlined label="Relativer Pfad" placeholder="scripts/example.py" class="q-mb-md" :disable="busy" />

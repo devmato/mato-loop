@@ -1,5 +1,5 @@
 <template>
-  <q-dialog :model-value="modelValue" @hide="handleHide">
+  <q-dialog :model-value="modelValue" :transition-duration="0" @hide="handleHide">
     <q-card class="provider-dialog app-surface">
       <q-card-section class="row items-start no-wrap q-gutter-md">
         <q-avatar color="primary" text-color="white" :icon="dialogIcon" />

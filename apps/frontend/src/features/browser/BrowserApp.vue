@@ -50,7 +50,7 @@
     <q-linear-progress v-if="browser.displayStatus === 'connecting' || (browser.displayStatus === 'open' && !browser.ready)" indeterminate aria-label="Browser wird verbunden" />
     <div ref="host" class="browser-app__view col overflow-hidden" @pointerdown.capture="focusViewer" @keydown.capture="viewerKey" @keyup.capture="viewerKey" @paste.capture="nativePaste" @focusout="leaveViewer" />
 
-    <q-dialog v-model="clipboardOpen" :maximized="$q.screen.lt.sm">
+    <q-dialog v-model="clipboardOpen" :transition-duration="0" :maximized="$q.screen.lt.sm">
       <q-card class="integration-dialog app-surface column no-wrap">
         <q-card-section class="text-h6">Text in den Browser übertragen</q-card-section>
         <q-card-section class="col scroll">
@@ -66,7 +66,7 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
-    <q-dialog :model-value="Boolean(browser.dialog) && browser.manual" persistent :maximized="$q.screen.lt.sm">
+    <q-dialog :model-value="Boolean(browser.dialog) && browser.manual" :transition-duration="0" persistent :maximized="$q.screen.lt.sm">
       <q-card class="integration-dialog app-surface">
         <q-card-section class="text-h6">Webseiten-Dialog</q-card-section>
         <q-card-section class="scroll">
@@ -79,7 +79,7 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
-    <q-dialog v-model="filesOpen" :maximized="$q.screen.lt.sm">
+    <q-dialog v-model="filesOpen" :transition-duration="0" :maximized="$q.screen.lt.sm">
       <q-card class="integration-dialog app-surface column no-wrap" aria-labelledby="browser-files-title">
         <q-card-section>
           <div id="browser-files-title" class="text-h6">Browser-Dateien</div>

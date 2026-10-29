@@ -263,6 +263,7 @@ export function useSidebarSessions({
     if (impact.hasWorktree) {
       const result = await new Promise(resolve => {
         $q.dialog({
+          transitionDuration: 0,
           title: 'Session löschen',
           message: `Session „${title || 'Ohne Titel'}“ löschen? Ohne Auswahl bleibt der Worktree erhalten. Beim Entfernen werden nicht committete Änderungen sowie zusätzliche und ignorierte Dateien unwiderruflich gelöscht. Branch und Commits bleiben erhalten.`,
           options: { type: 'checkbox', model: [], items: [{ label: 'Worktree ebenfalls entfernen', value: 'remove' }] },

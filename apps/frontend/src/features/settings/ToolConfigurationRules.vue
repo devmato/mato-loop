@@ -30,7 +30,7 @@
     </template>
   </q-card>
 
-  <q-dialog v-model="open" :maximized="$q.screen.lt.sm" aria-labelledby="tool-setting-title">
+  <q-dialog v-model="open" :transition-duration="0" :maximized="$q.screen.lt.sm" aria-labelledby="tool-setting-title">
     <q-card class="app-surface column no-wrap full-width">
       <q-card-section class="row items-center">
         <div id="tool-setting-title" class="text-h6 col">Eigene Einstellung {{ editing ? 'bearbeiten' : 'hinzufügen' }}</div>

@@ -35,6 +35,22 @@ body {
   scrollbar-color: var(--app-scrollbar-thumb) var(--app-scrollbar-track);
 }
 
+// Keep UI changes immediate without stopping animated loading and status indicators.
+*,
+*::before,
+*::after {
+  transition: none !important;
+}
+
+// Quasar 2.18 still stages expansion heights for 100 ms when duration is zero.
+.q-expansion-item--expanded > .q-expansion-item__container > .q-expansion-item__content {
+  height: auto !important;
+}
+
+.q-expansion-item--collapsed > .q-expansion-item__container > .q-expansion-item__content {
+  display: none !important;
+}
+
 *::-webkit-scrollbar {
   width: var(--app-scrollbar-size);
   height: var(--app-scrollbar-size);

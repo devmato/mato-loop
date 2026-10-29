@@ -33,9 +33,6 @@
 
     <q-tab-panels
       v-model="section"
-      animated
-      transition-prev="fade"
-      transition-next="fade"
       class="memory-panels bg-transparent"
     >
       <q-tab-panel name="memories" class="q-pa-none">
@@ -361,7 +358,7 @@
                     <q-input dense v-model.number="settingsForm.dreamingMaxBatchMessages" outlined type="number" min="2" max="500" label="Max. Nachrichten pro Lauf" :disable="memories.settingsLoading" :rules="[integerRangeRule(2, 500)]" />
                     <q-input dense v-model.number="settingsForm.dreamingMaxCandidates" outlined type="number" min="1" max="100" label="Max. Kandidaten" :disable="memories.settingsLoading" :rules="[integerRangeRule(1, 100)]" />
                 </div>
-                <q-expansion-item v-model="advancedSettingsOpen" dense-toggle icon="settings" label="Erweiterte Einstellungen" class="q-mt-lg">
+                <q-expansion-item v-model="advancedSettingsOpen" :duration="0" dense-toggle icon="settings" label="Erweiterte Einstellungen" class="q-mt-lg">
                   <div class="settings-number-grid q-pt-md">
                     <q-input dense v-model.number="settingsForm.dreamingIntervalMinutes" outlined type="number" min="1" max="10080" label="Intervall (Minuten)" :disable="memories.settingsLoading" :rules="[integerRangeRule(1, 10080)]" />
                     <q-input dense v-model.number="settingsForm.dreamingIdleMinutes" outlined type="number" min="1" max="10080" label="Leerlauf (Minuten)" :disable="memories.settingsLoading" :rules="[integerRangeRule(1, 10080)]" />
@@ -470,7 +467,7 @@
       </q-tab-panel>
     </q-tab-panels>
 
-    <q-dialog v-model="memoryDialogOpen" :maximized="$q.screen.lt.sm" :persistent="savingMemory">
+    <q-dialog v-model="memoryDialogOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="savingMemory">
       <q-card class="memory-dialog app-surface">
         <q-form ref="memoryFormRef" class="column full-height" @submit.prevent="saveMemory">
           <q-card-section class="row items-start no-wrap q-gutter-md">

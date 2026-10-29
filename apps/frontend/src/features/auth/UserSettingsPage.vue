@@ -84,7 +84,7 @@
       <q-inner-loading :showing="users.loading" />
     </q-card>
 
-    <q-dialog v-model="createDialogOpen" :maximized="$q.screen.lt.sm" :persistent="saving">
+    <q-dialog v-model="createDialogOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="saving">
       <q-card class="user-dialog app-surface">
         <q-form @submit.prevent="createUser">
           <q-card-section>
@@ -119,7 +119,7 @@
       </q-card>
     </q-dialog>
 
-    <q-dialog v-model="passwordDialogOpen" :maximized="$q.screen.lt.sm" :persistent="saving">
+    <q-dialog v-model="passwordDialogOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="saving">
       <q-card class="user-dialog app-surface">
         <q-form @submit.prevent="resetPassword">
           <q-card-section>
