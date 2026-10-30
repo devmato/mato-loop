@@ -4,7 +4,7 @@
 
 Der eigene Session-Tempordner ist standardmäßig lesbar. Die Profiloption
 **Temporären Arbeitsordner automatisch freigeben** ergänzt den Schreibzugriff;
-Plan und Build aktivieren sie standardmäßig. Löschen und fremde Sessionordner benötigen normale Dateirechte.
+Plan, Build und Sysadmin aktivieren sie standardmäßig. Löschen und fremde Sessionordner benötigen normale Dateirechte.
 Unter **Session > Freigaben** sind diese abgeleiteten Rechte mit Herkunft und konkretem Pfad sichtbar,
 ohne zusätzliche gespeicherte Freigaben oder Widerruf-Buttons. Den Schreibzugriff ändern Sie am Profil.
 Auch dort gelten Computersperren, Werkzeugverbote und die Prüfung vertraulicher Daten.

@@ -57,7 +57,7 @@ def test_builtin_agent_profile_defaults() -> None:
     ]
     assert [profile.name for profile in profiles] == ["Allgemein", "Plan", "Build", "Sysadmin"]
     assert [profile.repository_instructions_enabled for profile in profiles] == [False, True, True, False]
-    assert [profile.temporary_files_enabled for profile in profiles] == [False, True, True, False]
+    assert [profile.temporary_files_enabled for profile in profiles] == [False, True, True, True]
     assert AgentProfilesSettings().profiles == []
     assert "persona_id" not in type(default).model_fields
     assert default.private_permissions == AgentProfilePermissions()

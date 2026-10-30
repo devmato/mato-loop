@@ -7,7 +7,7 @@ Schreibzugriff auf den eigenen Session-Tempordner des ausgewählten Computers.
 Unter Linux liegt er unter `/tmp/mato-loop/<session-id>/`, unter Windows im entsprechenden
 Unterordner `mato-loop/<session-id>` des Tempverzeichnisses des Agent-Benutzers. Lesen ist standardmäßig erlaubt;
 Löschen und andere Sessionordner benötigen normale Dateirechte.
-Plan und Build aktivieren ihn standardmäßig. Eigene Profile wählen **Erben**, **An** oder **Aus**;
+Plan, Build und Sysadmin aktivieren ihn standardmäßig. Eigene Profile wählen **Erben**, **An** oder **Aus**;
 mitgelieferte Profile zeigen den wirksamen Wert schreibgeschützt wie die übrigen Profilfelder.
 Gespeicherte eigene Werte bleiben erhalten. Die Einstellung gehört nicht zu den Tool-Anpassungen.
 Die Regel gilt für alle Sessions mit diesem Profil, der konkrete Pfadzugriff jedoch nur für die jeweilige Session.

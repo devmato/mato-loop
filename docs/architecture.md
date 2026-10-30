@@ -202,7 +202,7 @@ owner, originating input, session, active run, delivered outbox prompt, and pend
 ## Agent and Tools
 
 `temporaryFilesEnabled` is an inherited workflow field beside `sessionWritePaths` in the
-profile editor, enabled by default for Plan and Build. Personal profiles follow the
+profile editor, enabled by default for Plan, Build, and Sysadmin. Personal profiles follow the
 personal-profile gate, not the personal-tool gate. Tool permission endpoints do not
 expose or edit this field. Existing custom and built-in values remain in their current
 profile JSON documents, so no schema or data migration is needed. Built-in values are

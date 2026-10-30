@@ -549,6 +549,7 @@ def sysadmin_profile() -> AgentProfile:
         ),
         max_tool_calls=None,
         todo_enabled=True,
+        temporary_files_enabled=True,
         integrations_enabled_by_default=False,
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),
