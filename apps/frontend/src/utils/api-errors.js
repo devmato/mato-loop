@@ -219,6 +219,7 @@ const messages = {
   'sessionTemplate.duplicate': () => 'Eine Sessionvorlage mit diesem Namen existiert bereits.',
   'sessionTemplate.limitReached': () => 'Die maximale Anzahl an Sessionvorlagen ist erreicht.',
   'sessionTemplate.defaultProtected': () => 'Die Standardvorlage kann nicht gelöscht werden.',
+  'sessionTemplate.worktreesDisabled': () => 'Diese Sessionvorlage unterstützt keine Worktrees. Wähle eine Vorlage mit aktivierter Worktree-Unterstützung.',
   'modelDefaults.personalDisabled': () => 'Persönliche Standardmodelle sind deaktiviert.',
   'channel.providerUnsupported': () => 'Dieser Kanalanbieter wird nicht unterstützt.',
   'channel.unavailable': () => 'Der Kanal ist derzeit nicht erreichbar.',

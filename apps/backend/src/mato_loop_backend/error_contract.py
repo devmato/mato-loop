@@ -32,6 +32,7 @@ _MESSAGES = {
     "sessionTemplate.duplicate": "A session template with this name already exists.",
     "sessionTemplate.limitReached": "The session template limit has been reached.",
     "sessionTemplate.defaultProtected": "The default session template cannot be deleted.",
+    "sessionTemplate.worktreesDisabled": "The session template does not support worktrees. Select a template with worktree support enabled.",
     "modelDefaults.personalDisabled": "Personal model defaults are disabled.",
     "debug.notFound": "The requested data was not found.",
     "debug.queryFailed": "The debug query failed.",

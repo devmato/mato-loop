@@ -16,6 +16,7 @@ vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 
 import { useChatStore } from '../src/features/chat/store'
 import { buildAttachmentFormData, MAX_ATTACHMENT_DRAFT_BYTES } from '../src/features/chat/attachments'
+import { normalizedNewSessionDraft, sanitizedSessionOptions, sessionCreatePayload } from '../src/features/chat/state'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { controlCenterIntegrationIds } from 'src/app/control-center/manifest'
 import { useQuestionStore } from '../src/stores/questions'
@@ -632,6 +633,30 @@ describe('chat drafts', () => {
       preferredExecutionAgentId: 'agent-1',
       currentDirectory: '/srv/project'
     })
+  })
+
+  it('preserves worktree selection in older drafts and queued requests without the support flag', () => {
+    const options = { sessionProfile: { templateId: 'coding' }, preferredExecutionAgentId: 'agent', currentDirectory: '/repo', workspaceMode: 'worktree' }
+
+    expect([
+      normalizedNewSessionDraft({ options }).options.workspaceMode,
+      sessionCreatePayload(sanitizedSessionOptions(options), 'project', {}).workspace_mode
+    ]).toEqual(['worktree', 'worktree'])
+  })
+
+  it.each([
+    [false, 'agent', '/repo', 'local'],
+    [true, 'agent', '/repo', 'worktree'],
+    [true, 'other', '/repo', 'local'],
+    [true, 'agent', '/other', 'local']
+  ])('applies the project workspace mode only for enabled templates and matching workspaces (%s, %s, %s)', async (enabled, agent, directory, mode) => {
+    const chat = useChatStore()
+    Object.assign(chat.drafts.newSession.options, { preferredExecutionAgentId: agent, currentDirectory: directory, workspaceMode: 'worktree' })
+    api.post.mockResolvedValue({ data: { sessionTemplateId: 'template', sessionProfile: { worktreesEnabled: enabled }, workspaceMode: 'worktree', preferredExecutionAgentId: 'agent', currentDirectory: '/repo' } })
+
+    await chat.updateActive({ session_template_id: 'template' })
+
+    expect(chat.activeContext.workspaceMode).toBe(mode)
   })
 
   it('keeps the latest template choice when previews overlap with another project reset', async () => {

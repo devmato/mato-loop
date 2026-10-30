@@ -152,11 +152,11 @@ async def test_preview_resolves_the_current_draft_not_the_original_template(docu
 @pytest.mark.parametrize("explicit", [None, DEFAULT_TEMPLATE_ID])
 async def test_preview_inherits_project_template_unless_explicit(documents, explicit):
     user = UserAccount(id=uuid4(), username="owner", password_hash="hash")
-    project = Project(id=uuid4(), user_id=user.id, default_session_template_id=CODING_TEMPLATE_ID)
+    project = Project(id=uuid4(), user_id=user.id, default_session_template_id=CODING_TEMPLATE_ID, git_workspace_mode="worktree")
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = project
     result = await session_defaults(user, db, SessionOptionsRequest(project_id=project.id, session_template_id=explicit))
-    assert result["sessionTemplateId"] == str(explicit or CODING_TEMPLATE_ID)
+    assert (result["sessionTemplateId"], result["workspaceMode"]) == (str(explicit or CODING_TEMPLATE_ID), "local" if explicit else "worktree")
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -191,12 +191,22 @@ async def test_automatic_model_display_respects_scope_and_provider_gate(document
 
 def test_default_templates_and_invalid_agent_selection():
     default, coding = SessionTemplatesSettings().templates
-    assert [(item.name, item.agent_ids, item.start_agent_id, item.memory_mode, item.message_size) for item in (default, coding)] == [
-        ("Default", [GENERAL_PROFILE_ID, SYSADMIN_PROFILE_ID], GENERAL_PROFILE_ID, "full", "standard"),
-        ("Coding", [PLAN_PROFILE_ID, BUILD_PROFILE_ID], PLAN_PROFILE_ID, "full", "small"),
+    assert [(item.name, item.agent_ids, item.start_agent_id, item.memory_mode, item.message_size, item.snapshot().worktrees_enabled) for item in (default, coding)] == [
+        ("Default", [GENERAL_PROFILE_ID, SYSADMIN_PROFILE_ID], GENERAL_PROFILE_ID, "full", "standard", False),
+        ("Coding", [PLAN_PROFILE_ID, BUILD_PROFILE_ID], PLAN_PROFILE_ID, "full", "small", True),
     ]
     with pytest.raises(ValidationError):
         SessionTemplate(name="Invalid", agent_ids=[PLAN_PROFILE_ID], start_agent_id=BUILD_PROFILE_ID)
+
+
+@pytest.mark.parametrize("enabled", [None, False, True])
+def test_stored_coding_template_defaults_worktrees_without_overriding_explicit_choice(enabled):
+    data = SessionTemplatesSettings().templates[1].model_dump()
+    if enabled is None:
+        del data["worktrees_enabled"]
+    else:
+        data["worktrees_enabled"] = enabled
+    assert SessionTemplate.model_validate(data).worktrees_enabled is (enabled is not False)
 
 
 def test_session_message_size_rejects_unknown_values():

@@ -595,10 +595,10 @@ async def test_mark_session_read_uses_owned_assistant_message_monotonically(has_
     db.commit.assert_awaited_once()
 
 
-@pytest.mark.parametrize("content", ["Erste Nachricht", "/git-init"])
-async def test_session_is_created_with_first_message_and_run(monkeypatch, content) -> None:
+@pytest.mark.parametrize("content,general_template", [("Erste Nachricht", False), ("/git-init", False), ("Erste Nachricht", True)])
+async def test_session_is_created_with_first_message_and_run(monkeypatch, content, general_template) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
-    from mato_loop_backend.settings.session_profiles import CODING_TEMPLATE_ID
+    from mato_loop_backend.settings.session_profiles import CODING_TEMPLATE_ID, DEFAULT_TEMPLATE_ID
 
     user = _user()
     provider_id = uuid4()
@@ -623,6 +623,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch, conten
         default_execution_agent_id=uuid4(),
         default_current_directory="/srv/project",
         default_session_template_id=CODING_TEMPLATE_ID,
+        git_workspace_mode="worktree" if general_template else "local",
     )
 
     async def load_settings(_db, settings_type, **_kwargs):
@@ -663,6 +664,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch, conten
             content=f"  {content}  ",
             workspace_mode="worktree" if content == "/git-init" else None,
             project_id=project.id,
+            session_template_id=DEFAULT_TEMPLATE_ID if general_template else None,
             reasoning_effort="low",
             control_center={
                 "tabs": [
@@ -685,7 +687,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch, conten
     assert session.web_search_policy == "available"
     assert session.preferred_execution_agent_id == project.default_execution_agent_id
     assert session.current_directory == "/srv/project"
-    assert session.session_profile["template_id"] == str(CODING_TEMPLATE_ID)
+    assert session.session_profile["template_id"] == str(DEFAULT_TEMPLATE_ID if general_template else CODING_TEMPLATE_ID)
     assert session.control_center == {
         "tabs": [
             _stored_app_tab("session"),
@@ -718,6 +720,14 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch, conten
         db, user.id, project.default_execution_agent_id, "/srv/project", defer_unavailable=True,
     )
     storage.provision.assert_called_once_with(session.id, project.id, user_id=user.id)
+
+
+async def test_session_creation_rejects_worktree_with_disabled_template(monkeypatch) -> None:
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: kind()))
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    with pytest.raises(ApiError, match="sessionTemplate.worktreesDisabled"):
+        await create_session(SessionCreateRequest(content=None, workspace_mode="worktree"), _user(), db)
 
 
 @pytest.mark.parametrize("with_model", [False, True])
@@ -2774,7 +2784,7 @@ async def test_template_switch_replaces_session_overrides(monkeypatch) -> None:
     model = ModelConfig(provider_id=provider.id, model_id="chat")
     ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: ai if kind is AiProviderSettings else kind()))
-    session = ChatSession(id=uuid4(), user_id=user.id, title="Test", model_config_id=uuid4(), reasoning_effort="high", memory_mode="disabled", session_profile={"agent_models": {str(uuid4()): {"model_id": str(uuid4())}}}, web_search_policy="disabled")
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Test", model_config_id=uuid4(), reasoning_effort="high", memory_mode="disabled", session_profile={"agent_models": {str(uuid4()): {"model_id": str(uuid4())}}}, web_search_policy="disabled", workspace_mode="worktree")
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     db.scalar.return_value = None
@@ -2787,6 +2797,23 @@ async def test_template_switch_replaces_session_overrides(monkeypatch) -> None:
         "agentProfileId": str(template.start_agent_id), "modelId": None,
         "reasoningEffort": None, "memoryMode": "full", "webSearchPolicy": "disabled",
     }
+
+
+@pytest.mark.parametrize("change", ["template", "snapshot"])
+async def test_worktree_session_rejects_disabling_worktree_support(monkeypatch, change) -> None:
+    from mato_loop_backend.settings.session_profiles import (
+        DEFAULT_TEMPLATE_ID,
+        SessionProfileSnapshot,
+    )
+
+    user = _user()
+    session = ChatSession(id=uuid4(), user_id=user.id, workspace_mode="worktree", session_profile={"worktrees_enabled": True})
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: kind()))
+    payload = SessionUpdateRequest(**({"session_template_id": DEFAULT_TEMPLATE_ID} if change == "template" else {"session_profile": SessionProfileSnapshot()}))
+    with pytest.raises(ApiError, match="sessionTemplate.worktreesDisabled"):
+        await update_session(session.id, payload, user, db)
 
 
 @pytest.mark.parametrize("field,revokes", [("message_size", False), ("agent_ids", True), ("agent_models", True)])

@@ -10,7 +10,7 @@ Sessions können angepinnt, umbenannt, zwischen Projekten verschoben, archiviert
 
 | Einstellung | Bedeutung |
 | --- | --- |
-| Sessionvorlage | Verfügbare Agenten, Startagent, Memory, Nachrichtengröße und optionale Modell-/Reasoning-Vorgaben |
+| Sessionvorlage | Verfügbare Agenten, Startagent, Memory, Worktree-Unterstützung, Nachrichtengröße und optionale Modell-/Reasoning-Vorgaben |
 | Agent | Arbeitsweise, Tool-Rechte und Integrationsauswahl |
 | Modell und Reasoning | Effektive Modellwahl und unterstützte Reasoning-Stufe |
 | Memory | Voll, nur lesen oder deaktiviert |
@@ -49,10 +49,10 @@ Vor dem Sessionstart steht über dem Eingabefeld **Arbeitsbereich** mit **Nicht 
 **Lokal** oder **Worktree**. Ohne Computer oder Workspace ist der Arbeitsbereich
 nicht verfügbar. Ein ausgewählter Offline-Computer ändert den angezeigten Modus nicht.
 Bei neuen Projekt-Sessions wählen Sie vor dem Start **Lokal** oder **Worktree**;
-die Projektvorgabe liefert die Vorauswahl. Worktrees benötigen den im Projekt
+die Projektvorgabe liefert bei aktivierter Worktree-Unterstützung der Sessionvorlage die Vorauswahl. Worktrees benötigen den im Projekt
 eingerichteten Computer und Repositorypfad. Nach dem Start ist der Modus fest; das Feld
 verschwindet aus dem Chat. Die Informationen bleiben unter **Control Center > Git > Einstellungen** sichtbar.
-Sessionvorlagen enthalten keinen Git-Schalter.
+In der Sessionvorlage steuert **Worktrees verwenden** die Verfügbarkeit. Bei **Coding** ist die Option standardmäßig aktiviert, bei **Allgemein** und neuen eigenen Vorlagen deaktiviert. Ohne diese Option starten neue Sessions unabhängig von der Projektvorgabe lokal; normale Git-Funktionen bleiben nutzbar.
 Lokal bleibt einschließlich eigener Änderungen alles im vorhandenen Verzeichnis.
 Beim Sessionstart mit Worktree verwendet MatoLoop ohne Remote den letzten Commit des lokalen
 Zielbranches. Der Branch muss bereits einen Commit enthalten; uncommittete Änderungen
@@ -89,7 +89,7 @@ Unvollständige oder nachträglich vertauschte Arbeitskopien werden nicht automa
 Die Arbeitskopie liegt dauerhaft unter
 `<Agent-Datenverzeichnis>/worktrees/<Projekt-ID>/<Session-ID>`.
 Computer, Verzeichnis und Branch dieser Arbeitskopie bleiben der Session zugeordnet.
-Ein Vorlagenwechsel verschiebt sie nicht. Das ursprüngliche Repository muss erreichbar
+Vorlagen ohne Worktree-Unterstützung sind für solche Sessions nicht auswählbar; der Wechsel zwischen den Agenten einer passenden Vorlage bleibt möglich. Bestehende Sessions werden durch Änderungen an Vorlagen weder umgestellt noch von ihrem Worktree gelöst. Das ursprüngliche Repository muss erreichbar
 bleiben; Worktrees teilen dessen Git-Metadaten. Lokale `.env`-Dateien, Abhängigkeiten,
 laufende Dienste und Datenbanken werden nicht automatisch kopiert oder getrennt.
 Archivieren entfernt den Worktree nicht. Beim Löschen einer Session können Sie im

@@ -16,8 +16,8 @@ import { api } from 'src/boot/axios'
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.clearAllMocks() })
 
-it('offers the profile models reasoning choices for an inherited template model', async () => {
-  const template = { id: 'template', name: 'Coding', agentIds: ['plan'], startAgentId: 'plan', memoryMode: 'full', messageSize: 'small', modelId: null, reasoningEffort: null, agentModels: {} }
+it('saves worktree support and reasoning choices for an inherited template model', async () => {
+  const template = { id: 'template', name: 'Coding', agentIds: ['plan'], startAgentId: 'plan', memoryMode: 'full', messageSize: 'small', worktreesEnabled: false, modelId: null, reasoningEffort: null, agentModels: {} }
   const templates = { templates: [template], personalSettingsEnabled: true }
   const responses = {
     '/providers': {
@@ -41,11 +41,12 @@ it('offers the profile models reasoning choices for an inherited template model'
   await vi.waitFor(() => expect(root.querySelector('[aria-label="Coding bearbeiten"]')?.disabled).toBe(false))
   root.querySelector('[aria-label="Coding bearbeiten"]').click()
   await vi.waitFor(() => expect(document.querySelector('.q-expansion-item .q-item')).not.toBeNull())
+  document.querySelector('.q-toggle').click()
   document.querySelector('.q-expansion-item .q-item').click()
   const reasoning = await vi.waitUntil(() => [...document.querySelectorAll('.q-expansion-item [role="combobox"]')].find((item) => item.closest('.q-field').textContent.includes('Reasoning-Stufe')))
   reasoning.click()
   const high = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find((item) => item.querySelector('.q-item__label')?.textContent === 'Hoch'))
   high.click()
   document.querySelector('.q-dialog form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/session-templates/template', { ...template, agentModels: { plan: { modelId: null, reasoningEffort: 'high' } } }, { params: { scope: 'personal' } }))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/session-templates/template', { ...template, worktreesEnabled: true, agentModels: { plan: { modelId: null, reasoningEffort: 'high' } } }, { params: { scope: 'personal' } }))
 })

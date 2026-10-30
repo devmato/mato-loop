@@ -43,7 +43,8 @@ const { repository, loading, error, refresh } = useRepositoryProbe(
 const options = computed(() => {
   const remote = project.value?.gitRemote || repository.value?.defaultRemote
   const target = project.value?.gitTargetBranch || repository.value?.defaultBranch
-  const reason = !project.value ? 'Projekt mit passendem Computer und Repository erforderlich.'
+  const reason = !props.session.sessionProfile?.worktreesEnabled ? apiErrorMessage({ error: { code: 'sessionTemplate.worktreesDisabled' } })
+    : !project.value ? 'Projekt mit passendem Computer und Repository erforderlich.'
     : !agents.byId(props.session.preferredExecutionAgentId)?.connected ? 'Der Computer ist offline.'
       : error.value ? apiErrorMessage(error.value)
       : loading.value || !repository.value ? 'Repository wird geprüft.'

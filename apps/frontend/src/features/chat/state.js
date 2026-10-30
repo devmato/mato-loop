@@ -23,6 +23,7 @@ export function defaultSessionOptions() {
 export function sanitizedSessionOptions(options) {
   const sanitized = { ...options, workspaceContext: null }
   if (!sanitized.preferredExecutionAgentId) sanitized.currentDirectory = null
+  if (sanitized.sessionProfile?.worktreesEnabled === false) sanitized.workspaceMode = 'local'
   return sanitized
 }
 

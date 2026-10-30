@@ -22,6 +22,7 @@ class SessionProfileConfig(BaseModel):
     agent_ids: list[UUID] | None = Field(default=None, min_length=1)
     agent_models: dict[UUID, ChatModelOverride] = Field(default_factory=dict)
     message_size: Literal["standard", "small"] = "standard"
+    worktrees_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_agents(self):
@@ -42,12 +43,15 @@ class SessionTemplate(SessionProfileConfig, ChatModelOverride):
     memory_mode: Literal["full", "read_only", "disabled"] = "full"
 
     def snapshot(self) -> SessionProfileSnapshot:
-        return SessionProfileSnapshot(template_id=self.id, agent_ids=self.agent_ids, agent_models=self.agent_models, message_size=self.message_size).model_copy(deep=True)
+        return SessionProfileSnapshot(template_id=self.id, agent_ids=self.agent_ids, agent_models=self.agent_models, message_size=self.message_size, worktrees_enabled=self.worktrees_enabled).model_copy(deep=True)
 
     @model_validator(mode="after")
     def validate_start(self):
         if self.start_agent_id not in self.agent_ids:
             raise ValueError("the start agent must be selected")
+        # Older stored Coding templates must retain worktree support.
+        if self.id == CODING_TEMPLATE_ID and "worktrees_enabled" not in self.model_fields_set:
+            self.worktrees_enabled = True
         return self
 
 
@@ -56,7 +60,7 @@ class SessionTemplatesSettings(SettingsDocument):
     personal_settings_enabled: bool = True
     templates: list[SessionTemplate] = Field(default_factory=lambda: [
         SessionTemplate(id=DEFAULT_TEMPLATE_ID, name="Default", agent_ids=[GENERAL_PROFILE_ID, SYSADMIN_PROFILE_ID], start_agent_id=GENERAL_PROFILE_ID),
-        SessionTemplate(id=CODING_TEMPLATE_ID, name="Coding", agent_ids=[PLAN_PROFILE_ID, BUILD_PROFILE_ID], start_agent_id=PLAN_PROFILE_ID, message_size="small"),
+        SessionTemplate(id=CODING_TEMPLATE_ID, name="Coding", agent_ids=[PLAN_PROFILE_ID, BUILD_PROFILE_ID], start_agent_id=PLAN_PROFILE_ID, message_size="small", worktrees_enabled=True),
     ])
 
 

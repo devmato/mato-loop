@@ -161,13 +161,13 @@ it('adopts a draft remote without changing an unrelated project workspace', asyn
   expect(update).not.toHaveBeenCalled()
 })
 
-it.each([false, true])('rechecks worktree availability when reopening the selector (initial error: %s)', async initialError => {
+it.each([[false, true], [true, true], [false, false]])('rechecks worktree availability when reopening the selector (initial error: %s, template enabled: %s)', async (initialError, enabled) => {
   const pinia = createPinia()
   setActivePinia(pinia)
   const chat = useChatStore()
   chat.outboxLoaded = true
   chat.sessionsProjectId = 'project'
-  Object.assign(chat.drafts.newSession.options, { preferredExecutionAgentId: 'agent', currentDirectory: '/repo' })
+  Object.assign(chat.drafts.newSession.options, { preferredExecutionAgentId: 'agent', currentDirectory: '/repo', sessionProfile: { worktreesEnabled: enabled } })
   useProjectStore().items = [{ id: 'project', defaultExecutionAgentId: 'agent', defaultCurrentDirectory: '/repo' }]
   useExecutionAgentStore().items = [{ id: 'agent', connected: true, operations: ['git.repository', 'git.worktree'] }]
   const info = { repository: '/repo', remotes: [], defaultRemote: null, defaultBranch: 'main', targetHasCommit: false }
@@ -182,6 +182,11 @@ it.each([false, true])('rechecks worktree availability when reopening the select
   app = createApp({ render: () => h(WorkspaceField, { session: chat.activeContext, projectId: 'project', onUpdate: patch => chat.updateActive(patch) }) })
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
   root.querySelector('[role="combobox"]').click()
+  if (!enabled) {
+    await vi.waitFor(() => expect(document.body.textContent).toContain(apiErrorMessage({ error: { code: 'sessionTemplate.worktreesDisabled' } })))
+    expect([...document.querySelectorAll('.q-item')].find(item => item.textContent.includes('Worktree')).getAttribute('aria-disabled')).toBe('true')
+    return
+  }
   await vi.waitFor(() => expect(document.body.textContent).toContain(initialError ? apiErrorMessage(probeError) : 'Der lokale Zielbranch benötigt einen Commit'))
   expect([...document.querySelectorAll('.q-item')].find(item => item.textContent.includes('Worktree')).getAttribute('aria-disabled')).toBe('true')
   info.targetHasCommit = true

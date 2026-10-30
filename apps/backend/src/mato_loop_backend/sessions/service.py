@@ -1016,6 +1016,7 @@ async def create_session(
     template = await load_template(db, user.id, payload.session_template_id or (project.default_session_template_id if project else None))
     configuration = payload.session_profile or template.snapshot()
     configuration.template_id = template.id
+    configuration.worktrees_enabled = template.worktrees_enabled
     agent_profile_id = payload.agent_profile_id or template.start_agent_id
     if configuration.agent_ids is not None and agent_profile_id not in configuration.agent_ids:
         raise SessionServiceError(422, "agentProfile.selectedUnavailable")
@@ -1039,7 +1040,9 @@ async def create_session(
             else None
         )
     )
-    workspace_mode = (command.initial_workspace_mode if command else None) or payload.workspace_mode or (project.git_workspace_mode if project else None) or "local"
+    workspace_mode = (command.initial_workspace_mode if command else None) or payload.workspace_mode or (project.git_workspace_mode if project and configuration.worktrees_enabled else None) or "local"
+    if workspace_mode == "worktree" and not configuration.worktrees_enabled:
+        raise SessionServiceError(409, "sessionTemplate.worktreesDisabled")
     item = ChatSession(
         id=uuid5(user.id, str(payload.run_id)) if payload.run_id and workspace_mode == "worktree" else uuid4(),
         user_id=user.id,
@@ -1436,6 +1439,11 @@ async def update_session(
             "memory_mode": MemoryMode(template.memory_mode),
         })
         fields = payload.model_fields_set
+    if item.workspace_mode == "worktree" and payload.session_profile is not None and not payload.session_profile.worktrees_enabled:
+        previous = SessionProfileSnapshot.model_validate(item.session_profile or {})
+        # Existing legacy bindings remain editable without enabling worktrees retroactively.
+        if "session_template_id" in fields or previous.worktrees_enabled or payload.session_profile.template_id != previous.template_id:
+            raise SessionServiceError(409, "sessionTemplate.worktreesDisabled")
     target_profile_id = (
         payload.agent_profile_id or await default_agent_profile_id(db)
         if "agent_profile_id" in fields

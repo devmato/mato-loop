@@ -110,6 +110,11 @@ export const draftActions = {
           for (const field of ['sessionTemplateId', 'sessionProfile', 'agentProfileId', 'modelId', 'reasoningEffort', 'memoryMode', 'effectiveMemoryMode', 'memoryToolsAvailable', 'memoryUnavailableReason']) {
             if (Object.hasOwn(data, field)) options[field] = data[field]
           }
+          if (templateId && Object.hasOwn(data, 'workspaceMode')) {
+            options.workspaceMode = options.preferredExecutionAgentId === data.preferredExecutionAgentId
+              && options.currentDirectory === data.currentDirectory ? data.workspaceMode : 'local'
+          }
+          Object.assign(options, sanitizedSessionOptions(options))
         }
         this.persistDrafts()
       })()

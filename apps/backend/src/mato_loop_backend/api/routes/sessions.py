@@ -780,6 +780,7 @@ async def session_defaults(
     ai = await load_effective_ai(db, user.id)
 
     configuration = payload.session_profile or template.snapshot()
+    configuration.worktrees_enabled = template.worktrees_enabled
     configured_model = payload.model_id if "model_id" in payload.model_fields_set else template.model_id
     configured_reasoning = payload.reasoning_effort if "reasoning_effort" in payload.model_fields_set else template.reasoning_effort
     memory_mode = payload.memory_mode or MemoryMode(template.memory_mode)
@@ -835,7 +836,7 @@ async def session_defaults(
         "webSearchPolicy": WebSearchPolicy.AVAILABLE.value,
         "preferredExecutionAgentId": str(preferred_agent_id) if preferred_agent_id else None,
         "currentDirectory": current_directory,
-        "workspaceMode": (project.git_workspace_mode if project else None) or "local",
+        "workspaceMode": (project.git_workspace_mode if project and configuration.worktrees_enabled else None) or "local",
     }
 
 

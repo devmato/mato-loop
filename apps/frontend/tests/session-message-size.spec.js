@@ -11,11 +11,30 @@ import SessionSettingsFields from '../src/features/chat/components/SessionSettin
 import { useProviderStore } from '../src/stores/providers'
 import { useExecutionAgentStore } from '../src/stores/execution-agents'
 import { useAuthStore } from '../src/stores/auth'
+import { useSessionTemplateStore } from '../src/features/settings/session-templates-store'
 import { api } from 'src/boot/axios'
 import { quasarOptions } from './quasar-options'
 
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks() })
+
+it('disables templates without worktree support in an existing worktree session', async () => {
+  const pinia = createPinia()
+  useSessionTemplateStore(pinia).templates = [
+    { id: 'general', name: 'Allgemein', worktreesEnabled: false },
+    { id: 'coding', name: 'Coding', worktreesEnabled: true }
+  ]
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(SessionSettingsFields, {
+    session: { id: 'session', workspaceMode: 'worktree', sessionProfile: { templateId: 'coding' } }, fields: ['template']
+  }) }).use(pinia).use(Quasar, quasarOptions)
+  app.mount(root)
+  root.querySelector('[role="combobox"]').click()
+  await vi.waitFor(() => expect([...document.querySelectorAll('[role="option"]')].map(item => [
+    item.querySelector('.q-item__label').textContent, item.getAttribute('aria-disabled') === 'true'
+  ])).toEqual([['Allgemein', true], ['Coding', false]]))
+})
 
 it.each([true, false])('edits session trust only with model distinction enabled (%s)', async (enabled) => {
   const pinia = createPinia()

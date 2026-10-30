@@ -102,7 +102,13 @@ const hasSessionFields = computed(() => SESSION_FIELDS.some(has))
 const hasLlmFields = computed(() => LLM_FIELDS.some(has))
 const templateId = computed(() => props.session?.sessionProfile?.templateId || props.session?.sessionTemplateId || null)
 const templateOptions = computed(() => {
-  const options = templates.templates.map((item) => ({ label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`, value: item.id }))
+  const options = templates.templates.map((item) => ({
+    label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`,
+    value: item.id,
+    disable: Boolean(props.session?.id && props.session?.workspaceMode === 'worktree' && !item.worktreesEnabled),
+    caption: props.session?.id && props.session?.workspaceMode === 'worktree' && !item.worktreesEnabled
+      ? 'Diese Vorlage unterstützt den bestehenden Worktree nicht.' : undefined
+  }))
   if (templateId.value && !options.some((item) => item.value === templateId.value)) {
     options.push({ label: 'Nicht verfügbare Vorlage', value: templateId.value, disable: true })
   }
@@ -405,7 +411,9 @@ const ComputerField = defineComponent(() => () => [
     class: props.compact ? 'chat-start-select col-auto q-px-sm text-body2' : undefined,
     hideBottomSpace: props.compact,
     'aria-label': 'Computer auswählen',
-    hint: props.compact ? undefined : 'Der Computer wird für den nächsten Lauf verwendet.',
+    hint: props.compact ? undefined : props.session?.id && props.session?.workspaceMode === 'worktree'
+      ? 'Computer und Arbeitsverzeichnis sind an den Worktree dieser Session gebunden.'
+      : 'Der Computer wird für den nächsten Lauf verwendet.',
     persistentHint: !props.compact,
     'onUpdate:modelValue': selectExecutionAgent
   }), {
