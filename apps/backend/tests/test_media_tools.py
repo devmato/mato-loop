@@ -267,7 +267,7 @@ async def test_video_tool_revalidation_keeps_frame_analysis_available(
 
     result = await tool_registry.execute(call, tool_context)
 
-    assert result.metadata == {"errorCode": "tool.invalidArguments"}
+    assert result.metadata == {"errorCode": "tool.invalidArguments", "argumentsRejected": True}
 
 
 async def test_ask_denial_stops_before_media_service(tmp_path, monkeypatch) -> None:

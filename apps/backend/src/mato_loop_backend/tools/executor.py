@@ -54,6 +54,12 @@ from mato_loop_backend.tools.snapshots import ToolSnapshotState, snapshot_revisi
 from mato_loop_backend.web.fetch import WebFetchError
 
 
+def _rejected_arguments(*, field: str | None = None, params: dict[str, str] | None = None) -> ToolResult:
+    result = ToolResult.error("tool.invalidArguments", field=field, params=params)
+    result.metadata["argumentsRejected"] = True
+    return result
+
+
 async def execute_definition(
     self, call: ToolCall, context: ToolContext, tool: BoundTool, *, permissions_only: bool = False,
 ) -> ToolResult:
@@ -208,16 +214,16 @@ async def execute_definition(
         arguments = definition.validate_arguments(raw_arguments)
     except JsonSchemaValidationError as exc:
         field_name = ".".join(str(part) for part in exc.absolute_path) or None
-        return ToolResult.error("tool.invalidArguments", field=field_name)
+        return _rejected_arguments(field=field_name)
     except DynamicToolArgumentsError as exc:
-        return ToolResult.error("tool.invalidArguments", field=exc.field)
+        return _rejected_arguments(field=exc.field)
     except (SchemaError, Unresolvable):
-        return ToolResult.error("tool.invalidArguments")
+        return _rejected_arguments()
     except ValidationError as exc:
         errors = exc.errors(include_url=False, include_input=False)
         for error in errors:
             if error["type"] == "personal_settings_invalid":
-                return ToolResult.error("tool.invalidArguments", field=error["ctx"]["field"])
+                return _rejected_arguments(field=error["ctx"]["field"])
             if error["type"] == "question_placeholder_not_allowed":
                 return ToolResult.error(
                     "question.placeholderNotAllowed",
@@ -242,8 +248,8 @@ async def execute_definition(
             "missing": "missing", "uuid_parsing": "invalid_uuid", "uuid_type": "invalid_uuid",
             "literal_error": "invalid_choice", "enum": "invalid_choice",
         }.get(errors[0]["type"])
-        return ToolResult.error(
-            "tool.invalidArguments", field=field_name,
+        return _rejected_arguments(
+            field=field_name,
             params={"reason": reason} if reason else None,
         )
     selected_integration_id = tool.source_id
@@ -254,9 +260,7 @@ async def execute_definition(
                 UUID(str(getattr(arguments, definition.instance_argument)))
             )
         except (AttributeError, TypeError, ValueError):
-            return ToolResult.error(
-                "tool.invalidArguments", field=definition.instance_argument
-            )
+            return _rejected_arguments(field=definition.instance_argument)
         if selected_integration_id not in dict(tool.integration_revisions):
             return ToolResult.error("tool.unavailable")
     elif tool.integration_revisions:
@@ -299,9 +303,7 @@ async def execute_definition(
             if definition.resource_argument is not None:
                 resource_key = getattr(arguments, definition.resource_argument, None)
                 if not isinstance(resource_key, str) or not resource_key:
-                    return ToolResult.error(
-                        "tool.invalidArguments", field=definition.resource_argument
-                    )
+                    return _rejected_arguments(field=definition.resource_argument)
             from mato_loop_backend.tools.access import profile_tool_settings
 
             context.tool_settings = await profile_tool_settings(context)

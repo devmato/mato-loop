@@ -146,7 +146,8 @@ export function agentRunPresentation({
         ? toolItems.find((item) => item.tool.id === activity.toolCallId)
         : toolItems.findLast((item) => item.current !== false && (item.result || item.completed))
       : null
-  const presentationTool = selectedTool?.tool || (
+  const argumentsRejected = selectedTool?.result?.argumentsRejected === true
+  const presentationTool = argumentsRejected ? null : selectedTool?.tool || (
     ['preparing_context', 'processing_tool', 'waiting_model'].includes(activity?.phase) && activity.tool && !reasoningSummary && !streamContextSummary?.content
       ? { id: activity.toolCallId, name: activity.tool, arguments: {}, toolDisplay: activity.toolDisplay }
       : null
@@ -157,7 +158,7 @@ export function agentRunPresentation({
       ? 'Freigabe erforderlich'
       : question
         ? 'Antwort erforderlich'
-        : reasoningSummary ? 'Nachdenken' : (presentationTool ? toolActivityLabel(presentationTool) : agentActivityLabel(activity))
+        : reasoningSummary ? 'Nachdenken' : (presentationTool ? toolActivityLabel(presentationTool) : argumentsRejected ? 'Verarbeite Anfrage' : agentActivityLabel(activity))
   const summary = activity?.phase === 'compacting_context'
     ? ''
     : approval?.title

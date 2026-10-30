@@ -139,7 +139,7 @@ const currentBatch = computed(() => props.running && props.activity?.phase === '
   && presentation.value.entry?.type === 'tool' ? presentation.value.entry.batchId : null)
 const preparedEntries = computed(() => {
   const current = presentation.value.entry
-  const history = (props.history?.entries || []).filter((entry) => !(entry.type === 'reasoning' && entry.live) && (
+  const history = (props.history?.entries || []).filter((entry) => entry.result?.argumentsRejected !== true && !(entry.type === 'reasoning' && entry.live) && (
     entry.type !== 'tool' || !props.running || entry.result || entry.completed || entry.approval || entry.question
       || entry.key === current?.key || (!historyExpanded.value && currentBatch.value != null && entry.batchId === currentBatch.value)
   )).map((entry) => {

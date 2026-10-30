@@ -103,6 +103,7 @@ async def persist_tool_result(
                    if call.name == "shell_run" and isinstance(metadata.get("shellExecution"), dict) else {}),
                 **({"userEditedArguments": True} if metadata.get("userEdited") is True else {}),
                 **({"errorCode": metadata["errorCode"]} if isinstance(metadata.get("errorCode"), str) else {}),
+                **({"argumentsRejected": True} if metadata.get("argumentsRejected") is True else {}),
                 **({"toolSnapshot": metadata["toolSnapshot"]} if isinstance(metadata.get("toolSnapshot"), dict) else {}),
                 **({"toolDiscovery": metadata["toolDiscovery"]}
                    if call.name == "search_tools" and not metadata.get("errorCode")
@@ -451,6 +452,9 @@ async def execute_tool_batch(
                 state.repeated_tool_call_limit_reached = True
             content = json.dumps(error_payload("agent.repeatedToolCall"), ensure_ascii=False)
             metadata = {"errorCode": "agent.repeatedToolCall"}
+            if (repeated_tool_call_repair_available
+                    and failed_tool_call_signatures.get(validation_signature) == "tool.invalidArguments:notStarted"):
+                metadata["argumentsRejected"] = True
         elif call.name not in offered_names or (not memory_available_now and call.name != "context_search") or (
             call.name == "memory_write" and not memory_write_available_now
         ):
@@ -732,6 +736,7 @@ async def execute_tool_batch(
             # Validation repairs may change metadata; execution retries must change the action.
             failure_signature = validation_signature if error_code == "tool.invalidArguments" else call_signature
             failed_tool_call_signatures[failure_signature] = (
+                "tool.invalidArguments:notStarted" if metadata.get("argumentsRejected") is True else
                 "approval.targetChanged:notStarted" if metadata.get("retryAfterFreshApproval") is True else error_code
             )
         else:

@@ -723,7 +723,7 @@ async def test_dynamic_tool_unresolved_local_ref_is_controlled_invalid_arguments
 
     result = await ToolRegistry([definition]).execute(call, _context(tmp_path, call))
 
-    assert result.metadata == {"errorCode": "tool.invalidArguments"}
+    assert result.metadata == {"errorCode": "tool.invalidArguments", "argumentsRejected": True}
 
 
 async def test_generate_qr_code_returns_scannable_png(tmp_path) -> None:
@@ -823,7 +823,7 @@ async def test_generate_qr_code_rejects_oversized_utf8_content(tmp_path) -> None
 
     result = await tool_registry.execute(call, _context(tmp_path, call))
 
-    assert result.metadata == {"errorCode": "tool.invalidArguments"}
+    assert result.metadata == {"errorCode": "tool.invalidArguments", "argumentsRejected": True}
 
 
 async def test_read_qr_code_uses_current_session_image_and_source_trust(
@@ -1675,8 +1675,8 @@ async def test_automation_argument_validation_rejects_invalid_schedule_and_outpu
     )
     second = await tool_registry.execute(invalid_output, _context(tmp_path, invalid_output))
 
-    assert first.metadata == {"errorCode": "tool.invalidArguments"}
-    assert second.metadata == {"errorCode": "tool.invalidArguments"}
+    assert first.metadata == {"errorCode": "tool.invalidArguments", "argumentsRejected": True}
+    assert second.metadata == {"errorCode": "tool.invalidArguments", "argumentsRejected": True}
 
 
 def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
@@ -3667,7 +3667,10 @@ async def test_tool_registry_returns_stable_errors_for_unknown_tools_and_invalid
 ) -> None:
     result = await ToolRegistry([_definition()]).execute(call, Mock())
 
-    assert result.metadata == {"errorCode": expected_error["code"]}
+    assert result.metadata == {
+        "errorCode": expected_error["code"],
+        **({"argumentsRejected": True} if expected_error["code"] == "tool.invalidArguments" else {}),
+    }
     assert json.loads(result.content) == {"error": expected_error}
 
 
@@ -4112,7 +4115,7 @@ async def test_session_read_rejects_two_positions_before_database_access(tmp_pat
 
     result = await tool_registry.execute(call, context)
 
-    assert result.metadata == {"errorCode": "tool.invalidArguments"}
+    assert result.metadata == {"errorCode": "tool.invalidArguments", "argumentsRejected": True}
     context.db.scalar.assert_not_awaited()
     context.db.scalars.assert_not_awaited()
 
@@ -4778,7 +4781,7 @@ async def test_memory_retrieve_rejects_mode_argument_mismatches(
 
     result = await tool_registry.execute(call, context)
 
-    assert result.metadata == {"errorCode": "tool.invalidArguments"}
+    assert result.metadata == {"errorCode": "tool.invalidArguments", "argumentsRejected": True}
 
 
 def test_memory_retrieve_schema_requires_explicit_mode() -> None:
@@ -4815,7 +4818,7 @@ async def test_memory_write_reports_invalid_identifier_field(tmp_path) -> None:
 
     result = await tool_registry.execute(call, context)
 
-    assert result.metadata == {"errorCode": "tool.invalidArguments"}
+    assert result.metadata == {"errorCode": "tool.invalidArguments", "argumentsRejected": True}
     assert json.loads(result.content) == {
         "error": {
             "code": "tool.invalidArguments",

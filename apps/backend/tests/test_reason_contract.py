@@ -13,6 +13,7 @@ from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.models import Message, WebSearchPolicy
 from mato_loop_backend.prompt_eval import PromptCase, _validate_tool_calls
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
+from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.registry import ToolRegistry
@@ -49,6 +50,8 @@ async def test_reason_repair_through_runtime_and_real_registry(monkeypatch, extr
     await AgentRuntime._execute_loop(db, run)
 
     first, second = _tool_messages(db)
+    assert message_payload(first)["argumentsRejected"] is True
+    assert message_dict(first) == message_dict(Message(role="tool", content=first.content, tool_call_id=first.tool_call_id))
     assert json.loads(first.content)["error"] == {
         "code": "tool.invalidArguments",
         "message": "The tool arguments are invalid. Inspect error.field and error.params.reason and retry with arguments that match the tool schema.",
@@ -88,8 +91,11 @@ async def test_repeated_batch_gets_one_model_round_to_repair(monkeypatch, repair
         search_policy=WebSearchPolicy.AVAILABLE,
     )
 
-    async def execute(call, _context, _tool):
-        return ToolResult.json({"content": "note"}) if call.arguments.get("_reason", "").strip() else ToolResult.error("tool.invalidArguments", field="_reason")
+    handler = AsyncMock(return_value=ToolResult.json({"content": "note"}))
+
+    async def execute(call, context, tool):
+        tool = replace(tool, definition=replace(tool.definition, handler=handler))
+        return await ToolRegistry._execute_definition(tool_registry, call, context, tool)
 
     tool_registry._execute_definition.side_effect = execute
     if repair:
@@ -102,6 +108,11 @@ async def test_repeated_batch_gets_one_model_round_to_repair(monkeypatch, repair
         assert len(requests) == 3
         assert tool_registry._execute_definition.await_count == 2
 
+    assert [message_payload(message).get("argumentsRejected", False) for message in _tool_messages(db)
+            if message.provider_data["_matoloop"].get("errorCode") == "agent.repeatedToolCall"] == (
+        [True, True] if repair else [True, True, False, False]
+    )
+
 
 async def test_changing_reason_does_not_retry_execution_failure(monkeypatch):
     calls = [read_call(str(i), _reason=f"Begründung {i}") for i in range(3)]
@@ -112,6 +123,7 @@ async def test_changing_reason_does_not_retry_execution_failure(monkeypatch):
     with pytest.raises(AgentRunError, match="agent.repeatedToolCall"):
         await AgentRuntime._execute_loop(db, run)
     tool_registry._execute_definition.assert_awaited_once()
+    assert all(not message_payload(message).get("argumentsRejected") for message in _tool_messages(db))
 
 
 def test_reason_survives_persisted_history_projection():

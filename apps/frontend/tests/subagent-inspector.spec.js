@@ -44,6 +44,29 @@ afterEach(() => {
 })
 
 describe('subagent inspector navigation and presentation', () => {
+  it.each([false, true])('hides rejected arguments from live activity and history (expanded: %s)', (expanded) => {
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      expanded,
+      running: true,
+      activity: { phase: 'waiting_model', tool: 'write_file', toolCallId: 'rejected' },
+      history: { entries: [
+        { key: 'saved', type: 'tool', tool: { id: 'saved', name: 'write_file', arguments: { path: 'saved.txt' } }, result: { content: '{}' } },
+        { key: 'denied', type: 'tool', tool: { id: 'denied', name: 'write_file', arguments: { path: 'denied.txt' } }, result: { content: '{"error":{"code":"permission.denied"}}' } },
+        { key: 'rejected', type: 'tool', tool: { id: 'rejected', name: 'write_file', arguments: { path: 'invalid.txt' } }, result: { argumentsRejected: true, content: '{"error":{"code":"tool.invalidArguments"}}' } }
+      ] }
+    }) })
+    app.use(createPinia()).use(Quasar, { components })
+    mountApp()
+
+    expect({
+      tools: [...root.querySelectorAll('.tool-call__header .work-history__activity-summary')].map((element) => element.textContent),
+      activity: root.querySelector('.activity-shimmer')?.textContent,
+      count: root.querySelector('.work-history__tool-group-header .work-history__activity-summary')?.textContent
+    }).toEqual({ tools: expanded ? ['saved.txt', 'denied.txt'] : [], activity: 'Verarbeite Anfrage', count: expanded ? '· 2' : undefined })
+  })
+
   it('summarizes repeated and deleted file operations without output cards', () => {
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
     const action = {
