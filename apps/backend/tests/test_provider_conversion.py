@@ -40,6 +40,16 @@ def test_chat_messages_convert_internal_tool_calls() -> None:
     assert messages[1]["tool_call_id"] == "call-1"
 
 
+@pytest.mark.parametrize("convert", [_chat_messages, _responses_input])
+def test_tool_argument_serialization_is_stable_across_key_order(convert) -> None:
+    call = {"id": "call-1", "name": "read", "arguments": {"root": "files", "path": "probe.txt"}}
+    messages = [{"role": "assistant", "content": "", "tool_calls": [call]}]
+    original = convert(messages)
+    call["arguments"] = {"path": "probe.txt", "root": "files"}
+
+    assert convert(messages) == original
+
+
 def test_chat_messages_merge_leading_system_messages() -> None:
     messages = _chat_messages(
         [

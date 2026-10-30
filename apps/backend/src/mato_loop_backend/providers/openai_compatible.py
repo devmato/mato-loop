@@ -240,7 +240,7 @@ def _chat_messages(
                     "type": "function",
                     "function": {
                         "name": call["name"],
-                        "arguments": json.dumps(call.get("arguments") or {}, ensure_ascii=True),
+                        "arguments": json.dumps(call.get("arguments") or {}, ensure_ascii=True, sort_keys=True),
                     },
                 }
                 for call in message["tool_calls"]
@@ -416,7 +416,7 @@ def _responses_input(
                             "type": "function_call",
                             "call_id": call["id"],
                             "name": call["name"],
-                            "arguments": json.dumps(call.get("arguments") or {}, ensure_ascii=True),
+                            "arguments": json.dumps(call.get("arguments") or {}, ensure_ascii=True, sort_keys=True),
                         }
                     )
         if reasoning_token_estimates is not None and role == "assistant":
