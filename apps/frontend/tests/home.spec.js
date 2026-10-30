@@ -3,7 +3,7 @@ import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QBadge, QBanner, QBtn, QIcon, QItem, QItemLabel, QItemSection, QLayout, QList, QPageContainer, QSkeleton, QSpinnerGrid, QTooltip, Ripple } from 'quasar'
+import { Quasar, QBadge, QBanner, QBtn, QCard, QCardActions, QCardSection, QDialog, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QLayout, QList, QMenu, QPageContainer, QSeparator, QSkeleton, QSpinnerGrid, QTooltip, ClosePopup, Ripple } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 const mocks = vi.hoisted(() => ({ get: vi.fn() }))
@@ -67,7 +67,8 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   await router.push('/home')
   root = document.createElement('div'); document.body.append(root)
   app = createApp({ render: () => h(QLayout, null, () => h(QPageContainer, null, () => h(RouterView))) })
-  app.use(pinia).use(router).use(Quasar, { components: { QBadge, QBanner, QBtn, QIcon, QItem, QItemLabel, QItemSection, QList, QSkeleton, QSpinnerGrid, QTooltip }, directives: { Ripple } })
+  app.provide('confirmDiscardedEdit', async () => true)
+  app.use(pinia).use(router).use(Quasar, { components: { QBadge, QBanner, QBtn, QCard, QCardActions, QCardSection, QDialog, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QMenu, QSeparator, QSkeleton, QSpinnerGrid, QTooltip }, directives: { ClosePopup, Ripple } })
   app.mount(root)
 
   await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))
@@ -78,19 +79,39 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   await vi.waitFor(() => expect(root.querySelector('h1').textContent).toBe('Willkommen zurück'))
   expect(mocks.get).toHaveBeenCalledWith('/sessions', { params: { pageSize: 6, sort: 'recent' } })
   expect(root.textContent).not.toContain('Neue Antwort')
-  expect(root.querySelector('a[href*="session=session-1"] [role="status"]').getAttribute('aria-label')).toBe('Agent arbeitet')
+  expect(root.querySelector('.home-activity-row [role="status"]').getAttribute('aria-label')).toBe('Agent arbeitet')
   app.config.globalProperties.$q.screen.gt.xs = false
   app.config.globalProperties.$q.screen.lt.sm = true
   await nextTick()
   expect(root.querySelector('#home-sessions').textContent).toBe('Zuletzt aktiv')
-  expect(root.querySelector('a[href*="session=session-1"]').classList.contains('q-item--dense')).toBe(true)
+  expect(root.querySelector('.home-activity-row').classList.contains('q-item--dense')).toBe(true)
   app.config.globalProperties.$q.screen.gt.xs = true
   app.config.globalProperties.$q.screen.lt.sm = false
   await nextTick()
   expect(root.querySelector('#home-automations')).toBeNull()
   useAutomationStore().items[0].effectiveState = { enabled: true, nextRunAt: '2026-10-04T12:00:00Z' }
   await vi.waitFor(() => expect(root.textContent).toContain('Nächste Automationen'))
-  root.querySelector('a[href*="session=session-1"]').click()
+  const menus = []
+  for (const title of ['Ein Gespräch fortsetzen', 'Bericht']) {
+    const button = root.querySelector(`button[aria-label="Aktionen für ${title}"]`)
+    for (const type of ['mousedown', 'mouseup', 'click']) button.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(document.querySelector('.q-menu')).not.toBeNull())
+    menus.push({ insideLink: Boolean(button.closest('a')), items: [...document.querySelectorAll('.q-menu .q-item__label')].map((item) => item.textContent) })
+    button.click()
+    await vi.waitFor(() => expect(document.querySelector('.q-menu')).toBeNull())
+    for (const type of ['keydown', 'keyup']) button.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(document.querySelector('.q-menu')).not.toBeNull())
+    button.click()
+    await vi.waitFor(() => expect(document.querySelector('.q-menu')).toBeNull())
+  }
+  expect({ menus, path: router.currentRoute.value.path }).toEqual({
+    menus: [
+      { insideLink: false, items: ['Anheften', 'Umbenennen', 'Verschieben', 'Archivieren', 'Löschen'] },
+      { insideLink: false, items: ['Automation bearbeiten', 'Automation löschen'] }
+    ],
+    path: '/home'
+  })
+  root.querySelector('.home-activity-row').click()
   await vi.waitFor(() => expect(router.currentRoute.value.query).toEqual({ session: 'session-1', project: 'project-1' }))
   await router.push('/home')
   await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))

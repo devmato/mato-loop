@@ -68,7 +68,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, provide, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import AppNavigation from 'src/app/AppNavigation.vue'
@@ -104,6 +104,7 @@ const controlCenterLabel = computed(() => notifications.unreadCount
   ? `Benachrichtigungen im Control Center öffnen, ${notifications.unreadCount} ungelesen`
   : 'Control Center öffnen')
 const { visualViewportStyle } = useShellSync({ drawerOpen, controlCenterVisible })
+provide('confirmDiscardedEdit', confirmDiscardedEdit)
 
 function openNavigation() {
   drawerOpen.value = true

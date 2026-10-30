@@ -264,6 +264,7 @@ body.body--dark .app-floating-control--flat {
 
   .project-list-item__action,
   .sidebar-section__action,
+  .home-activity-row__menu,
   .session-list-item__actions > .sidebar-icon-button {
     opacity: 0;
     pointer-events: none;
@@ -272,6 +273,7 @@ body.body--dark .app-floating-control--flat {
   .project-list-item__header:is(:hover, :focus-visible, :has(:focus-visible)) .project-list-item__action,
   .project-list-item--menu-open .project-list-item__action,
   .sidebar-row:is(:hover, :focus-visible, :has(:focus-visible)) .sidebar-section__action,
+  .home-activity-row:is(:hover, :focus-visible, :has(:focus-visible), .home-activity-row--menu-open) .home-activity-row__menu,
   .session-list-item:is(:hover, :focus-visible, :has(:focus-visible), .session-list-item--menu-open) .session-list-item__actions > .sidebar-icon-button,
   .session-list-item__actions > .session-list-item__pin-button--pinned {
     opacity: 1;

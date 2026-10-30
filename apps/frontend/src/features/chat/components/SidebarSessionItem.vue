@@ -56,22 +56,11 @@
             list-class="session-actions-menu"
           >
             <slot name="menu">
-              <template v-if="session.title != null">
-                <SidebarNavItem
-                  v-if="showPin && $q.screen.lt.md" icon="push_pin"
-                  :label="session.pinned ? 'Nicht mehr anheften' : 'Anheften'"
-                  :disable="pinning" v-close-popup @click="emit('toggle-pin', session)"
-                />
-                <SidebarNavItem icon="edit" label="Umbenennen" v-close-popup @click="emit('rename', session)" />
-                <SidebarNavItem icon="drive_file_move" label="Verschieben" v-close-popup @click="emit('move', session)" />
-                <q-separator class="q-my-xs" />
-                <SidebarNavItem icon="archive" label="Archivieren" v-close-popup @click="emit('archive', session)" />
-                <SidebarNavItem
-                  icon="delete_outline" label="Löschen" v-close-popup class="text-negative"
-                  @click="emit('delete', session)"
-                />
-              </template>
-              <q-item v-else><q-item-section>Session wird geladen …</q-item-section></q-item>
+              <SessionMenuItems
+                :session="session" :show-pin="showPin && $q.screen.lt.md" :pinning="pinning"
+                @toggle-pin="emit('toggle-pin', $event)" @rename="emit('rename', $event)"
+                @move="emit('move', $event)" @archive="emit('archive', $event)" @delete="emit('delete', $event)"
+              />
             </slot>
           </SidebarActionMenu>
         </div>
@@ -90,7 +79,7 @@ import { computed } from 'vue'
 import { formatAbsoluteDateTime, formatCompactAge } from 'src/utils/date-time'
 import { sessionSidebarStatus } from '../session-groups'
 import SidebarIconButton from 'src/shared/ui/SidebarIconButton.vue'
-import SidebarNavItem from 'src/shared/ui/SidebarNavItem.vue'
+import SessionMenuItems from './SessionMenuItems.vue'
 import SidebarActionMenu from './SidebarActionMenu.vue'
 
 const props = defineProps({

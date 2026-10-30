@@ -312,6 +312,17 @@ export function useSidebarSessions({
     }
   }
 
+  async function archiveSession(session) {
+    if (!await confirmDiscardedEdit()) return
+    try {
+      await chat.setArchived(session.id, true)
+      await automations.fetchAutomations()
+      $q.notify({ type: 'positive', message: 'Session archiviert' })
+    } catch {
+      // The Axios interceptor displays the error.
+    }
+  }
+
   return {
     projectOptions, standaloneSessionList, sessionStatuses,
     renameDialogOpen, renameTitle, renaming, pinningSessionId,
@@ -321,6 +332,6 @@ export function useSidebarSessions({
     leaveSessionDropTarget, dropSession, openMoveDialog, moveSession,
     renameSession, toggleSessionPinned, openNewSession, openSession,
     openSearchProject, openSearchSession, loadMoreSessions,
-    retrySessionPagination, removeSession, chatQuery
+    retrySessionPagination, removeSession, archiveSession, chatQuery
   }
 }

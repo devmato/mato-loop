@@ -68,8 +68,7 @@
                 @open="openAutomation(automation)"
               >
                 <template #menu>
-                  <SidebarNavItem icon="edit" label="Automation bearbeiten" v-close-popup @click="openAutomation(automation)" />
-                  <SidebarNavItem icon="delete_outline" label="Automation löschen" v-close-popup class="text-negative" @click="removeAutomation(automation)" />
+                  <AutomationMenuItems :automation="automation" @edit="openAutomation" />
                 </template>
               </SidebarSessionItem>
               <q-item v-if="automations.loaded && !automations.items.length" dense class="q-px-sm"><q-item-section><q-item-label caption>Noch keine Automationen</q-item-label></q-item-section></q-item>
@@ -279,6 +278,7 @@ import SidebarNavItem from 'src/shared/ui/SidebarNavItem.vue'
 import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
 import SearchDialog from 'src/features/search/SearchDialog.vue'
 import SidebarActionMenu from 'src/features/chat/components/SidebarActionMenu.vue'
+import AutomationMenuItems from 'src/features/automations/AutomationMenuItems.vue'
 import SidebarSessionList from 'src/features/chat/components/SidebarSessionList.vue'
 import SidebarSessionItem from 'src/features/chat/components/SidebarSessionItem.vue'
 import SessionDialogs from 'src/features/chat/components/SessionDialogs.vue'
@@ -335,7 +335,7 @@ const {
   leaveSessionDropTarget, dropSession, openMoveDialog, moveSession,
   renameSession, toggleSessionPinned, openNewSession, openSession,
   openSearchProject, openSearchSession, loadMoreSessions,
-  retrySessionPagination, removeSession
+  retrySessionPagination, removeSession, archiveSession
 } = useSidebarSessions({
   chat, projects, approvals, questions, workspace, controlCenter, automations,
   route, router, $q, confirm, drawerOpen, selectedProjectId, confirmDiscardedEdit: props.confirmDiscardedEdit
@@ -395,37 +395,12 @@ async function openAutomation(automation) {
   }
 }
 
-async function removeAutomation(automation) {
-  if (!await confirm(`„${automation.name}“ mit allen Zeitplänen löschen? Die Session und ihre Nachrichten bleiben erhalten.`, 'Automation löschen?', { okLabel: 'Löschen' })) return
-  try {
-    if (routeSessionId.value === automation.executionSessionId && route.query.automation === automation.id) {
-      const failure = await router.replace({ query: { ...route.query, automation: undefined, run: undefined } })
-      if (failure) return
-    }
-    await automations.deleteAutomation(automation.id, automation.revision)
-    $q.notify({ type: 'positive', message: 'Automation gelöscht' })
-  } catch {
-    // The central Axios interceptor displays the error.
-  }
-}
-
 async function createAutomation() {
   if (!await openNewSession(null)) return
   try {
     await controlCenter.openApp('automation')
   } catch {
     // The central Axios interceptor displays the error.
-  }
-}
-
-async function archiveSession(session) {
-  if (!await props.confirmDiscardedEdit()) return
-  try {
-    await chat.setArchived(session.id, true)
-    await automations.fetchAutomations()
-    $q.notify({ type: 'positive', message: 'Session archiviert' })
-  } catch {
-    // The Axios interceptor displays the error.
   }
 }
 
