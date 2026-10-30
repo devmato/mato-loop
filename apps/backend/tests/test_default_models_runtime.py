@@ -507,8 +507,8 @@ async def test_compaction_propagates_external_cancellation(monkeypatch, compacti
     on_update.assert_awaited_once_with("", False)
 
 
-@pytest.mark.parametrize(("context_window", "safety"), [(131_072, 4_096), (4_096, 0)])
-async def test_title_generation_falls_back_to_session_model(monkeypatch, context_window, safety) -> None:
+@pytest.mark.parametrize(("context_window", "safety", "forked"), [(131_072, 4_096, False), (4_096, 0, True)])
+async def test_title_generation_falls_back_to_session_model(monkeypatch, context_window, safety, forked) -> None:
     provider = LlmProviderConfig(
         name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
         config={"base_url": "http://local.test/v1"},
@@ -524,12 +524,13 @@ async def test_title_generation_falls_back_to_session_model(monkeypatch, context
     )
     session = ChatSession(
         id=uuid4(),
-        title="Default Models in Settings einbauen",
+        title=("Kopie: " if forked else "") + "Default Models in Settings einbauen",
+        control_center={"conversation_fork": forked},
         model_config_id=session_model.id,
         title_generation_status=TitleGenerationStatus.RUNNING.value,
     )
     db = AsyncMock(spec=AsyncSession)
-    message = Message(id=uuid4(), session_id=session.id, role="user", content=session.title)
+    message = Message(id=uuid4(), session_id=session.id, role="user", content="Mach weiter" if forked else session.title)
     db.get.side_effect = [session, message]
 
     async def load(_db, settings_type):
@@ -553,10 +554,14 @@ async def test_title_generation_falls_back_to_session_model(monkeypatch, context
         run_id,
         session.id,
         message.id,
-        "Default Models in Settings einbauen",
+        session.title,
     )
 
     assert complete.await_args.kwargs["model"].id == session_model.id
+    assert complete.await_args.kwargs["messages"][1]["content"] == (
+        "Previous conversation title: Default Models in Settings einbauen\n\nMach weiter"
+        if forked else "Default Models in Settings einbauen"
+    )
     assert complete.await_args.kwargs["max_output_tokens"] == 2_048
     assert complete.await_args.kwargs["safety_reserve_tokens"] == safety
     assert transport.await_args.kwargs["request"].max_output_tokens == 2_048

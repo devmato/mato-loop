@@ -72,6 +72,11 @@ def test_command_registration_rejects_underscore_names():
         register_command_provider(CommandProvider("example", (command,), AsyncMock(), AsyncMock()))
 
 
+async def test_fork_is_a_host_action_not_an_agent_prompt():
+    with pytest.raises(SessionServiceError, match="validation.invalid"):
+        await prepare_command(AsyncMock(), ChatSession(id=uuid4()), parse_command("/fork"))
+
+
 async def test_catalog_rejects_an_unowned_session_before_provider_discovery(monkeypatch):
     from mato_loop_backend.api.errors import ApiError
     from mato_loop_backend.api.routes import commands as routes

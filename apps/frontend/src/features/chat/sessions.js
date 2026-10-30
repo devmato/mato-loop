@@ -12,6 +12,34 @@ import { notifyError } from 'src/utils/notifications'
 import { SESSION_PAGE_SIZE, ACTIVE_TITLE_GENERATION_STATUSES, mergeMessages, sessionStateAfterMutation } from 'src/features/chat/model'
 
 export const sessionsActions = {
+    async forkSession() {
+      const source = this.current
+      if (!source || source.readOnly || source.archivedAt) {
+        notifyError({}, 'Öffne eine aktive Hauptsession, um sie zu kopieren.')
+        return null
+      }
+      if (this.running || this.stopping || this.runId || this.activeQueuedMessages.length || this.queueDrainPromise || this.historyActionPending) {
+        notifyError({}, 'Warte, bis der laufende Auftrag und die Nachrichtenwarteschlange abgeschlossen sind.')
+        return null
+      }
+      const version = this.sessionLoadVersion
+      const owner = this.draftOwnerUserId
+      this.historyActionPending = true
+      try {
+        const { data } = await api.post(`/sessions/${source.id}/fork`)
+        if (this.draftOwnerUserId !== owner) return null
+        if (this.current?.id === source.id && this.sessionLoadVersion === version) {
+          if (this.drafts.sessionMessages[source.id]?.trim().toLowerCase() === '/fork') {
+            delete this.drafts.sessionMessages[source.id]
+          }
+          this.persistDrafts()
+          this.createdSessionResult = { sessionId: data.id, created: true }
+        }
+        return { sessionId: data.id, created: true }
+      } finally {
+        this.historyActionPending = false
+      }
+    },
     async createEmptySession(controlCenterState) {
       if (this.current || this.selectedSessionId) return this.current
       if (this.emptySessionPromise) return this.emptySessionPromise

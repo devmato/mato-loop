@@ -811,7 +811,10 @@ async def test_start_switches_profile_with_run_and_discards_session_grants(monke
 
 
 @pytest.mark.usefixtures("mock_db_settings")
-async def test_start_schedules_title_generation_after_agent_run(monkeypatch) -> None:
+@pytest.mark.parametrize(("title", "expected_title"), [
+    ("Neue Session", "urlaub.png"), ("Kopie: Urlaub", "Kopie: Urlaub"),
+])
+async def test_start_schedules_title_generation_after_agent_run(monkeypatch, title, expected_title) -> None:
     provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="model")
     settings = AiSettings(
@@ -845,7 +848,7 @@ async def test_start_schedules_title_generation_after_agent_run(monkeypatch) -> 
     session = ChatSession(
         id=uuid4(),
         user_id=uuid4(),
-        title="Neue Session",
+        title=title,
         title_generation_status=TitleGenerationStatus.PENDING.value,
         model_config_id=model.id,
     )
@@ -868,14 +871,14 @@ async def test_start_schedules_title_generation_after_agent_run(monkeypatch) -> 
 
     message = next(item for item in db.add_all.call_args.args[0] if isinstance(item, Message))
     assert len(scheduled) == 2
-    assert session.title == "urlaub.png"
+    assert session.title == expected_title
     assert session.title_generation_status == TitleGenerationStatus.RUNNING.value
     run_worker.assert_called_once_with(run_id)
     title_worker.assert_called_once_with(
         run_id,
         session.id,
         message.id,
-        "urlaub.png",
+        expected_title,
         after=tasks[0],
     )
     assert list(AgentRuntime._title_tasks.values()) == [session.user_id]

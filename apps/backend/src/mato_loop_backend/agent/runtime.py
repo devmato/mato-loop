@@ -334,11 +334,7 @@ class AgentRuntime:
             execution_operations=execution_operations,
         )
         db.add_all([message, run])
-        generate_title = (
-            chat_session.title == "Neue Session"
-            and chat_session.title_generation_status
-            == TitleGenerationStatus.PENDING.value
-        )
+        generate_title = chat_session.title_generation_status == TitleGenerationStatus.PENDING.value
         if generate_title:
             chat_session.title_generation_status = TitleGenerationStatus.RUNNING.value
         created_attachments = []

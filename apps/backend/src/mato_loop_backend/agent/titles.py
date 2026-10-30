@@ -104,7 +104,10 @@ async def generate_title(
                     except AttachmentError:
                         pass
                 attachment_content.append((filename, extracted_text))
-            request_content = title_input(input_message.content, attachment_content)
+            content = input_message.content
+            if (chat_session.control_center or {}).get("conversation_fork"):
+                content = f"Previous conversation title: {expected_title.removeprefix('Kopie: ')}\n\n" + content
+            request_content = title_input(content, attachment_content)
             explicit_model = ai_settings.title_generation_model_id is not None
             model_ids = (
                 (ai_settings.title_generation_model_id,)

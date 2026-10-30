@@ -306,6 +306,7 @@ def session_payload(
         "titleGenerationStatus": item.title_generation_status,
         "pinned": bool(item.is_pinned),
         "todosCollapsed": (item.control_center or {}).get("todos_collapsed") is True,
+        "conversationFork": (item.control_center or {}).get("conversation_fork") is True,
         "controlCenter": {
             "tabs": [_control_center_tab_payload(tab) for tab in control_center["tabs"]],
             "activeAppId": control_center["active_app_id"],
@@ -456,9 +457,11 @@ def message_payload(
     outputs_hidden = item.role == "tool" and isinstance(runtime_data, dict) and (
         runtime_data.get("fileOutputsPending") or runtime_data.get("fileOutputsHidden")
     )
+    historical_error = runtime_data.get("historicalError", {}) if item.role == "assistant" else {}
+    error_code = item.error_code or historical_error.get("code")
     error = (
-        describe_error(item.error_code, params=item.error_params)
-        if item.error_code
+        describe_error(error_code, params=item.error_params if item.error_code else historical_error.get("params"))
+        if error_code
         else None
     )
     source = (item.provider_data or {}).get("_matoloop", {}).get("source", {})

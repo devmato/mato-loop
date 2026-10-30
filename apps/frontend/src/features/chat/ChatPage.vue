@@ -17,6 +17,9 @@
           :child-id="routeSubagentId"
         />
         <div v-show="!routeSubagentId" class="chat-page__pane column no-wrap full-height">
+    <q-banner v-if="chat.current?.conversationFork" class="app-surface-tonal" dense>
+      Diese Session wurde ohne interne Dateien und Anhänge kopiert. Benötigte Anhänge bitte erneut hinzufügen.
+    </q-banner>
     <q-banner v-if="chat.current?.archived" class="app-surface-tonal" dense>
       Diese Session ist archiviert. Zum Weiterarbeiten bitte wiederherstellen.
       <template #action>

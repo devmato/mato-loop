@@ -99,6 +99,23 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def message_search_chunks(message: Message) -> list[MessageSearchChunk]:
+    """Build queued search chunks without database effects."""
+    if not _eligible(message):
+        return []
+    return [
+        MessageSearchChunk(
+            message_id=message.id,
+            chunk_index=index,
+            content=content,
+            content_hash=_content_hash(content),
+            profile_fingerprint=ACTIVE_EMBEDDING_PROFILE.fingerprint,
+            status=MemoryEmbeddingStatus.QUEUED.value,
+        )
+        for index, content in enumerate(chunk_message_content(message.content))
+    ]
+
+
 class EpisodeIndexService:
     @staticmethod
     async def enqueue(db: AsyncSession, message: Message) -> int:
@@ -113,20 +130,8 @@ class EpisodeIndexService:
             select(ChatSession.parent_session_id).where(ChatSession.id == message.session_id)
         ) is not None:
             return 0
-        chunks = chunk_message_content(message.content)
-        db.add_all(
-            [
-                MessageSearchChunk(
-                    message_id=message.id,
-                    chunk_index=index,
-                    content=content,
-                    content_hash=_content_hash(content),
-                    profile_fingerprint=ACTIVE_EMBEDDING_PROFILE.fingerprint,
-                    status=MemoryEmbeddingStatus.QUEUED.value,
-                )
-                for index, content in enumerate(chunks)
-            ]
-        )
+        chunks = message_search_chunks(message)
+        db.add_all(chunks)
         await db.flush()
         return len(chunks)
 

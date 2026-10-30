@@ -548,7 +548,7 @@ def session_payload(
     try:
         control_center = ControlCenterState.model_validate(
             {key: value for key, value in item.control_center.items()
-             if key not in {"terminal_auto_attach", "todos_collapsed"}}
+             if key not in {"terminal_auto_attach", "todos_collapsed", "conversation_fork"}}
             if item.control_center else default_control_center_state()
         ).model_dump(mode="json")
     except (RootFileError, ValidationError):
@@ -838,6 +838,21 @@ async def session_defaults(
         "currentDirectory": current_directory,
         "workspaceMode": (project.git_workspace_mode if project and configuration.worktrees_enabled else None) or "local",
     }
+
+
+@router.post("/{session_id}/fork", status_code=status.HTTP_201_CREATED)
+async def fork_session(
+    session_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    from mato_loop_backend.sessions.fork import fork_session as copy_session
+
+    try:
+        item = await copy_session(db, session_id, user.id)
+    except session_service.SessionServiceError as exc:
+        _raise_api_error(exc)
+    return {"id": str(item.id)}
 
 
 @router.get("/{session_id}")

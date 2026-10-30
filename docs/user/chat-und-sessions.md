@@ -37,6 +37,22 @@ Argumenten. Dieser Text lässt sich wie gewöhnlicher Nachrichtentext markieren 
 kopieren. Rückgängig stellt den ursprünglichen Befehlsaufruf wieder her. Ältere
 Befehlsnachrichten ohne gespeicherten Prompt zeigen weiterhin ihr Kürzel.
 
+Mit `/fork` kopieren Sie die gespeicherte Unterhaltung und schreiben in einer neuen
+Session weiter. Projekt-Sessions bleiben im selben Projekt. Zunächst heißt die Kopie
+„Kopie: Originaltitel“. Nach Ihrer ersten neuen Nachricht wird einmal ein eigener
+Titel ohne diesen Zusatz erzeugt. Manuelles Umbenennen hat Vorrang; bei Fehlern bleibt
+der Übergangstitel erhalten. Verlauf, Einstellungen,
+Kontextzusammenfassungen und textuelle Tool-Ergebnisse werden kopiert, interne Dateien
+und Anhänge dagegen nicht. Ein dauerhafter Hinweis kennzeichnet die Gesprächskopie;
+hängen Sie benötigte Dateien erneut an. Interne Dateischaltflächen werden
+nicht übernommen. Das Original bleibt unverändert. Der Befehl startet
+keinen Modellaufruf und nimmt keine Argumente oder neuen Anhänge entgegen. Warten Sie
+vorher, bis laufende Aufträge und vorgemerkte Nachrichten abgeschlossen sind.
+Freigaben, offene Fragen, Automationen und Subagent-Sessions werden nicht übernommen.
+Computer und Arbeitsordner bleiben gleich: Die Kopie isoliert keine Computer-Dateien
+und erzeugt weder Git-Branch noch Worktree. Ein vorhandener Worktree wird nur als
+lokaler Arbeitsordner verwendet; die Kopie übernimmt nicht dessen Verwaltung.
+
 ### Git-Projekte und Worktrees
 
 **Projekt bearbeiten** prüft das ausgewählte Verzeichnis auf ein Git-Repository.

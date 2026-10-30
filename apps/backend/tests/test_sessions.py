@@ -2941,6 +2941,7 @@ async def test_control_center_state_can_be_replaced() -> None:
         control_center={
             "tabs": [{"app_id": "files", "pinned": False}],
             "active_app_id": "files",
+            "conversation_fork": True,
         },
     )
     db = AsyncMock(spec=AsyncSession)
@@ -2968,6 +2969,7 @@ async def test_control_center_state_can_be_replaced() -> None:
     )
 
     assert session.control_center == {
+        "conversation_fork": True,
         "tabs": [
             _stored_app_tab("session"),
             _stored_app_tab("files", pinned=True),

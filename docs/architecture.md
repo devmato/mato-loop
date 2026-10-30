@@ -4,6 +4,18 @@ Use the [documentation index](index.md) for the full contract map. Memory/Dreami
 
 MatoLoop is a provider-neutral monorepo. FastAPI provides REST and SSE interfaces; the Quasar PWA consumes only this API.
 
+`/fork` is a WebUI host action backed by `POST /sessions/{id}/fork`, not an LLM
+request. It snapshots an idle, owner-bound chat into an independent session in the
+same project, remapping summary references without rewriting historical message
+text or tool arguments. Files and attachments are not copied; a persistent session
+notice informs both the user and model. Internal file actions are removed.
+New sessions receive empty internal storage. Runs,
+grants, approvals, children, automations, and provider continuation scopes are not
+inherited. The execution-agent directory is reused as a local directory, without
+transferring managed-worktree ownership. Forks need no persistent parent relation.
+The provisional `Kopie: <original title>` is replaced through the normal title workflow
+after the first new message, using the original title as context. Manual titles take precedence.
+
 ## Layers
 
 - API: HTTP contracts, authentication, and dependency injection

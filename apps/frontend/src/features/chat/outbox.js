@@ -28,6 +28,13 @@ export const outboxActions = {
           if (this.current || this.drafts.newSession !== draft) return null
         }
         if (this.historyActionPending || this.sessionSettingsPending) return null
+        if (/^\/fork(?:\s|$)/iu.test(String(content || '').trim())) {
+          if (String(content).trim().toLowerCase() !== '/fork' || (!preserveDraft && this.activeAttachmentDraft.length)) {
+            notifyError({}, '/fork wird ohne Argumente oder neue Anhänge ausgeführt.')
+            return null
+          }
+          return await this.forkSession()
+        }
         const interruptRun = interrupt && this.running && Boolean(this.current)
           && (!this.runSessionId || this.runSessionId === this.current.id)
         submitImmediately = !this.running

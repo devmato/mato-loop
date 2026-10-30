@@ -104,6 +104,38 @@ describe('chat drafts', () => {
     expect(chat.activeDraft).toBe('Neue Session Entwurf')
   })
 
+  it('requests a fork and delegates navigation without queuing a message', async () => {
+    const chat = useChatStore()
+    chat.current = { id: 'source', projectId: 'project', messages: [] }
+    chat.selectedSessionId = 'source'
+    chat.setDraft('/fork')
+    api.post.mockResolvedValue({ data: { id: 'fork' } })
+    await chat.send('/fork')
+    expect([chat.current.id, chat.createdSessionResult, chat.activeDraft, chat.activeQueuedMessages.length, api.post.mock.calls])
+      .toEqual(['source', { sessionId: 'fork', created: true }, '', 0, [['/sessions/source/fork']]])
+  })
+
+  it.each(['running', 'queued'])('does not defer a fork while %s', async state => {
+    const chat = useChatStore()
+    chat.current = { id: 'source', messages: [] }
+    chat.selectedSessionId = 'source'
+    if (state === 'running') chat.running = true
+    else await chat.queueMessage('pending')
+    await chat.send('/fork')
+    expect(api.post).not.toHaveBeenCalled()
+  })
+
+  it('keeps the original session and draft after a failed fork', async () => {
+    const chat = useChatStore()
+    chat.current = { id: 'source', messages: [] }
+    chat.selectedSessionId = 'source'
+    chat.setDraft('/fork')
+    api.post.mockRejectedValue(new Error('unavailable'))
+    await expect(chat.send('/fork')).rejects.toThrow('unavailable')
+    expect([chat.current.id, chat.activeDraft, chat.historyActionPending, chat.outboxSaving])
+      .toEqual(['source', '/fork', false, false])
+  })
+
   it('keeps activity time stable until the visible work changes', () => {
     const chat = useChatStore()
     const modelStartedAt = '2026-07-27T12:00:00.000Z'
