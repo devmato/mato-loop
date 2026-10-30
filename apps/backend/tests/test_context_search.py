@@ -18,9 +18,11 @@ from mato_loop_backend.tools.catalog import tool_registry
 
 @pytest.mark.parametrize('memory_status', ['searched', 'unavailable', 'denied'])
 @pytest.mark.parametrize('include_private', [False, True])
-async def test_context_search_combines_sources_without_requiring_memory(tmp_path, monkeypatch, memory_status, include_private):
-    call = ToolCall('search', 'context_search', {'query': 'Atlas address', 'include_private': include_private})
+@pytest.mark.parametrize('all_projects', [False, True])
+async def test_context_search_combines_sources_without_requiring_memory(tmp_path, monkeypatch, memory_status, include_private, all_projects):
+    call = ToolCall('search', 'context_search', {'query': 'Atlas address', 'include_private': include_private, 'all_projects': all_projects})
     context = _context(tmp_path, call)
+    context.session.project_id = uuid4()
     context.model_trust_level = TrustLevel.PUBLIC
     context.memory_read_enabled = memory_status != 'unavailable'
     if memory_status == 'denied':
@@ -51,6 +53,8 @@ async def test_context_search_combines_sources_without_requiring_memory(tmp_path
     assert result['sources'] == {'memories': memory_status, 'sessions': 'searched'}
     assert retrieve.await_count == int(memory_status == 'searched')
     assert episodes.await_args.kwargs['readable_by'] == (TrustLevel.PRIVATE if include_private else TrustLevel.PUBLIC)
+    assert episodes.await_args.kwargs['project_id'] == (None if all_projects else context.session.project_id)
+    assert search.GlobalSearchService.session_titles.await_args.kwargs['project_id'] == (None if all_projects else context.session.project_id)
     assert [call.args[0].capability for call in context.ask_handler.await_args_list if call.args[0].resource_type == 'session_collection'] == ['session.read_sensitive' if include_private else 'session.search']
 
 

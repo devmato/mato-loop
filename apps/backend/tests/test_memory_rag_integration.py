@@ -112,12 +112,12 @@ async def test_local_rag_finds_cross_language_memory_without_leaking_private() -
         await db.rollback()
 
 
-async def test_public_model_episode_rag_can_use_authorized_private_session() -> None:
+async def test_public_model_episode_rag_excludes_private_sessions() -> None:
     async with AsyncSessionFactory() as db:
         user = UserAccount(username=f"episode-{uuid4().hex}", password_hash="test")
         db.add(user)
         await db.flush()
-        public_session = ChatSession(user_id=user.id, title="Architektur")
+        public_session = ChatSession(user_id=user.id, title="Architektur", trust_level="public")
         private_session = ChatSession(user_id=user.id, title="Vertraulich")
         current_session = ChatSession(user_id=user.id, title="Aktuell")
         db.add_all([public_session, private_session, current_session])
@@ -177,21 +177,14 @@ async def test_public_model_episode_rag_can_use_authorized_private_session() -> 
             owner_id=user.id,
             current_session_id=current_session.id,
             readable_by=TrustLevel.PUBLIC,
-            query="What was the secret Oracle alternative?",
+            query="PostgreSQL Datenbank",
             limit=2,
             max_semantic_distance=0.25,
             latest_messages=2,
         )
 
         assert result.references
-        private_reference = next(
-            reference
-            for reference in result.references
-            if reference.session_id == private_session.id
-        )
-        assert "Oracle" in " ".join(
-            message.content for message in private_reference.excerpt
-        )
+        assert {reference.session_id for reference in result.references} == {public_session.id}
         await db.rollback()
 
 
@@ -201,7 +194,7 @@ async def test_episode_rag_is_immediate_without_embedding_or_dreaming() -> None:
         user = UserAccount(username=f"immediate-{uuid4().hex}", password_hash="test")
         db.add(user)
         await db.flush()
-        prior_session = ChatSession(user_id=user.id, title="Frueher")
+        prior_session = ChatSession(user_id=user.id, title="Frueher", trust_level="public")
         current_session = ChatSession(user_id=user.id, title="Aktuell")
         db.add_all([prior_session, current_session])
         await db.flush()
@@ -280,6 +273,7 @@ async def test_context_search_finds_an_owned_title_without_a_message_match(tmp_p
 
         assert result["sessions"] == [{
             "sessionId": str(owned.id), "title": owned.title,
+            "projectId": str(owned.project_id) if owned.project_id else None,
             "sessionReadArguments": {"session_id": str(owned.id)},
         }]
         await db.rollback()
@@ -287,7 +281,7 @@ async def test_context_search_finds_an_owned_title_without_a_message_match(tmp_p
 
 @pytest.mark.parametrize("receiver_project", ["A", None], ids=["project-A", "standalone"])
 @pytest.mark.parametrize("full_sessions_only", [True, False], ids=["automatic", "unrestricted"])
-async def test_episode_retrieval_searches_owned_sessions_across_projects(
+async def test_episode_retrieval_respects_project_scope_before_ranking(
     receiver_project: str | None, full_sessions_only: bool
 ) -> None:
     marker = f"Episodescope{uuid4().hex}"
@@ -308,6 +302,7 @@ async def test_episode_retrieval_searches_owned_sessions_across_projects(
                 user_id=owner.id,
                 project_id=project_id,
                 memory_mode=mode,
+                trust_level="public",
             )
             for project_id in (projects["A"].id, projects["B"].id, None)
             for mode in ("full", "read_only", "disabled")
@@ -335,6 +330,7 @@ async def test_episode_retrieval_searches_owned_sessions_across_projects(
             semantic_enabled=False,
             anchor_only=True,
             full_sessions_only=full_sessions_only,
+            project_id=current.project_id if full_sessions_only else None,
             limit=10,
         )
         recent = await EpisodeRetrievalService.recent(
@@ -343,6 +339,7 @@ async def test_episode_retrieval_searches_owned_sessions_across_projects(
             current_session_id=current.id,
             readable_by=TrustLevel.PUBLIC,
             full_sessions_only=full_sessions_only,
+            project_id=current.project_id if full_sessions_only else None,
             limit=10,
         )
 
@@ -350,6 +347,7 @@ async def test_episode_retrieval_searches_owned_sessions_across_projects(
             session.id
             for session in reversed(sources)
             if not full_sessions_only or session.memory_mode == "full"
+            if not full_sessions_only or current.project_id is None or session.project_id == current.project_id
         ]
         assert lexical.strategy == MemoryRetrievalStrategy.LEXICAL
         assert recent.strategy == MemoryRetrievalStrategy.BROWSE
@@ -359,9 +357,11 @@ async def test_episode_retrieval_searches_owned_sessions_across_projects(
         for change in ("initial", "move_project", "disable"):
             if change == "move_project":
                 sources[0].project_id = projects["B"].id
+                if full_sessions_only and current.project_id is not None:
+                    expected_ids.remove(sources[0].id)
             elif change == "disable":
                 sources[0].memory_mode = "disabled"
-                if full_sessions_only:
+                if full_sessions_only and sources[0].id in expected_ids:
                     expected_ids.remove(sources[0].id)
             await db.flush()
             for result in (lexical, recent):
@@ -371,6 +371,7 @@ async def test_episode_retrieval_searches_owned_sessions_across_projects(
                     owner_id=owner.id,
                     current_session_id=current.id,
                     full_sessions_only=full_sessions_only,
+                    project_id=current.project_id if full_sessions_only else None,
                 )
                 assert [item.session_id for item in validated] == expected_ids, change
         await db.rollback()

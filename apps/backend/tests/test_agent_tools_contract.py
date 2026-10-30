@@ -4144,7 +4144,19 @@ async def test_historical_secret_input_filters_expired_references(tmp_path, tool
         message.content = json.dumps({"toolName": "secret_input", "content": message.content})
     _mock_tool_result_history(context, message, tool_name)
     result = await tool_registry.execute(call, context)
-    history = json.loads(json.loads(result.content)["content"])
+    reader = Message(
+        id=uuid4(), session_id=context.session.id, role="assistant", content="",
+        tool_calls=[{"id": call.id, "name": call.name, "arguments": call.arguments}],
+    )
+    page = Message(
+        id=uuid4(), session_id=context.session.id, role="tool", tool_call_id=call.id,
+        content=result.content,
+    )
+    projected = _projection_messages(
+        "System", None, [*context.db.scalars.return_value.all.return_value, reader, page],
+        TrustLevel.PRIVATE, available_secret_references={f"run-secret:{active}"},
+    )
+    history = json.loads(json.loads(next(item["content"] for item in projected if item.get("tool_call_id") == call.id))["content"])
     if tool_name == "session_tool_result_read":
         history = json.loads(history["content"])
     assert (history["environment"], history["unavailableCredentialNames"]) == (
@@ -4252,6 +4264,12 @@ async def test_session_tool_result_read_filters_complete_sensitive_results_befor
             id=uuid4(), session_id=context.session.id, role="tool",
             tool_call_id=call.id, content=result.content, trust_level="public",
         )
+        reader.tool_calls[0]["arguments"] = dict(call.arguments)
+        projected = _projection_messages(
+            "System", None, [*context.db.scalars.return_value.all.return_value, reader, page], TrustLevel.PUBLIC,
+        )
+        restored = json.loads(next(item["content"] for item in projected if item.get("tool_call_id") == call.id))
+        assert restored["content"] == payload["content"]
         # No serialized marker authorizes partial JSON after a trust change.
         for target in (TrustLevel.PUBLIC, TrustLevel.PRIVATE):
             projected = _projection_messages("System", None, [reader, page], target)

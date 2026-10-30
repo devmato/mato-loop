@@ -17,6 +17,7 @@ usage() {
         "  tool-contracts       Compare OpenCode names, reason fields, and permission behavior" \
         "  tool-discovery       Compare full schemas, selective loading, and a stable dispatcher" \
         "  context-search       Evaluate implemented cross-session recall tools" \
+        "  project-context      Evaluate project-first recall and result paging" \
         "  session-cache        Evaluate cache reuse across real sessions" \
         "  coding-comparison    Compare persisted coding-run artifacts" \
         "  browser-performance  Compare synthetic browser tool contracts (requires a running backend)" \
@@ -29,6 +30,7 @@ case "${1:-}" in
     tool-discovery) shift; compose run --rm --no-deps --env MATO_LOOP_EVAL_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD)" backend uv run python /workspace/scripts/tool-discovery-eval.py "$@" ;;
     tool-contracts) shift; compose run --rm --no-deps --env MATO_LOOP_EVAL_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD)" backend uv run python /workspace/scripts/tool-contracts-eval.py "$@" ;;
     context-search) shift; compose run --rm --no-deps --env MATO_LOOP_EVAL_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD)" backend uv run python /workspace/scripts/context-search-eval.py "$@" ;;
+    project-context) shift; compose run --rm --no-deps backend uv run python /workspace/scripts/project-context-eval.py "$@" ;;
     automation-permissions) shift; compose run --rm --no-deps backend uv run python /workspace/scripts/automation-permissions-eval.py "$@" ;;
     prompts) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.prompt_eval "$@" ;;
     session-cache) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.session_cache_eval "$@" ;;

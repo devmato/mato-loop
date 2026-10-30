@@ -74,22 +74,29 @@ from mato_loop_backend.tools.registry import EffectiveToolSet
 pytestmark = pytest.mark.usefixtures("mock_db_settings")
 
 
-@pytest.mark.parametrize("change", [None, "revision", "memory_access", "session_access", "project", "trust", "compacted"])
+@pytest.mark.parametrize("change", [None, "revision", "memory_access", "session_access", "project", "episode_project", "trust", "compacted"])
 async def test_historical_memory_context_revalidates_sources(change):
     session = ChatSession(id=uuid4(), user_id=uuid4(), project_id=uuid4())
     memory_id, source_id, source_message_id = uuid4(), uuid4(), uuid4()
     source = json.dumps({
         "durableMemories": [{"id": str(memory_id), "revision": 1}],
+        "priorSessionEpisodes": [{"sessionId": str(source_id), "sessionReadArguments": {
+            "around_message_id": str(source_message_id),
+        }}],
         "projectSessionIndex": {"sessions": [{"sessionReadArguments": {
             "session_id": str(source_id), "around_message_id": str(source_message_id),
         }}]},
     })
+    if change == "episode_project":
+        payload = json.loads(source)
+        payload.pop("projectSessionIndex")
+        source = json.dumps(payload)
     user = Message(id=uuid4(), session_id=session.id, role="user", content="Earlier request", provider_data={
         "_matoloop": {"memoryContext": memory_context_snapshot("Private reference", source, session, TrustLevel.PRIVATE)},
     })
     memories = [] if change == "memory_access" else [(memory_id, 2 if change == "revision" else 1)]
     sources = [] if change == "session_access" else [(
-        source_message_id, source_id, uuid4() if change == "project" else session.project_id,
+        source_message_id, source_id, uuid4() if change in {"project", "episode_project"} else session.project_id,
     )]
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = user.id if change == "compacted" else None
@@ -677,7 +684,7 @@ async def test_cached_automatic_context_is_revalidated_without_reembedding(
             anchor_content="Deployment context from another session.",
             excerpt=(),
         )
-        for project_id in (uuid4(), None)
+        for project_id in (db.get.return_value.project_id, db.get.return_value.project_id)
     ]
     EpisodeRetrievalService.retrieve.return_value = EpisodeRetrieval(
         references=episodes[:1], strategy=MemoryRetrievalStrategy.HYBRID
@@ -700,7 +707,7 @@ async def test_cached_automatic_context_is_revalidated_without_reembedding(
         EpisodeRetrievalService.revalidate.await_args_list, episodes, strict=True
     ):
         assert call.args[1] == [episode]
-        assert "project_id" not in call.kwargs
+        assert call.kwargs["project_id"] == db.get.return_value.project_id
         assert call.kwargs["full_sessions_only"] is True
         for projection in projections:
             assert str(episode.session_id) in projection["memory_context"]
@@ -731,7 +738,7 @@ async def test_project_session_uses_configured_relevant_session_limit(monkeypatc
     await AgentRuntime._execute_loop(db, run)
 
     assert EpisodeRetrievalService.retrieve.await_args.kwargs["limit"] == 3
-    assert "project_id" not in EpisodeRetrievalService.retrieve.await_args.kwargs
+    assert EpisodeRetrievalService.retrieve.await_args.kwargs["project_id"] == db.get.return_value.project_id
     assert EpisodeRetrievalService.retrieve.await_args.kwargs["full_sessions_only"] is True
     EpisodeRetrievalService.project_index.assert_awaited_once_with(
         db,

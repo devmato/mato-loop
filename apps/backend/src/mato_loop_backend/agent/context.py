@@ -81,6 +81,7 @@ class ContextManager:
         attachment_service: AttachmentService | None = None,
         tool_snapshots: list[dict[str, Any]] | None = None,
         pdf_context: dict[str, dict] | None = None,
+        available_secret_references: set[str] | None = None,
     ) -> ContextProjection:
         """Budget original projections with raw request estimates, before slack and safety."""
         # Reorder only the model's view; persisted timestamps and message order stay intact.
@@ -169,6 +170,7 @@ class ContextManager:
                     historical_tool_output_tokens=settings.historical_tool_output_tokens,
                     live_tool_calls=live_tool_calls,
                     omitted_tool_result_ids=omitted_tool_result_ids,
+                    available_secret_references=available_secret_references,
                 )
                 if runtime_context:
                     messages.append({

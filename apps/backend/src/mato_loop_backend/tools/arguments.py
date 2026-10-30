@@ -835,6 +835,10 @@ class ContextSearchArguments(ToolArguments):
     session_id: UUID | None = Field(
         default=None, description="Restrict search to this known conversation; searches sessions only.",
     )
+    all_projects: bool = Field(
+        default=False,
+        description="Search other projects for a concrete need.",
+    )
     limit: int = Field(default=3, ge=1, le=10, description="Maximum results per source.")
 
     @model_validator(mode="after")

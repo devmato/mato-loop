@@ -54,6 +54,7 @@ async def build_turn_context(
     repository_context_loader: Callable[..., Awaitable[str]] | None = None,
     pdf_context: dict[str, dict] | None = None,
     runtime_context: str | None = None,
+    available_secret_references: set[str] | None = None,
 ) -> tuple[ContextProjection, int, int]:
     async def summarize(source: str, output_tokens: int) -> SummaryResult:
         await run_support._publish_run_phase(run.id, "compacting_context")
@@ -162,6 +163,7 @@ async def build_turn_context(
                     summarize=summarize,
                     estimate_request=estimate_request,
                     live_tool_calls=live_tool_calls,
+                    available_secret_references=available_secret_references,
                 )
                 memory_count = candidate_memory_count
                 episode_count = candidate_episode_count

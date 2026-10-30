@@ -179,8 +179,8 @@ async def test_cached_context_revalidation_preserves_rank_and_current_scope() ->
     )
     episode_rows = Mock()
     episode_rows.all.return_value = [
-        (reference.anchor_message_id, session_id, "Renamed project"),
-        (stale_reference.anchor_message_id, stale_session_id, "Stale"),
+        (reference.anchor_message_id, session_id, "Renamed project", None),
+        (stale_reference.anchor_message_id, stale_session_id, "Stale", None),
     ]
     db.execute.return_value = episode_rows
     references = await EpisodeRetrievalService.revalidate(
@@ -204,7 +204,7 @@ async def test_cached_context_revalidation_preserves_rank_and_current_scope() ->
     ]
     statement = str(db.execute.await_args.args[0])
     assert "chat_sessions.user_id" in statement
-    assert "chat_sessions.project_id" not in statement
+    assert "chat_sessions.project_id =" not in statement
     assert "chat_sessions.memory_mode" in statement
     assert "messages.generation_status" in statement
 

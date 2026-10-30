@@ -141,7 +141,7 @@ async def historical_memory_contexts(
         record_id: snapshot.content for record_id, snapshot in snapshots.items()
         if all(revisions.get(memory_id) == revision for memory_id, revision in snapshot.memories.items())
         and all(sources.get(message_id, (None, None))[0] == session_id
-                and (session_id not in snapshot.project_sessions or sources[message_id][1] == session.project_id)
+                and (session.project_id is None or sources[message_id][1] == session.project_id)
                 for message_id, session_id in snapshot.messages.items())
     }
 
@@ -313,6 +313,7 @@ async def prepare_memory_context(
                             query_embedding=query_embedding, semantic_enabled=semantic_enabled,
                             max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
                             anchor_only=True, full_sessions_only=True,
+                            project_id=session.project_id,
                         )
                     ).references
                 if episode_query_enabled and settings.recent_session_snippet_limit > 0 and (
@@ -326,6 +327,7 @@ async def prepare_memory_context(
                             excerpt_messages=4,
                             max_excerpt_characters=AUTOMATIC_EPISODE_EXCERPT_MAX_CHARACTERS,
                             full_sessions_only=True,
+                            project_id=session.project_id,
                         )
                     ).references
             else:
@@ -341,12 +343,14 @@ async def prepare_memory_context(
                     await EpisodeRetrievalService.revalidate(
                         db, cache.relevant_episodes or [], owner_id=session.user_id,
                         current_session_id=session.id, readable_by=trust_level, full_sessions_only=True,
+                        project_id=session.project_id,
                     )
                 )[:settings.automatic_session_snippet_limit]
                 cache.recent_episodes = (
                     await EpisodeRetrievalService.revalidate(
                         db, cache.recent_episodes or [], owner_id=session.user_id,
                         current_session_id=session.id, readable_by=trust_level, full_sessions_only=True,
+                        project_id=session.project_id,
                     )
                 )[:settings.recent_session_snippet_limit]
             pinned_ids = {item.id for item in pinned_memories}

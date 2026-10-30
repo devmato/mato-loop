@@ -25,6 +25,7 @@ from mato_loop_backend.agent.projection import (
     _shorten_evidence_output,
     _strip_projection_metadata,
     _summary_source,
+    _tool_result_page,
     compaction_messages,
     message_dict,
     model_browser_observations,
@@ -826,7 +827,7 @@ def test_projection_discards_orphaned_tool_results() -> None:
     assert all("verwaistes Ergebnis" not in item["content"] for item in projected)
 
 
-async def test_historical_reader_reference_targets_original_page_and_keeps_computer_binding() -> None:
+async def test_historical_reader_reference_targets_original_page_and_keeps_computer_binding(monkeypatch) -> None:
     session = _session()
     records = [_message(session.id, "user", "Inspect")]
     source_call = _message(session.id, "assistant", "")
@@ -843,6 +844,10 @@ async def test_historical_reader_reference_targets_original_page_and_keeps_compu
     records += [*_tool_segment(session.id, 0), _message(session.id, "user", "Continue")]
     source.provider_data["_matoloop"]["contextOutputOmitted"] = True
     page.provider_data = {"_matoloop": {"contextOutputOmitted": True}}
+    monkeypatch.setattr(
+        "mato_loop_backend.agent.projection._tool_result_page",
+        Mock(side_effect=AssertionError("Omitted pages must not be rebuilt")),
+    )
     projected = _projection_messages("System", None, records, TrustLevel.PRIVATE)
     projected, _ = await service_module._provider_projection(
         projected, supports_image_input=False, target_trust_level=TrustLevel.PRIVATE,
@@ -853,6 +858,27 @@ async def test_historical_reader_reference_targets_original_page_and_keeps_compu
     assert payload["hostSelectedComputer"] == {
         key: source.provider_data["_matoloop"][key] for key in ("executionAgentId", "executionAgentAlias")
     }
+
+
+def test_projection_preserves_the_requested_page_of_a_page() -> None:
+    session = _session()
+    origin = _message(session.id, "assistant", "")
+    origin.tool_calls = [{"id": "source", "name": "webfetch", "arguments": {}}]
+    source = _message(session.id, "tool", "source content")
+    source.tool_call_id = "source"
+    records = [origin, source]
+    for index, position in enumerate((5, 0)):
+        reader = _message(session.id, "assistant", "")
+        reader.tool_calls = [{"id": f"reader-{index}", "name": "session_tool_result_read",
+                              "arguments": {"message_id": str(source.id), "offset": position}}]
+        expected = _tool_result_page(
+            source, "webfetch" if index == 0 else "session_tool_result_read", position, TrustLevel.PRIVATE,
+        )
+        source = _message(session.id, "tool", json.dumps(expected))
+        source.tool_call_id = f"reader-{index}"
+        records.extend([reader, source])
+    projected = _projection_messages("System", None, records, TrustLevel.PRIVATE)
+    assert json.loads(next(item["content"] for item in projected if item.get("tool_call_id") == "reader-1")) == expected
 
 
 @pytest.mark.parametrize("stage", ["fair_share", "sequential", "pruning"])

@@ -20,9 +20,9 @@ Für jede Angabe können Sie zwischen privaten und öffentlichen Modellen umscha
 
 ## Sitzungsübergreifender Abruf
 
-Geeignete Anfragen können begrenzte Ausschnitte aus anderen eigenen Sessions über alle Projekte und eigenständigen Sessions abrufen. Automatische Quellen benötigen vollen Memory-Modus; die aktuelle Session und Subagenten sind ausgeschlossen. Explizite Sessiontools und die eigene Oberfläche-Suche können auch Sessions anderer Memory-Modi lesen. Ein Dreaming-Durchlauf ist für den Sessionabruf nicht erforderlich.
+Geeignete Anfragen können begrenzte Ausschnitte aus anderen eigenen Sessions abrufen. In einem Projekt stammen automatische Gesprächsausschnitte ausschließlich aus demselben Projekt; ohne Projekt bleibt der Abruf projektübergreifend. Automatische Quellen benötigen vollen Memory-Modus; die aktuelle Session und Subagenten sind ausgeschlossen. Explizite Sessiontools und die eigene Oberfläche-Suche können auch Sessions anderer Memory-Modi lesen. Ein Dreaming-Durchlauf ist für den Sessionabruf nicht erforderlich.
 
-Der zusätzliche Projektindex enthält bis zu zehn neueste geeignete Sessions desselben Projekts, nur mit Titeln und Verweisen auf aktuelle Nachrichten. Relevante Ausschnitte danach können standardmäßig bis zu drei unterschiedliche eigene Sessions berücksichtigen, auch aus anderen Projekten. Sie liefern den stärksten thematischen Anker, nie automatisch das vollständige Gespräch.
+Der zusätzliche Projektindex enthält bis zu zehn neueste geeignete Sessions desselben Projekts, nur mit Titeln und Verweisen auf aktuelle Nachrichten. Relevante Ausschnitte danach können standardmäßig bis zu drei unterschiedliche eigene Sessions desselben Projekts berücksichtigen. Sie liefern den stärksten thematischen Anker, nie automatisch das vollständige Gespräch. Für einen konkreten projektübergreifenden Bedarf kann der Agent gezielt außerhalb des Projekts suchen, ohne jedes Mal nachzufragen. Leere Projekttreffer allein lösen keine globale Suche aus. Allgemeine Nutzerpräferenzen bleiben verfügbar; fremde Projekte bestimmen nicht das Thema der aktuellen Anfrage.
 
 Beim ersten Beitrag oder bei einer ausdrücklichen Frage nach den letzten Sessions können zusätzlich kleine aktuelle Ausschnitte erscheinen. Ein ausdrücklicher Verzicht auf Memory oder vorherige Sessions und reine Textumformungen unterdrücken den automatischen Abruf.
 

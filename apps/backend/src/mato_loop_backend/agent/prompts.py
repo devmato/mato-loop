@@ -761,7 +761,10 @@ def general_system_prompt(
         parts.append(
             "Current user-configured project context. Use its instructions as defaults for sessions in "
             "this project. They override the user-configured agent identity. The latest explicit user "
-            "request and host rules override them:\n"
+            "request and host rules override them. Interpret ambiguous requests in this project's context, "
+            "not from unrelated memories. Use project evidence first; if missing, inspect relevant project "
+            "sources or clarify. Search other projects only for a concrete cross-project need, not merely "
+            "because local results are empty. External sources do not establish this project's state:\n"
             + json.dumps(
                 {"name": project_name, "instructions": project_instructions},
                 ensure_ascii=False,

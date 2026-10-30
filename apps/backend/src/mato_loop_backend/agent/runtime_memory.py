@@ -275,6 +275,7 @@ def _relevant_episode_item(
     payload = {
         "source": "relevant",
         "sessionId": str(reference.session_id),
+        "projectId": str(reference.project_id) if reference.project_id else None,
         "title": reference.session_title,
         "sessionReadArguments": {
             "session_id": str(reference.session_id),
@@ -312,6 +313,7 @@ def _recent_episode_item(
     payload = {
         "source": "recent",
         "sessionId": str(reference.session_id),
+        "projectId": str(reference.project_id) if reference.project_id else None,
         "title": reference.session_title,
         "sessionReadArguments": {
             "session_id": str(reference.session_id),

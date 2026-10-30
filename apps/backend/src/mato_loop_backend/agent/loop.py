@@ -540,6 +540,10 @@ async def execute_loop_body(
                 attachment_service=AttachmentService,
                 session_automations=await AutomationService.session_definitions(db, chat_session) if not delegated else None,
                 repository_context_loader=repository_context_loader,
+                available_secret_references={
+                    *(f"run-secret:{secret_id}" for secret_id in one_time_secrets),
+                    *session_secrets.references(chat_session.id).values(),
+                },
             )
         except ContextError as exc:
             if exc.code != "agent.contextWindowExceeded" or not expire_discoveries(records[summary_boundary:], _active_agent_profile):

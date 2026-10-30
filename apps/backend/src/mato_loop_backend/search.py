@@ -52,6 +52,7 @@ class GlobalSearchService:
         db: AsyncSession, *, owner_id: UUID, query: str, limit: int = 10,
         exclude_session_id: UUID | None = None,
         readable_by: TrustLevel = TrustLevel.PRIVATE,
+        project_id: UUID | None = None,
     ) -> list[tuple[ChatSession, str | None]]:
         filters = [
             ChatSession.user_id == owner_id,
@@ -62,6 +63,8 @@ class GlobalSearchService:
         ]
         if exclude_session_id is not None:
             filters.append(ChatSession.id != exclude_session_id)
+        if project_id is not None:
+            filters.append(ChatSession.project_id == project_id)
         rows = (await db.execute(
             select(ChatSession, Project.name)
             .outerjoin(Project, (Project.id == ChatSession.project_id) & (Project.user_id == ChatSession.user_id))

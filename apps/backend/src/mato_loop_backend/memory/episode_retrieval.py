@@ -85,6 +85,7 @@ def _candidate_filters(
     current_session_id: UUID | None,
     readable_by: TrustLevel,
     full_sessions_only: bool = False,
+    project_id: UUID | None = None,
 ) -> list[object]:
     filters = [
         ChatSession.user_id == owner_id,
@@ -97,6 +98,8 @@ def _candidate_filters(
         filters.append(ChatSession.id != current_session_id)
     if full_sessions_only:
         filters.append(ChatSession.memory_mode == "full")
+    if project_id is not None:
+        filters.append(ChatSession.project_id == project_id)
     return filters
 
 
@@ -217,6 +220,7 @@ class EpisodeRetrievalService:
         current_session_id: UUID,
         readable_by: TrustLevel = TrustLevel.PRIVATE,
         full_sessions_only: bool = False,
+        project_id: UUID | None = None,
     ) -> list[EpisodeReference]:
         if not references:
             return []
@@ -244,20 +248,24 @@ class EpisodeRetrievalService:
         ]
         if full_sessions_only:
             filters.append(ChatSession.memory_mode == "full")
+        if project_id is not None:
+            filters.append(ChatSession.project_id == project_id)
         rows = (
             await db.execute(
-                select(Message.id, Message.session_id, ChatSession.title)
+                select(Message.id, Message.session_id, ChatSession.title, ChatSession.project_id)
                 .join(ChatSession, ChatSession.id == Message.session_id)
                 .where(*filters)
             )
         ).all()
         visible_ids_by_session: dict[UUID, set[UUID]] = {}
         titles: dict[UUID, str | None] = {}
-        for message_id, session_id, title in rows:
+        projects: dict[UUID, UUID | None] = {}
+        for message_id, session_id, title, source_project_id in rows:
             visible_ids_by_session.setdefault(session_id, set()).add(message_id)
             titles[session_id] = title
+            projects[session_id] = source_project_id
         return [
-            replace(item, session_title=titles[item.session_id])
+            replace(item, session_title=titles[item.session_id], project_id=projects[item.session_id])
             for item in references
             if message_ids_by_session[item.session_id]
             <= visible_ids_by_session.get(item.session_id, set())
@@ -274,6 +282,7 @@ class EpisodeRetrievalService:
         excerpt_messages: int = 6,
         max_excerpt_characters: int = 6_000,
         full_sessions_only: bool = False,
+        project_id: UUID | None = None,
     ) -> EpisodeRetrieval:
         if limit <= 0:
             raise ValueError("episode retrieval limit must be positive")
@@ -294,6 +303,7 @@ class EpisodeRetrievalService:
                     current_session_id=current_session_id,
                     readable_by=readable_by,
                     full_sessions_only=full_sessions_only,
+                    project_id=project_id,
                 )
             )
             .subquery()
@@ -345,6 +355,7 @@ class EpisodeRetrievalService:
         anchor_only: bool = False,
         full_sessions_only: bool = False,
         session_id: UUID | None = None,
+        project_id: UUID | None = None,
         distinct_sessions: bool = True,
     ) -> EpisodeRetrieval:
         cleaned_query = query.strip()
@@ -363,6 +374,7 @@ class EpisodeRetrievalService:
             current_session_id=current_session_id,
             readable_by=readable_by,
             full_sessions_only=full_sessions_only,
+            project_id=project_id,
         )
         if session_id is not None:
             filters.append(ChatSession.id == session_id)

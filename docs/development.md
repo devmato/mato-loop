@@ -59,6 +59,7 @@ Generate migrations with `./scripts/dev.sh db revision --autogenerate -m "descri
 ./scripts/eval.sh help
 ./scripts/eval.sh prompts --help
 ./scripts/eval.sh session-cache --help
+./scripts/eval.sh project-context --help
 ./scripts/eval.sh coding-comparison --help
 ./scripts/eval.sh browser-performance --help
 ./scripts/eval.sh shell-decider --check

@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
 MAX_ATTACHMENT_EXCERPT_CHARACTERS = 20_000
 MAX_WEBFETCH_CONTENT_CHARACTERS = 15_000
+SESSION_TOOL_RESULT_CHUNK_CHARACTERS = 12_000
 
 
 _OMITTED_TOOL_OUTPUT = "[Historical tool output omitted from the active context.]"
@@ -669,6 +670,7 @@ def _projection_messages(
     pdf_context: dict[str, dict] | None = None,
     attachment_text_characters: int = MAX_ATTACHMENT_EXCERPT_CHARACTERS,
     omitted_tool_result_ids: set[UUID] | None = None,
+    available_secret_references: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     records = [item for item in records if item.error_code is None]
     if available_records is not None:
@@ -711,7 +713,7 @@ def _projection_messages(
         if has_checklist
         else None
     )
-    tool_names = _tool_names_by_message_id(records)
+    tool_names = _tool_names_by_message_id(source_records)
     tool_results_by_message: dict[UUID, dict[str, Message]] = {}
     call_owners: dict[str, UUID] = {}
     for record in available_records or records:
@@ -722,7 +724,7 @@ def _projection_messages(
         elif record.role == "tool" and record.tool_call_id in call_owners:
             owner = call_owners.pop(record.tool_call_id)
             tool_results_by_message.setdefault(owner, {})[record.tool_call_id] = record
-    original_references = _original_tool_result_references(available_records or records)
+    reader_sources, original_references = _tool_result_read_metadata(source_records)
     latest_user_id = next(
         (item.id for item in reversed(records) if item.role == "user"),
         None,
@@ -811,14 +813,29 @@ def _projection_messages(
             projected_attachment_ids.add(str(attachment.get("id") or ""))
         if item.role == "tool":
             tool_name = tool_names.get(item.id)
+            omitted = (
+                item.id in (omitted_tool_result_ids or ())
+                or (item.provider_data or {}).get("_matoloop", {}).get("contextOutputOmitted") is True
+            )
             binding = tool_execution_binding(item)
             if binding.get("executionAgentId") and tool_name:
                 projected["recorded_computer"] = binding
-            projected["content"] = _target_tool_result(
-                tool_name,
-                str(projected.get("content") or ""),
-                target_trust_level,
-            )
+            if not omitted and item.id in reader_sources:
+                source, offset = reader_sources[item.id]
+                # Revalidate the complete authorized source before slicing, never trust a stored fragment.
+                page = _tool_result_page(
+                    source, tool_names[source.id], offset, target_trust_level,
+                    available_secret_references=available_secret_references or set(),
+                )
+                payload = json.loads(item.content)
+                projected["content"] = json.dumps({**payload, **page}, ensure_ascii=False)
+            else:
+                projected["content"] = _target_tool_result(
+                    tool_name,
+                    str(projected.get("content") or ""),
+                    target_trust_level,
+                    available_secret_references=available_secret_references,
+                )
             projected["content"] = _model_file_tool_result(projected["content"])
             projected["content"] = model_tool_references(
                 tool_name, projected["content"], item.id
@@ -827,10 +844,6 @@ def _projection_messages(
             tool_name = tool_names.get(item.id)
             projected["content"] = _sanitize_tool_result_reference_fields(
                 str(projected.get("content") or "")
-            )
-            omitted = (
-                item.id in (omitted_tool_result_ids or ())
-                or (item.provider_data or {}).get("_matoloop", {}).get("contextOutputOmitted") is True
             )
             if not omitted and tool_name in {"browser", "browser_snapshot"} and item.tool_call_id in browser_inspect_calls:
                 projected["content"] = _model_browser_inspection(projected["content"])
@@ -1390,12 +1403,15 @@ def _tool_names_by_message_id(records: list[Message]) -> dict[UUID, str]:
     return {key: str(call.get("name") or "") for key, call in _tool_calls_by_message_id(records).items()}
 
 
-def _original_tool_result_references(records: list[Message]) -> dict[UUID, dict[str, Any]]:
+def _tool_result_read_metadata(
+    records: list[Message],
+) -> tuple[dict[UUID, tuple[Message, int]], dict[UUID, dict[str, Any]]]:
     """Follow only earlier same-session sources authorized by persisted reader calls."""
     from mato_loop_backend.tools.arguments import SessionToolResultReadArguments
 
     calls = _tool_calls_by_message_id(records)
     earlier: dict[UUID, Message] = {}
+    sources: dict[UUID, tuple[Message, int]] = {}
     references: dict[UUID, dict[str, Any]] = {}
     for item in records:
         call = calls.get(item.id, {})
@@ -1407,7 +1423,9 @@ def _original_tool_result_references(records: list[Message]) -> dict[UUID, dict[
                 payload = json.loads(item.content)
                 source = earlier.get(arguments.message_id)
                 if (isinstance(payload, dict) and "error" not in payload and source is not None
-                        and source.session_id == item.session_id and source.id in calls):
+                        and source.session_id == item.session_id and source.id in calls
+                        and source.error_code is None and item.error_code is None):
+                    sources[item.id] = (source, arguments.offset)
                     references[item.id] = references.get(source.id) or {
                         **_tool_result_reference(source.id, source.content),
                         "arguments": {"message_id": str(source.id), "offset": arguments.offset},
@@ -1416,7 +1434,7 @@ def _original_tool_result_references(records: list[Message]) -> dict[UUID, dict[
                 pass
         if item.role == "tool":
             earlier[item.id] = item
-    return references
+    return sources, references
 
 
 def tool_execution_binding(message: Message) -> dict[str, Any]:
@@ -1424,6 +1442,25 @@ def tool_execution_binding(message: Message) -> dict[str, Any]:
     if "executionAgentAlias" not in host:
         return {}
     return {key: host.get(key) for key in ("executionAgentId", "executionAgentAlias")}
+
+
+def _tool_result_page(
+    message: Message, tool_name: str, offset: int, readable_by: TrustLevel, *,
+    available_secret_references: set[str] | None = None,
+) -> dict[str, Any]:
+    content = _target_tool_result(
+        tool_name, message.content, readable_by,
+        available_secret_references=available_secret_references,
+    )
+    content = _sanitize_tool_result_reference_fields(_model_file_tool_result(content))
+    content = model_tool_references(tool_name, content, message.id)
+    end = min(len(content), offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS)
+    return {
+        "messageId": str(message.id), "offset": offset, "content": content[offset:end],
+        "totalCharacters": len(content), "hasMore": end < len(content),
+        "nextOffset": end if end < len(content) else None,
+        "contentIsUntrusted": True, "toolName": tool_name, **tool_execution_binding(message),
+    }
 
 
 def _target_memory_result(content: str, readable_by: TrustLevel) -> str:

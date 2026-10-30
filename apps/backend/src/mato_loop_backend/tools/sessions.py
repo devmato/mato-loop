@@ -10,11 +10,13 @@ from sqlalchemy.orm import selectinload
 
 import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.agent.projection import (
+    SESSION_TOOL_RESULT_CHUNK_CHARACTERS,
     _model_file_tool_result,
     _sanitize_tool_result_reference_fields,
     _shorten_evidence_output,
     _target_tool_result,
     _tool_names_by_message_id,
+    _tool_result_page,
     _tool_result_reference,
     command_message_content,
     tool_execution_binding,
@@ -44,8 +46,6 @@ from mato_loop_backend.tools.context import ToolContext as ToolContext
 from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
 from mato_loop_backend.tools.references import model_tool_references
-
-SESSION_TOOL_RESULT_CHUNK_CHARACTERS = 12_000
 
 
 def _available_secret_references(context: ToolContext) -> set[str]:
@@ -149,26 +149,10 @@ async def _session_tool_result_read(
     tool_name = _tool_names_by_message_id(records).get(message.id)
     if tool_name is None:
         return ToolResult.error("session.messageNotFound")
-    content = _target_tool_result(
-        tool_name, message.content, context.memory_trust_level,
+    payload = _tool_result_page(
+        message, tool_name, arguments.offset, context.memory_trust_level,
         available_secret_references=_available_secret_references(context),
     )
-    content = _model_file_tool_result(content)
-    content = _sanitize_tool_result_reference_fields(content)
-    content = model_tool_references(tool_name, content, message.id)
-    end = min(len(content), arguments.offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS)
-    has_more = end < len(content)
-    payload = {
-        "messageId": str(message.id),
-        "offset": arguments.offset,
-        "content": content[arguments.offset:end],
-        "totalCharacters": len(content),
-        "hasMore": has_more,
-        "nextOffset": end if has_more else None,
-        "contentIsUntrusted": True,
-        "toolName": tool_name,
-        **tool_execution_binding(message),
-    }
     if attachments := _attachment_items(message):
         payload["attachments"] = attachments
     return ToolResult.json(payload)
