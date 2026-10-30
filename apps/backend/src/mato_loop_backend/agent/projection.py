@@ -39,6 +39,8 @@ _OMITTED_TOOL_OUTPUT = "[Historical tool output omitted from the active context.
 
 _HOST_TOOL_RESULT_REFERENCE = "_matoloopToolResultReference"
 
+_HOST_TOOL_RESULT_FALLBACK = "_matoloopToolResultFallback"
+
 
 _HOST_CHECKLIST_RESULT = "_matoloopChecklistResult"
 
@@ -817,6 +819,10 @@ def _projection_messages(
             else:
                 if tool_name == "todo_write":
                     projected[_HOST_CHECKLIST_RESULT] = True
+                elif tool_name != "secret_input":
+                    projected[_HOST_TOOL_RESULT_FALLBACK] = _omitted_tool_result(
+                        item.id, item.content, original_references.get(item.id),
+                    )
                 current_tool_indices.append(len(messages))
             if tool_name == "webfetch":
                 original_content = str(projected.get("content") or "")
@@ -1250,7 +1256,10 @@ def _limit_tool_output_tokens(
                 content,
                 max_characters,
                 preserve_tool_result_reference=preserve_tool_result_references,
-                omitted_marker=messages[index].get(_HOST_RETAINED_TOOL_RESULT),
+                omitted_marker=(
+                    messages[index].get(_HOST_RETAINED_TOOL_RESULT)
+                    or messages[index].get(_HOST_TOOL_RESULT_FALLBACK)
+                ),
             )
             if replacement is None:
                 keep_characters = max(200, max_characters) - len(_SHORTENED_TOOL_OUTPUT)
@@ -1261,7 +1270,7 @@ def _limit_tool_output_tokens(
                     replacement = (
                         content[:keep_characters] + _SHORTENED_TOOL_OUTPUT
                         if keep_characters >= 200
-                        else omitted_marker
+                        else messages[index].get(_HOST_TOOL_RESULT_FALLBACK, omitted_marker)
                     )
             after = estimate_tokens(replacement, characters_per_token)
             if replacement == content or after >= before:
@@ -1309,7 +1318,10 @@ def _limit_tool_output_tokens(
             content,
             max(0, len(content) - excess_chars),
             preserve_tool_result_reference=preserve_tool_result_references,
-            omitted_marker=messages[index].get(_HOST_RETAINED_TOOL_RESULT),
+            omitted_marker=(
+                messages[index].get(_HOST_RETAINED_TOOL_RESULT)
+                or messages[index].get(_HOST_TOOL_RESULT_FALLBACK)
+            ),
         )
         if replacement is None:
             exact_marker = (omitted_markers or {}).get(index, messages[index].get(_HOST_RETAINED_TOOL_RESULT))
@@ -1319,9 +1331,9 @@ def _limit_tool_output_tokens(
                 replacement = (
                     content[:keep_chars] + _SHORTENED_TOOL_OUTPUT
                     if keep_chars >= 200
-                    else omitted_marker
+                    else messages[index].get(_HOST_TOOL_RESULT_FALLBACK, omitted_marker)
                 )
-        if replacement == content:
+        if len(replacement) >= len(content):
             continue
         messages[index]["content"] = replacement
         total += estimate_tokens(replacement, characters_per_token) - before
@@ -1810,6 +1822,7 @@ def _summary_source(
 def _strip_projection_metadata(messages: list[dict[str, Any]]) -> None:
     for message in messages:
         message.pop(_HOST_TOOL_RESULT_REFERENCE, None)
+        message.pop(_HOST_TOOL_RESULT_FALLBACK, None)
         message.pop(_HOST_CHECKLIST_RESULT, None)
         message.pop(_HOST_RETAINED_TOOL_RESULT, None)
         message.pop(SNAPSHOT_MARKER, None)
@@ -1854,13 +1867,18 @@ async def _prune_tool_outputs_to_budget(
                 preserve_tool_result_reference=bool(
                     message.get(_HOST_TOOL_RESULT_REFERENCE)
                 ),
-                omitted_marker=message.get(_HOST_RETAINED_TOOL_RESULT),
+                omitted_marker=(
+                    message.get(_HOST_RETAINED_TOOL_RESULT)
+                    or message.get(_HOST_TOOL_RESULT_FALLBACK)
+                ),
             )
             if shortened is None:
                 if fallback := message.get(_HOST_RETAINED_TOOL_RESULT):
                     shortened = fallback
                 elif len(content) <= 200:
                     continue
+                elif keep_chars <= 200 and message.get(_HOST_TOOL_RESULT_FALLBACK):
+                    shortened = message[_HOST_TOOL_RESULT_FALLBACK]
                 else:
                     shortened = (
                         content[:keep_chars]

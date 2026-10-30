@@ -1286,6 +1286,25 @@ def test_projection_distributes_current_tool_output_budget_fairly() -> None:
     assert second.content == "b" * 1_000
 
 
+def test_omitted_current_mail_result_keeps_its_exact_reader_reference() -> None:
+    session = _session()
+    user = _message(session.id, "user", "Read the Apple email")
+    call = _message(session.id, "assistant", "")
+    call.tool_calls = [{"id": "mail", "name": "mail_search", "arguments": {}}]
+    result = _message(session.id, "tool", json.dumps({
+        "messages": [{"subject": "Say hello to Touch on Mac.", "messageToken": "x" * 2_000}],
+        "contentIsUntrusted": True,
+    }))
+    result.tool_call_id = "mail"
+
+    projected = _projection_messages(
+        "System", None, [user, call, result], TrustLevel.PRIVATE,
+        current_turn_tool_output_tokens=20,
+    )
+
+    assert json.loads(projected[-1]["content"]) == json.loads(_omitted_tool_result(result.id, result.content))
+
+
 @pytest.mark.parametrize("continuing", [False, True])
 @pytest.mark.parametrize("budget", [None, 20])
 def test_large_webfetch_pdf_keeps_its_image_and_original_reference(continuing, budget):
@@ -3986,7 +4005,7 @@ async def test_private_tool_body_size_does_not_distort_history_compaction(
     )
     assert projection.compacted is (history_length == 9_000)
     assert summarize.await_count == int(projection.compacted)
-    marker = _SHORTENED_TOOL_OUTPUT.lstrip()
+    marker = _omitted_tool_result(records[-1].id, records[-1].content)
     baselines = [candidate for candidate in candidates if candidate[-1]["content"] == marker]
     assert len({json.dumps(candidate, sort_keys=True) for candidate in baselines}) == 1 + int(projection.compacted)
     for baseline in baselines:
