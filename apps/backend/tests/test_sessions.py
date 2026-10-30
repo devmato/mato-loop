@@ -2969,7 +2969,6 @@ async def test_control_center_state_can_be_replaced() -> None:
     )
 
     assert session.control_center == {
-        "conversation_fork": True,
         "tabs": [
             _stored_app_tab("session"),
             _stored_app_tab("files", pinned=True),

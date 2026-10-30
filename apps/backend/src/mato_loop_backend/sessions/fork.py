@@ -14,7 +14,9 @@ from mato_loop_backend.agent.projection import (
     COMPACTION_HEADINGS,
 )
 from mato_loop_backend.chat_history import ChatHistoryService
+from mato_loop_backend.files.service import RootFileError, RootFileService
 from mato_loop_backend.files.storage import SessionStorage, SessionStorageError
+from mato_loop_backend.media.attachments import AttachmentError, AttachmentService
 from mato_loop_backend.memory.episode_indexing import message_search_chunks
 from mato_loop_backend.models import (
     ChatSession,
@@ -25,6 +27,7 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.sessions.archive import is_session_archived
 from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
+from mato_loop_backend.settings import InstanceLimits, SettingsStore
 
 logger = logging.getLogger(__name__)
 
@@ -67,13 +70,20 @@ async def _fork_session(db: AsyncSession, session_id: UUID, user_id: UUID) -> Ch
     references = {str(old): str(new) for old, new in ids.items()}
     uuid_pattern = re.compile(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b")
     storage = SessionStorage()
+    limits = await SettingsStore.load(db, InstanceLimits)
+    source_files = RootFileService(source.id, project_id=source.project_id, session_storage=storage, user_id=user_id)
+    target_files = RootFileService(target.id, project_id=target.project_id, session_storage=storage,
+                                  user_id=user_id, user_quota_bytes=limits.user_quota_bytes)
+    attachments = AttachmentService(storage)
+    imported = {}
+    copied_attachments = []
     target_id, project_id = target.id, target.project_id
     commit_attempted = False
     try:
         db.add(target)
         await db.flush()
-        target.control_center = {**(target.control_center or {}), "conversation_fork": True}
         await asyncio.to_thread(storage.provision, target.id, target.project_id, user_id=user_id)
+        await asyncio.to_thread(target_files.copy_session_from, source_files)
         for original in messages:
             data = deepcopy(original.provider_data or {})
             data.pop("continuation_scope", None)
@@ -82,9 +92,6 @@ async def _fork_session(db: AsyncSession, session_id: UUID, user_id: UUID) -> Ch
             runtime.pop("pendingAttachments", None)
             if original.error_code:
                 runtime["historicalError"] = {"code": original.error_code, "params": original.error_params}
-            if "fileActions" in runtime:
-                runtime["fileActions"] = [item for item in runtime["fileActions"]
-                                          if isinstance(item, dict) and item.get("root") != "session"]
             message = Message(
                 id=ids[original.id], session_id=target.id, content=original.content,
                 provider_data=data,
@@ -96,6 +103,25 @@ async def _fork_session(db: AsyncSession, session_id: UUID, user_id: UUID) -> Ch
             )
             db.add(message)
             db.add_all(message_search_chunks(message))
+            for attachment in original.attachments:
+                copied = await asyncio.to_thread(attachments.copy_attachment, attachment, source.id,
+                                                 target_files, message.id, imported)
+                copied_attachments.append((attachment, copied))
+                db.add(copied)
+            for action in runtime.get("fileActions", []):
+                if not isinstance(action, dict) or action.get("root") != "session":
+                    continue
+                if action.get("rootIdentity") == str(source.id):
+                    action["rootIdentity"] = str(target.id)
+                elif copied_file := imported.get((action.get("rootIdentity"), action.get("fileId"), action.get("fileRevision"))):
+                    action.update(rootIdentity=str(target.id), fileId=str(copied_file.file_id),
+                                  fileRevision=copied_file.revision, path=copied_file.path,
+                                  filename=copied_file.path.rsplit("/", 1)[-1])
+        attachment_ids = {str(original.id): str(copied.id) for original, copied in copied_attachments}
+        for _, copied in copied_attachments:
+            for key in ("sourceAttachmentIds", "authorizationSourceAttachmentIds"):
+                if key in copied.metadata_json:
+                    copied.metadata_json[key] = [attachment_ids.get(value, value) for value in copied.metadata_json[key]]
         await db.flush()
         copied_summaries = []
         headings = {name.casefold() for name in COMPACTION_HEADINGS}
@@ -129,6 +155,8 @@ async def _fork_session(db: AsyncSession, session_id: UUID, user_id: UUID) -> Ch
         # A failed COMMIT may have persisted; startup reconciliation resolves leftover trees.
         if not commit_attempted:
             await asyncio.to_thread(storage.remove_session, target_id, project_id)
+        if isinstance(exc, (RootFileError, AttachmentError)):
+            raise SessionServiceError(409, exc.code) from exc
         if isinstance(exc, (OSError, SessionStorageError)):
             logger.exception("Session fork storage could not be copied")
             raise SessionServiceError(500, "session.storageUnavailable") from exc

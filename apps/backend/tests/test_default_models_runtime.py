@@ -525,7 +525,6 @@ async def test_title_generation_falls_back_to_session_model(monkeypatch, context
     session = ChatSession(
         id=uuid4(),
         title=("Kopie: " if forked else "") + "Default Models in Settings einbauen",
-        control_center={"conversation_fork": forked},
         model_config_id=session_model.id,
         title_generation_status=TitleGenerationStatus.RUNNING.value,
     )

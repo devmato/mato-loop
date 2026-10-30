@@ -1516,9 +1516,8 @@ async def update_session(
         item.is_pinned = payload.pinned
     if "control_center" in fields:
         control_center = payload.control_center.model_dump(mode="json")
-        for key in ("todos_collapsed", "conversation_fork"):
-            if key in (item.control_center or {}):
-                control_center[key] = item.control_center[key]
+        if "todos_collapsed" in (item.control_center or {}):
+            control_center["todos_collapsed"] = item.control_center["todos_collapsed"]
         item.control_center = control_center
     if "todos_collapsed" in fields and payload.todos_collapsed is not None:
         item.control_center = {

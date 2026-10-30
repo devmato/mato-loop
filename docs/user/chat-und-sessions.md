@@ -42,10 +42,14 @@ Session weiter. Projekt-Sessions bleiben im selben Projekt. Zunächst heißt die
 „Kopie: Originaltitel“. Nach Ihrer ersten neuen Nachricht wird einmal ein eigener
 Titel ohne diesen Zusatz erzeugt. Manuelles Umbenennen hat Vorrang; bei Fehlern bleibt
 der Übergangstitel erhalten. Verlauf, Einstellungen,
-Kontextzusammenfassungen und textuelle Tool-Ergebnisse werden kopiert, interne Dateien
-und Anhänge dagegen nicht. Ein dauerhafter Hinweis kennzeichnet die Gesprächskopie;
-hängen Sie benötigte Dateien erneut an. Interne Dateischaltflächen werden
-nicht übernommen. Das Original bleibt unverändert. Der Befehl startet
+Kontextzusammenfassungen, textuelle Tool-Ergebnisse, interne Dateien samt Revisionen
+und Anhänge werden kopiert. Änderungen oder Löschungen an Dateien der Kopie wirken
+sich nicht auf das Original aus. Auch Anhänge aus anderen Projekt-Sessions erhalten
+eigene Dateien in der Kopie. „Rückgängig“ funktioniert für übernommene und neue
+Nachrichten wie gewohnt; bereits ausgeführte Datei- und Tool-Aktionen werden dadurch
+nicht rückgängig gemacht. Es gibt keinen zusätzlichen Fork-Eintrag oder dauerhaften
+Banner. Große Dateibestände benötigen entsprechend Speicherplatz und Kopierzeit;
+das Speicherlimit gilt auch für Kopien. Das Original bleibt unverändert. Der Befehl startet
 keinen Modellaufruf und nimmt keine Argumente oder neuen Anhänge entgegen. Warten Sie
 vorher, bis laufende Aufträge und vorgemerkte Nachrichten abgeschlossen sind.
 Freigaben, offene Fragen, Automationen und Subagent-Sessions werden nicht übernommen.

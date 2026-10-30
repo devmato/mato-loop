@@ -7,9 +7,16 @@ MatoLoop is a provider-neutral monorepo. FastAPI provides REST and SSE interface
 `/fork` is a WebUI host action backed by `POST /sessions/{id}/fork`, not an LLM
 request. It snapshots an idle, owner-bound chat into an independent session in the
 same project, remapping summary references without rewriting historical message
-text or tool arguments. Files and attachments are not copied; a persistent session
-notice informs both the user and model. Internal file actions are removed.
-New sessions receive empty internal storage. Runs,
+text or tool arguments. Managed files, revision history, attachment records, and
+processed companions are copied into independent owner-bound storage without rerunning
+media processing. Referenced foreign project-session files are imported with their
+revision history and current state rather than shared. Only explicit companion ownership
+is retained; legacy shared companions remain unowned. File-action bindings and attachment
+provenance are rebound to the copy.
+The copy uses normal undo behavior, without a synthetic fork message, undo lock,
+session banner, or fork-specific system prompt. File copying uses the existing storage
+lock, rejects symlinks and pending file publications, and enforces the user's quota.
+Runs,
 grants, approvals, children, automations, and provider continuation scopes are not
 inherited. The execution-agent directory is reused as a local directory, without
 transferring managed-worktree ownership. Forks need no persistent parent relation.

@@ -2515,6 +2515,66 @@ class RootFileService:
                 raise
         return self._relative_path(destination_parts)
 
+    def copy_file_from(self, source: RootFileService, file_id: UUID) -> dict[int, FileRevision]:
+        """Import one file with its revision identity and current state intact."""
+        with self._session_operation_lock(FileRoot.SESSION, quota_check=True):
+            history = source._history_for_id(file_id)
+            if history is None:
+                raise RootFileError("file.revisionNotFound", "Revision history not found")
+            directory, index = history
+            if index.get("run", {}).get("state", "final") != "final":
+                raise RootFileError("file.changed", "File is owned by an active run")
+            copied_id = uuid4()
+            parent = f"import-{copied_id}"
+            path = f"{parent}/{PurePosixPath(index['path']).name}"
+            working = None if index.get("deleted", False) else source.resolve(FileRoot.SESSION, index["path"])
+            self._assert_user_quota(self._tree_usage(directory, operation_limits=False).bytes
+                                    + (self._tree_usage(working, operation_limits=False).bytes if working else 0))
+            copied_directory = self._revisions_path() / str(copied_id)
+            self._copy_tree(directory, copied_directory)
+            copied_index = {**index, "fileId": str(copied_id), "path": path}
+            copied_index.pop("run", None)
+            copied_index.pop("runReceipts", None)
+            self._replace_private_file(copied_directory / "index.json", self._index_bytes(copied_index))
+            if working is not None:
+                self.create_directory(FileRoot.SESSION, parent)
+                self._copy_tree(working, self._files_path() / path)
+                self._fsync_directory(self._files_path() / parent)
+            self._fsync_directory(copied_directory)
+            self._fsync_directory(copied_directory.parent)
+            self._assert_user_quota(0)
+            return {
+                item["revision"]: FileRevision(
+                    file_id=copied_id, revision=item["revision"], path=path,
+                    size_bytes=item["sizeBytes"], sha256=item["sha256"], created_at=item["createdAt"],
+                    current=item["revision"] == index["currentRevision"],
+                ) for item in index["revisions"]
+            }
+
+    def copy_session_from(self, source: RootFileService) -> None:
+        """Copy an idle session's files and revisions into an empty, independently owned store."""
+        if self.session_id == source.session_id or self.user_id != source.user_id:
+            raise RootFileError("file.invalidDestination", "Invalid session copy destination")
+        with self._session_operation_lock(FileRoot.SESSION, quota_check=True):
+            target = self._root_path(FileRoot.SESSION)
+            if any(any((target / name).iterdir()) for name in ("files", "revisions")):
+                raise RootFileError("file.pathAlreadyExists", "Session copy destination is not empty")
+            origin = source.session_storage.session_path(source.session_id, project_id=source.project_id)
+            if not origin.exists() and not origin.is_symlink():
+                return
+            source._root_path(FileRoot.SESSION)
+            if source.session_storage.pending_run_ids(source.session_id, source.project_id):
+                raise RootFileError("file.changed", "Session has pending run files")
+            self._assert_user_quota(source._session_usage())
+            for name in ("files", "revisions"):
+                for entry in (origin / name).iterdir():
+                    self._copy_tree(entry, target / name / entry.name)
+            for directory, index in self._revision_indexes():
+                index.pop("run", None)
+                index.pop("runReceipts", None)
+                self._replace_private_file(directory / "index.json", self._index_bytes(index))
+            self._assert_user_quota(0)
+
     def move_path(
         self,
         source_root: FileRoot | str,

@@ -8,6 +8,7 @@ import logging
 import re
 import unicodedata
 import warnings
+from copy import deepcopy
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path, PurePosixPath
@@ -585,6 +586,52 @@ class AttachmentService:
             "companionSizeBytes": revision.size_bytes,
             "companionSha256": revision.sha256,
         }
+
+    def copy_attachment(
+        self, attachment: MessageAttachment, source_session_id: UUID,
+        target: RootFileService, message_id: UUID,
+        imported: dict[tuple[str, str, int], FileRevision],
+    ) -> MessageAttachment:
+        """Rebind a copied attachment, importing foreign revisions without processing media again."""
+        def copy_file(root_id: UUID, file_id: UUID, revision: int, path: str) -> tuple[UUID, int, str]:
+            if root_id == source_session_id:
+                return file_id, revision, path
+            key = str(root_id), str(file_id), revision
+            if key not in imported:
+                files = self._root_files(source_session_id, root_id)
+                files.file_revision(file_id, revision)
+                imported.update({(str(root_id), str(file_id), number): item
+                                 for number, item in target.copy_file_from(files, file_id).items()})
+                if key not in imported:
+                    raise AttachmentError("attachment.notFound")
+            copied = imported[key]
+            return copied.file_id, copied.revision, copied.path
+
+        metadata = deepcopy(attachment.metadata_json or {})
+        file_id, revision, path = copy_file(
+            attachment.file_root_id, attachment.file_id, attachment.file_revision, attachment.file_path,
+        )
+        if metadata.get("companionFileRootId"):
+            companion_id, companion_revision, companion_path = copy_file(
+                UUID(metadata["companionFileRootId"]), UUID(metadata["companionFileId"]),
+                metadata["companionFileRevision"], metadata["companionFilePath"],
+            )
+            metadata.update(companionFileRootId=str(target.session_id), companionFileId=str(companion_id),
+                            companionFileRevision=companion_revision, companionFilePath=companion_path)
+            if attachment.file_root_id != source_session_id and companion_id != file_id:
+                files = self._root_files(source_session_id, attachment.file_root_id)
+                ownership = files._derived_links().get(attachment.metadata_json["companionFileId"])
+                binding = {"source": attachment.file_revision, "derived": attachment.metadata_json["companionFileRevision"]}
+                if ownership and ownership["sourceFileId"] == str(attachment.file_id) and binding in ownership["bindings"]:
+                    target.register_derived_file(file_id, companion_id, source_revision=revision, derived_revision=companion_revision)
+        return MessageAttachment(
+            id=uuid4(), message_id=message_id, file_root_id=target.session_id,
+            file_id=file_id, file_revision=revision, file_path=path, metadata_json=metadata,
+            **{key: getattr(attachment, key) for key in (
+                "position", "kind", "category", "purpose", "processing_status", "mime_type",
+                "size_bytes", "sha256", "filename", "width", "height", "duration_ms", "created_at",
+            )},
+        )
 
     async def create_image(self, db: AsyncSession, message: Message, data: bytes, mime_type: str, **kwargs) -> MessageAttachment | SimpleNamespace:
         return await self.create_attachment(db, message, data, mime_type, kind="image", **kwargs)

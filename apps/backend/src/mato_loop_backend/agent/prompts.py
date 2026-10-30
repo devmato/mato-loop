@@ -263,9 +263,6 @@ def general_system_prompt(
     ]
     dynamic_parts: list[str] = []
     runtime_parts: list[str] = []
-    if (chat_session.control_center or {}).get("conversation_fork"):
-        parts.append("This conversation was copied without internal files or attachments. "
-                     "Historical file references do not prove availability; ask for needed attachments again.")
     if model_trust_level == TrustLevel.PUBLIC:
         parts.append(
             "Access other private sessions, including listing or searching them, only when explicitly "

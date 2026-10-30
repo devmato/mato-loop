@@ -306,7 +306,6 @@ def session_payload(
         "titleGenerationStatus": item.title_generation_status,
         "pinned": bool(item.is_pinned),
         "todosCollapsed": (item.control_center or {}).get("todos_collapsed") is True,
-        "conversationFork": (item.control_center or {}).get("conversation_fork") is True,
         "controlCenter": {
             "tabs": [_control_center_tab_payload(tab) for tab in control_center["tabs"]],
             "activeAppId": control_center["active_app_id"],
