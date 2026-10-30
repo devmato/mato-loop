@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -102,12 +103,45 @@ async def test_fork_copies_conversation_and_files_and_handles_transaction_failur
         [item["content"] for item in projection if item["role"] == "tool"], copied_fallback.content,
     ) == ("Kopie: Source", "pending", project_id, "/worktree", {"mode": "local"}, "private", True, copied_messages[1].id,
           f"Facts\nKeep {session_id} unchanged.\n## Source message IDs\n{copied_messages[1].id}\n", True,
-          messages[0].content, messages[1].tool_calls,
+           messages[0].content, messages[1].tool_calls,
           [{"root": "session", "rootIdentity": str(target.id), "filename": "note.txt", "path": "note.txt"}],
           target.id, copied_messages[0].id, "updated", "updated", [messages[-1].content],
           fallback_prefix + _summary_evidence(_model_order(copied_messages)))
     storage.remove_session(session_id, project_id)
     assert AttachmentService(storage).read_derived_text(copied_attachment, target.id) == "original"
+
+
+async def test_fork_remaps_stored_resource_references(tmp_path, monkeypatch):
+    user_id, session_id = uuid4(), uuid4()
+    result_id, call_id = sorted(uuid4() for _ in range(2))
+    arguments = {"message_token": f"mail:{result_id}:0"}
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session_id, user_id=user_id)
+    messages = [
+        Message(id=result_id, session_id=session_id, role="tool", attachments=[], created_at=datetime.now(UTC),
+                content='{"messages":[{"messageToken":"encrypted-token"}]}',
+                provider_data={"_matoloop": {"toolName": "mail_search"}}),
+        Message(id=call_id, session_id=session_id, role="assistant", content="", attachments=[], created_at=datetime.now(UTC),
+                tool_calls=[{"id": "read", "name": "mail_get_message", "arguments": arguments}],
+                provider_data={"_matoloop": {"userEditedToolCalls": {"read": arguments}}, "responses_output_items": [{
+                    "type": "function_call", "name": "mail_get_message", "arguments": json.dumps(arguments),
+                }]}),
+    ]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [ChatSession(id=session_id, user_id=user_id, title="Mail"), None]
+    db.scalars.side_effect = [Mock(all=Mock(return_value=messages)), Mock(all=Mock(return_value=[]))]
+    monkeypatch.setattr(fork, "SessionStorage", lambda: storage)
+    monkeypatch.setattr(fork.SettingsStore, "load", AsyncMock(return_value=InstanceLimits()))
+
+    await fork.fork_session(db, session_id, user_id)
+
+    copied = [call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], Message)]
+    expected = {"message_token": f"mail:{copied[0].id}:0"}
+    assert (
+        copied[1].tool_calls[0]["arguments"],
+        copied[1].provider_data["_matoloop"]["userEditedToolCalls"]["read"],
+        json.loads(copied[1].provider_data["responses_output_items"][0]["arguments"]),
+    ) == (expected, expected, expected)
 
 
 @pytest.mark.parametrize("shared_companion", [False, True])

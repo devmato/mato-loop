@@ -22,7 +22,11 @@ from mato_loop_backend.memory.service import memory_visible_to
 from mato_loop_backend.models import ContextSummary, Message
 from mato_loop_backend.settings.models import TrustLevel
 from mato_loop_backend.tools.process_output import redact_process_output
-from mato_loop_backend.tools.references import model_secret_references, model_tool_references
+from mato_loop_backend.tools.references import (
+    model_secret_references,
+    model_tool_reference_arguments,
+    model_tool_references,
+)
 from mato_loop_backend.tools.snapshots import SNAPSHOT_MARKER, snapshot_context
 
 if TYPE_CHECKING:
@@ -333,7 +337,9 @@ def model_browser_observations(messages: list[dict[str, Any]]) -> list[dict[str,
     return projected
 
 
-def _model_provider_file_roots(provider_data: dict[str, Any]) -> dict[str, Any]:
+def _model_provider_file_roots(
+    provider_data: dict[str, Any], tool_results: dict[str, Message] | None = None,
+) -> dict[str, Any]:
     translated = model_file_roots(provider_data)
     replay_items = translated.get("responses_output_items")
     if not isinstance(replay_items, list):
@@ -341,6 +347,7 @@ def _model_provider_file_roots(provider_data: dict[str, Any]) -> dict[str, Any]:
     for item in replay_items:
         if not isinstance(item, dict):
             continue
+        result = (tool_results or {}).get(str(item.get("call_id") or item.get("id") or ""))
         arguments = item.get("arguments")
         if isinstance(arguments, str):
             try:
@@ -349,15 +356,21 @@ def _model_provider_file_roots(provider_data: dict[str, Any]) -> dict[str, Any]:
                 continue
             if isinstance(parsed, dict):
                 item["arguments"] = json.dumps(
-                    model_file_roots(parsed), ensure_ascii=True, separators=(",", ":")
+                    model_file_roots(model_tool_reference_arguments(
+                        str(item.get("name") or ""), parsed, result,
+                    )),
+                    ensure_ascii=True, separators=(",", ":"),
                 )
         elif isinstance(arguments, dict):
-            item["arguments"] = model_file_roots(arguments)
+            item["arguments"] = model_file_roots(
+                model_tool_reference_arguments(str(item.get("name") or ""), arguments, result)
+            )
     return translated
 
 
 def _model_tool_calls(
     tool_calls: list[dict[str, Any]] | None,
+    tool_results: dict[str, Message] | None = None,
 ) -> list[dict[str, Any]] | None:
     if not tool_calls:
         return tool_calls
@@ -366,7 +379,10 @@ def _model_tool_calls(
         item = dict(call)
         arguments = item.get("arguments")
         if isinstance(arguments, dict):
-            projected_arguments = dict(arguments)
+            projected_arguments = model_tool_reference_arguments(
+                str(item.get("name") or ""), arguments,
+                (tool_results or {}).get(str(item.get("id") or "")),
+            )
             if (
                 item.get("name") in {"webfetch", "fetch_transcript"}
                 and isinstance(projected_arguments.get("url"), str)
@@ -439,6 +455,7 @@ def message_dict(
     attachment_service: AttachmentService | None = None,
     pdf_context: dict[str, dict] | None = None,
     attachment_text_characters: int = MAX_ATTACHMENT_EXCERPT_CHARACTERS,
+    tool_results: dict[str, Message] | None = None,
 ) -> dict[str, Any]:
     content = command_message_content(message)
     if message.role == "assistant" and message.generation_status == "interrupted":
@@ -461,7 +478,7 @@ def message_dict(
             for call in tool_calls
         ]
     provider_data.pop("_matoloop", None)
-    provider_data = _model_provider_file_roots(provider_data)
+    provider_data = _model_provider_file_roots(provider_data, tool_results)
     # Generated protected artifacts are for the user, not a model image or readable reference.
     visible_attachments = [
         attachment for attachment in model_attachments(message)
@@ -551,7 +568,7 @@ def message_dict(
         **({"source_message_id": str(message.id)} if message.role == "assistant" else {}),
         "content": content,
         "tool_call_id": message.tool_call_id,
-        "tool_calls": _model_tool_calls(tool_calls),
+        "tool_calls": _model_tool_calls(tool_calls, tool_results),
         "provider_data": provider_data or None,
         "attachments": [
             {
@@ -696,6 +713,16 @@ def _projection_messages(
         else None
     )
     tool_names = _tool_names_by_message_id(records)
+    tool_results_by_message: dict[UUID, dict[str, Message]] = {}
+    call_owners: dict[str, UUID] = {}
+    for record in available_records or records:
+        if record.role == "assistant":
+            for call in record.tool_calls or []:
+                if call.get("id"):
+                    call_owners[str(call["id"])] = record.id
+        elif record.role == "tool" and record.tool_call_id in call_owners:
+            owner = call_owners.pop(record.tool_call_id)
+            tool_results_by_message.setdefault(owner, {})[record.tool_call_id] = record
     original_references = _original_tool_result_references(available_records or records)
     latest_user_id = next(
         (item.id for item in reversed(records) if item.role == "user"),
@@ -753,6 +780,7 @@ def _projection_messages(
             )
         projected = message_dict(
             item,
+            tool_results=tool_results_by_message.get(item.id),
             attachment_service=attachment_service,
             pdf_context=pdf_context if item.id == latest_user_id else None,
             attachment_text_characters=attachment_text_characters,

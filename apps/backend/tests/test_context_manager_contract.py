@@ -1292,7 +1292,7 @@ def test_omitted_current_mail_result_keeps_its_exact_reader_reference() -> None:
     call = _message(session.id, "assistant", "")
     call.tool_calls = [{"id": "mail", "name": "mail_search", "arguments": {}}]
     result = _message(session.id, "tool", json.dumps({
-        "messages": [{"subject": "Say hello to Touch on Mac.", "messageToken": "x" * 2_000}],
+        "messages": [{"subject": "Say hello to Touch on Mac. " * 100, "messageToken": "encrypted-token"}],
         "contentIsUntrusted": True,
     }))
     result.tool_call_id = "mail"

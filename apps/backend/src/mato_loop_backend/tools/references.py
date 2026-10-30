@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.models import Message
 
 _REFERENCE = re.compile(
-    r"^(event|task):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(\d{1,3})$"
+    r"^(event|task|mail):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(\d{1,3})$"
 )
 _SOURCES = {
     "calendar_query_events": ("event", "events", "eventToken", True),
@@ -22,6 +22,10 @@ _SOURCES = {
     "tasks_create_many": ("task", "created", "taskToken", True),
     "tasks_update": ("task", "task", "taskToken", False),
     "tasks_set_completed": ("task", "task", "taskToken", False),
+    "mail_search": ("mail", "messages", "messageToken", True),
+    "mail_get_message": ("mail", "message", "messageToken", False),
+    "mail_create_draft": ("mail", None, "messageToken", False),
+    "mail_update_draft": ("mail", None, "messageToken", False),
 }
 _TARGETS = {
     "calendar_update_event": ("event", "event_token"),
@@ -29,6 +33,11 @@ _TARGETS = {
     "tasks_update": ("task", "task_token"),
     "tasks_set_completed": ("task", "task_token"),
     "tasks_delete": ("task", "task_token"),
+    "mail_get_message": ("mail", "message_token"),
+    "mail_update_draft": ("mail", "message_token"),
+    "mail_delete_draft": ("mail", "message_token"),
+    "mail_send_draft": ("mail", "message_token"),
+    "mail_delete_message": ("mail", "message_token"),
 }
 
 
@@ -36,6 +45,37 @@ class InvalidToolReference(ValueError):
     def __init__(self, field: str) -> None:
         super().__init__(field)
         self.field = field
+
+
+def is_tool_reference(tool_name: str, field: str, value: Any) -> bool:
+    match = _REFERENCE.fullmatch(value) if isinstance(value, str) else None
+    return match is not None and _TARGETS.get(tool_name) == (match.group(1), field)
+
+
+def model_tool_reference_arguments(
+    tool_name: str, arguments: dict[str, Any], result: Message | None = None
+) -> dict[str, Any]:
+    target = _TARGETS.get(tool_name)
+    projected = dict(arguments)
+    if target and projected.get(target[1]) == "[Redacted]":
+        if (
+            tool_name == "mail_get_message" and result is not None
+            and (result.provider_data or {}).get("_matoloop", {}).get("toolName") == tool_name
+        ):
+            try:
+                payload = json.loads(result.content)
+            except (TypeError, ValueError):
+                payload = None
+            message = payload.get("message") if isinstance(payload, dict) else None
+            if isinstance(message, dict) and isinstance(message.get("messageToken"), str):
+                projected[target[1]] = f"mail:{result.id}:0"
+                return projected
+        projected[target[1]] = (
+            "[Historical reference omitted. Do not copy this value. For a new call, "
+            "obtain a current reference from a tool result and pass it as "
+            f"{target[1]}.]"
+        )
+    return projected
 
 
 def model_secret_references(content: str, available_references: set[str]) -> str:
@@ -67,7 +107,7 @@ def model_tool_references(
         return content
     if not isinstance(payload, dict):
         return content
-    container = payload.get(container_key)
+    container = payload.get(container_key) if container_key is not None else payload
     if multiple and not isinstance(container, list):
         return content
     if not multiple and not isinstance(container, dict):
@@ -120,7 +160,9 @@ async def resolve_tool_references(
         payload = json.loads(source_message.content)
     except (TypeError, json.JSONDecodeError) as exc:
         raise InvalidToolReference(field) from exc
-    container = payload.get(container_key) if isinstance(payload, dict) else None
+    container = (
+        payload.get(container_key) if container_key is not None else payload
+    ) if isinstance(payload, dict) else None
     index = int(index_text)
     item = (
         container[index]

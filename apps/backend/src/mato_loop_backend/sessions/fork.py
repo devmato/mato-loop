@@ -1,6 +1,7 @@
 """Independent conversation snapshots without copying execution state or grants."""
 
 import asyncio
+import json
 import logging
 import re
 from copy import deepcopy
@@ -28,8 +29,30 @@ from mato_loop_backend.models import (
 from mato_loop_backend.sessions.archive import is_session_archived
 from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
 from mato_loop_backend.settings import InstanceLimits, SettingsStore
+from mato_loop_backend.tools.references import is_tool_reference
 
 logger = logging.getLogger(__name__)
+
+
+def _remap_tool_call_references(calls: list[dict], references: dict[str, str]) -> None:
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        arguments = call.get("arguments")
+        encoded = isinstance(arguments, str)
+        if encoded:
+            try:
+                arguments = json.loads(arguments)
+            except ValueError:
+                continue
+        if not isinstance(arguments, dict):
+            continue
+        for field, value in arguments.items():
+            if is_tool_reference(str(call.get("name") or ""), field, value):
+                kind, message_id, index = value.split(":")
+                if message_id in references:
+                    arguments[field] = f"{kind}:{references[message_id]}:{index}"
+        call["arguments"] = json.dumps(arguments, ensure_ascii=True) if encoded else arguments
 
 
 async def fork_session(db: AsyncSession, session_id: UUID, user_id: UUID) -> ChatSession:
@@ -92,6 +115,14 @@ async def _fork_session(db: AsyncSession, session_id: UUID, user_id: UUID) -> Ch
             runtime.pop("pendingAttachments", None)
             if original.error_code:
                 runtime["historicalError"] = {"code": original.error_code, "params": original.error_params}
+            tool_calls = deepcopy(original.tool_calls)
+            edited_calls = runtime.get("userEditedToolCalls") or {}
+            _remap_tool_call_references([
+                *(tool_calls or []),
+                *(data.get("responses_output_items") or []),
+                *({"name": call.get("name"), "arguments": edited_calls[call["id"]]}
+                  for call in tool_calls or [] if call.get("id") in edited_calls),
+            ], references)
             message = Message(
                 id=ids[original.id], session_id=target.id, content=original.content,
                 provider_data=data,
@@ -99,7 +130,7 @@ async def _fork_session(db: AsyncSession, session_id: UUID, user_id: UUID) -> Ch
                     "role", "model_name", "generation_status", "trust_level", "tool_call_id",
                     "source_type", "source_provider", "source_endpoint_id", "public_reasoning", "created_at",
                 )},
-                tool_calls=deepcopy(original.tool_calls),
+                tool_calls=tool_calls,
             )
             db.add(message)
             db.add_all(message_search_chunks(message))

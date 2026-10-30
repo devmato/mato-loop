@@ -56,6 +56,7 @@ from mato_loop_backend.settings.models import (
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import PERMISSION_REASON_ARGUMENT
 from mato_loop_backend.tools.display import tool_display
+from mato_loop_backend.tools.references import is_tool_reference
 from mato_loop_backend.web.fetch import WebFetchError, canonicalize_url
 
 logger = logging.getLogger("mato_loop_backend.agent.runtime")
@@ -444,7 +445,10 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
             if field in safe:
                 safe[field] = {"redacted": True}
     for key in safe:
-        if key.lower().endswith(("token", "password", "secret", "credential", "api_key")):
+        if (
+            key.lower().endswith(("token", "password", "secret", "credential", "api_key"))
+            and not is_tool_reference(tool_name, key, safe[key])
+        ):
             safe[key] = "[Redacted]"
     content = safe.get("content")
     if isinstance(content, str) and tool_name != "memory_write":

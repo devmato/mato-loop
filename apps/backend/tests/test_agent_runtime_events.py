@@ -14,7 +14,11 @@ import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.agent.summarization as mock_agent_summarization
 import mato_loop_backend.agent.titles as mock_agent_titles
 from mato_loop_backend.agent import subagents
-from mato_loop_backend.agent.projection import _model_tool_calls
+from mato_loop_backend.agent.projection import (
+    _model_provider_file_roots,
+    _model_tool_calls,
+    _projection_messages,
+)
 from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.run_support import (
     RUN_PHASES,
@@ -1447,12 +1451,51 @@ def test_qr_code_content_is_fully_redacted_before_persistence() -> None:
     assert protected_edit["newText"] == {"redacted": True}
 
 
-def test_mutation_tokens_are_redacted_before_persistence() -> None:
-    arguments = _safe_tool_arguments(
-        "tasks_update", {"task_token": "encrypted-secret", "title": "Neu"}
-    )
+@pytest.mark.parametrize(
+    ("tool_name", "field", "value"),
+    [
+        ("tasks_update", "task_token", "encrypted-secret"),
+        ("mail_get_message", "message_token", "encrypted-secret"),
+        ("mail_get_message", "message_token", f"task:{uuid4()}:0"),
+        ("mail_get_message", "password", f"mail:{uuid4()}:0"),
+        ("unknown_tool", "message_token", f"mail:{uuid4()}:0"),
+    ],
+)
+def test_mutation_tokens_are_redacted_before_persistence(tool_name, field, value) -> None:
+    arguments = _safe_tool_arguments(tool_name, {field: value, "title": "Neu"})
 
-    assert arguments == {"task_token": "[Redacted]", "title": "Neu"}
+    assert arguments == {field: "[Redacted]", "title": "Neu"}
+
+
+@pytest.mark.parametrize("replay", [False, True])
+@pytest.mark.parametrize("successful_read", [False, True])
+def test_legacy_mail_reference_is_restored_or_marked_omitted(replay, successful_read) -> None:
+    call = {
+        "id": "read",
+        "name": "mail_get_message",
+        "arguments": {"integration_id": str(uuid4()), "message_token": "[Redacted]"},
+    }
+    result = Message(
+        id=uuid4(), role="tool", tool_call_id="read", attachments=[],
+        content='{"message":{"messageToken":"encrypted-token"}}',
+        provider_data={"_matoloop": {"toolName": "mail_get_message"}},
+    )
+    tool_results = {"read": result} if successful_read else {}
+    if replay:
+        call["arguments"] = json.dumps(call["arguments"])
+        projected = _model_provider_file_roots({"responses_output_items": [call]}, tool_results)
+        arguments = json.loads(projected["responses_output_items"][0]["arguments"])
+    else:
+        messages = [Message(id=uuid4(), role="assistant", content="", attachments=[], tool_calls=[call])]
+        if successful_read:
+            messages.append(result)
+        projected = _projection_messages("System", None, messages, TrustLevel.PRIVATE)
+        arguments = projected[1]["tool_calls"][0]["arguments"]
+
+    assert arguments["message_token"] == (f"mail:{result.id}:0" if successful_read else (
+        "[Historical reference omitted. Do not copy this value. For a new call, "
+        "obtain a current reference from a tool result and pass it as message_token.]"
+    ))
 
 
 def test_memory_write_content_is_preserved_for_user_review() -> None:
@@ -1526,11 +1569,12 @@ def test_responses_replay_webfetch_arguments_preserve_query_values() -> None:
     )
 
 
-def test_responses_replay_mutation_tokens_are_redacted() -> None:
+@pytest.mark.parametrize("value", ["encrypted-secret", f"task:{uuid4()}:0"])
+def test_responses_replay_preserves_only_short_resource_references(value) -> None:
     call = ToolCall(
         id="task-1",
         name="tasks_update",
-        arguments={"task_token": "encrypted-secret", "title": "Neu"},
+        arguments={"task_token": value, "title": "Neu"},
     )
 
     result = _safe_provider_data(
@@ -1547,9 +1591,8 @@ def test_responses_replay_mutation_tokens_are_redacted() -> None:
         [call],
     )
 
-    persisted = result["responses_output_items"][0]["arguments"]
-    assert "encrypted-secret" not in persisted
-    assert "[Redacted]" in persisted
+    persisted = json.loads(result["responses_output_items"][0]["arguments"])
+    assert persisted["task_token"] == ("[Redacted]" if value == "encrypted-secret" else value)
 
 
 def test_agent_identity_instructions_are_redacted_and_reprojected_as_text() -> None:
