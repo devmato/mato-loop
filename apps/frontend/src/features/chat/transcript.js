@@ -231,12 +231,13 @@ export function buildChatTranscript(
   function flushAssistantSection() {
     if (!assistantSection.length) return
     const reversedSection = [...assistantSection].reverse()
-    const lastResponse = reversedSection.find((message) => message.content || message.toolCalls.length)
+    const modelResponses = reversedSection.filter((message) => message.kind !== 'runtime_error')
+    const lastResponse = modelResponses.find((message) => message.content || message.toolCalls.length)
     const manuallyStopped = reversedSection.some((message) => (
       message.generationStatus === 'interrupted' && !message.redirected
     ))
     const finalAnswer = manuallyStopped
-      ? reversedSection.find((message) => message.content) || null
+      ? modelResponses.find((message) => message.content) || null
       : lastResponse?.content && !lastResponse.toolCalls.length ? lastResponse : null
     if (finalAnswer && !finalAnswer.continuationSegment) {
       const partial = assistantSection.filter((message) => message.continuationSegment && message.content)
@@ -250,7 +251,7 @@ export function buildChatTranscript(
         ? [{ key: `reasoning-${message.id || message._sourceIndex}`, type: 'reasoning', reasoning: message.reasoning }]
         : []),
       ...runWarningEntries(message.warnings, message.id || message._sourceIndex),
-      ...(message.content && message !== finalAnswer && !message.continuationSegment
+      ...(message.content && message.kind !== 'runtime_error' && message !== finalAnswer && !message.continuationSegment
         ? [{
             key: `commentary-${message.id || message._sourceIndex}`,
             type: 'commentary',
@@ -304,7 +305,7 @@ export function buildChatTranscript(
     const hasContent = assistantSection.some((message) => Boolean(message.content))
 
     for (const message of assistantSection) {
-      if (message !== finalAnswer) {
+      if (message !== finalAnswer && message.kind !== 'runtime_error') {
         message.content = ''
         message.attachments = []
       }

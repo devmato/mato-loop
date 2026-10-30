@@ -236,6 +236,7 @@ async def persist_model_response(
     openscad_render_pending: bool,
     openscad_source_review_pending: tuple[str, str] | None,
     rejected_batch_code: str | None,
+    rejected_final_response: bool,
     tool_budget_exhausted: bool,
     performance: dict[str, Any],
     memory_overview_runtime_state: dict[str, Any] | None,
@@ -314,7 +315,7 @@ async def persist_model_response(
         ]
     else:
         run.result_message_id = assistant.id
-        await runtime._finalize_run_files(db, run)
+        await runtime._finalize_run_files(db, run, tolerate_conflict=rejected_final_response)
     await EpisodeIndexService.enqueue(db, assistant)
     await db.commit()
     if not calls and await runtime._await_continuations(run.id):

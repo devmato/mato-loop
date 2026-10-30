@@ -721,8 +721,6 @@ async def execute_loop_body(
         assistant_content = canonical_assistant_content(result.content)
         if not assistant_content.strip() and visible_response.content.strip():
             assistant_content = canonical_assistant_content(visible_response.content)
-        if tool_budget_exhausted and not normalized_calls and agent_run_support._has_simulated_tool_call(assistant_content):
-            raise AgentRunError("agent.toolCallLimitReached")
         if not normalized_calls and (
             openscad_render_pending
             or (
@@ -742,6 +740,10 @@ async def execute_loop_body(
             logger.warning("Agent run %s received an empty model response; retrying", run.id)
             continue
         empty_response_retries = 0
+        rejected_final_response = (
+            tool_budget_exhausted and not normalized_calls
+            and agent_run_support._has_simulated_tool_call(assistant_content)
+        )
         assistant, continued = await persist_model_response(
             cls, db, run, chat_session, visible_response,
             result=result,
@@ -754,6 +756,7 @@ async def execute_loop_body(
             openscad_render_pending=openscad_render_pending,
             openscad_source_review_pending=openscad_source_review_pending,
             rejected_batch_code=rejected_batch_code,
+            rejected_final_response=rejected_final_response,
             tool_budget_exhausted=tool_budget_exhausted,
             performance=performance,
             memory_overview_runtime_state=memory_overview_runtime_state,
@@ -767,6 +770,8 @@ async def execute_loop_body(
         if continued:
             continuation_context_stale = True
             continue
+        if rejected_final_response:
+            raise AgentRunError("agent.toolCallLimitReached")
         if not normalized_calls:
             await agent_run_support._publish_run_phase(run.id, "finalizing")
             return

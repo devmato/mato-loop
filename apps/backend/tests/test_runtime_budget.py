@@ -20,6 +20,7 @@ from mato_loop_backend.agent.run_support import (
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.subagents import integration_ceiling_ids, permission_snapshot
+from mato_loop_backend.files.service import RootFileError
 from mato_loop_backend.models import ExecutionAgent, Message, WebSearchPolicy
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
@@ -136,15 +137,20 @@ async def test_output_truncated_batch_has_no_effects_and_full_batch_can_be_repai
     assert [item.args[0].arguments for item in tool_registry._execute_definition.await_args_list] == [call.arguments for call in calls]
 
 
-async def test_exhausted_budget_rejects_simulated_call_without_streaming_it(monkeypatch):
+async def test_exhausted_budget_preserves_rejected_response_despite_file_conflict(monkeypatch):
+    finalize = AgentRuntime._finalize_run_files
     text = "Ich lege den Stack jetzt an.\n\n<tool_call>\n<function=write_file>\n</function>\n</tool_call>"
-    db, run, _requests, _projections, events = await _runtime_setup(
+    db, run, _requests, _projections, _events = await _runtime_setup(
         monkeypatch, [ProviderResult(tool_calls=[_search_call("search", "Deployment")]), ProviderResult(content="")],
         max_tool_calls=1, search_policy=WebSearchPolicy.AVAILABLE, streamed_contents=["", text],
     )
+    monkeypatch.setattr(AgentRuntime, "_finalize_run_files", finalize)
+    monkeypatch.setattr(mock_agent_runtime.AttachmentService, "finalize_run", AsyncMock(
+        side_effect=RootFileError("file.changed", "File changed during publication"),
+    ))
     with pytest.raises(AgentRunError, match="agent.toolCallLimitReached"):
         await AgentRuntime._execute_loop(db, run)
-    assert not any(text in str(event) for event in events)
+    assert _assistant_messages(db)[-1].content == text
 
 
 @pytest.mark.parametrize("wrapper", ["```xml\n{}\n```", "    {}", "`{}`", "> {}"])

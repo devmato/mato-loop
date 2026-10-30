@@ -122,6 +122,20 @@ describe('chat transcript', () => {
     expect(retryAvailableForMessage({ ...error, retryAvailable: false }, [error])).toBe(false)
   })
 
+  it('keeps the model response visible above the host error', () => {
+    const transcript = buildChatTranscript([
+      { id: 'user', role: 'user', content: 'Start' },
+      { id: 'answer', role: 'assistant', content: 'Konvertierung noch offen.' },
+      { id: 'error', role: 'assistant', kind: 'runtime_error', error: { code: 'agent.toolCallLimitReached' } }
+    ])
+
+    expect(transcript.messages.filter((message) => message.role === 'assistant')
+      .map((message) => [message.id, message.content])).toEqual([
+      ['answer', 'Konvertierung noch offen.'],
+      ['error', 'Der Agent hat die maximale Anzahl an Tool-Aufrufen erreicht.']
+    ])
+  })
+
   it('keeps the virtual tail length stable when live content becomes canonical', () => {
     const user = { id: 'user-1', role: 'user', content: 'Frage' }
     const liveHistory = { id: 'live-history', entries: [] }
