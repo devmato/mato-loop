@@ -2832,8 +2832,9 @@ async def test_context_raw_budget_boundary_fits_provider_allocation(manual):
     reserve = generation_reserve(model)
     capacity = raw_input_budget(model.context_window_tokens - 4096 - reserve)
     estimate = _request_estimator(model)
+    reminder = {"role": "user", "content": "<system-reminder>\nHost runtime state, not a new user request:\nTool budget exhausted.\n</system-reminder>"}
     framing = await estimate(
-        _projection_messages("System", None, [current], TrustLevel.PUBLIC),
+        [*_projection_messages("System", None, [current], TrustLevel.PUBLIC), reminder],
     )
     current.content = "x" * (capacity - framing)
     db = AsyncMock(spec=AsyncSession)
@@ -2842,8 +2843,10 @@ async def test_context_raw_budget_boundary_fits_provider_allocation(manual):
     kwargs = dict(
         chat_session=session, records=[current], system_prompt="System", tool_schemas=[],
         model=model, settings=settings, summarize=summarize,
+        runtime_context="Tool budget exhausted.",
     )
     projection = await _build_context(db, **kwargs)
+    assert projection.messages[-1] == reminder
     assert projection.estimated_input_tokens == projection.input_budget_tokens == capacity
     assert projection.estimated_input_tokens == await estimate(projection.messages)
     assert allocate_output_tokens(
@@ -2962,19 +2965,12 @@ async def test_large_current_tool_output_does_not_compact_older_history() -> Non
     current_user = _message(session.id, "user", "Aktuelle Frage")
     assistant = _message(session.id, "assistant", "")
     assistant.tool_calls = [
-        {"id": "fetch", "name": "webfetch", "arguments": {"url": "https://example.test"}}
+        {"id": "fetch", "name": "read", "arguments": {"root": "session", "path": "sample.txt"}}
     ]
     tool_result = _message(
         session.id,
         "tool",
-        json.dumps(
-            {
-                "sourceId": "src-fetch",
-                "url": "https://example.test",
-                "outputFormat": "markdown",
-                "content": "x" * 6_000,
-            }
-        ),
+        "x" * 6_000,
     )
     tool_result.tool_call_id = "fetch"
     db = AsyncMock(spec=AsyncSession)
@@ -2990,6 +2986,7 @@ async def test_large_current_tool_output_does_not_compact_older_history() -> Non
         model=_model(context_window_tokens=5_000),
         settings=_settings(),
         summarize=summarize,
+        runtime_context="Remaining tool calls: 2.",
     )
 
     summarize.assert_not_awaited()
@@ -3449,7 +3446,8 @@ def test_unsnapshotted_runtime_instructions_are_current_projection_only(delegate
 
 
 @pytest.mark.usefixtures("skill_library")
-async def test_profile_snapshot_preserves_tool_history_prefix_on_followup(monkeypatch) -> None:
+@pytest.mark.parametrize("current_memory", ["Earlier memory", "Current memory"])
+async def test_profile_snapshot_preserves_tool_history_prefix_on_followup(monkeypatch, current_memory) -> None:
     from runtime_helpers import _runtime_setup
 
     from mato_loop_backend.agent.runtime import AgentRuntime
@@ -3463,16 +3461,21 @@ async def test_profile_snapshot_preserves_tool_history_prefix_on_followup(monkey
     records = [*await AgentRuntime._records(db, run.session_id), *_tool_segment(run.session_id, 0)]
     records[-1].content = json.dumps({"stdout": "source evidence " * 5_000})
     system = projections[0]["system_prompt"]
+    user_id = next(item.id for item in reversed(records) if item.role == "user")
     first = _projection_messages(system, None, records, TrustLevel.PRIVATE,
+                                 memory_context="Earlier memory", memory_contexts={user_id: "Earlier memory"},
                                  runtime_instructions=projections[0]["runtime_instructions"])
+    assert first[1]["role"] == "user"
     followup = _message(run.session_id, "user", "Now plan the next change.")
     second = _projection_messages(
         system, None, [*records, _message(run.session_id, "assistant", "Done"), followup],
         TrustLevel.PRIVATE, runtime_instructions=agent_profile_runtime_instructions(plan_profile()),
+        memory_context=current_memory, memory_contexts={user_id: "Earlier memory"},
     )
     for messages in (first, second):
         _strip_projection_metadata(messages)
     assert second[:len(first)] == first
+    assert sum(message["content"].count("Earlier memory") for message in second) == 1
 
 
 def test_custom_profile_instructions_have_no_id_based_host_workflow() -> None:

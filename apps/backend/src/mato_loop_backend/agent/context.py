@@ -74,7 +74,9 @@ class ContextManager:
         estimate_request: EstimateCallback,
         target_trust_level: TrustLevel = TrustLevel.PUBLIC,
         memory_context: str | None = None,
+        memory_contexts: dict[UUID, str] | None = None,
         runtime_instructions: str = "",
+        runtime_context: str | None = None,
         live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
         attachment_service: AttachmentService | None = None,
         tool_snapshots: list[dict[str, Any]] | None = None,
@@ -154,6 +156,7 @@ class ContextManager:
                     selected,
                     target_trust_level,
                     memory_context=memory_context,
+                    memory_contexts=memory_contexts,
                     tool_snapshots=tool_snapshots,
                     tool_snapshot_characters=int(input_budget * 0.05 * characters_per_token),
                     runtime_instructions=runtime_instructions,
@@ -167,6 +170,13 @@ class ContextManager:
                     live_tool_calls=live_tool_calls,
                     omitted_tool_result_ids=omitted_tool_result_ids,
                 )
+                if runtime_context:
+                    messages.append({
+                        "role": "user",
+                        agent_projection._HOST_RUNTIME_CONTEXT: True,
+                        "content": "<system-reminder>\nHost runtime state, not a new user request:\n"
+                        + runtime_context + "\n</system-reminder>",
+                    })
                 total = await estimate_request(messages)
                 if not pdf_context or total <= input_budget or attachment_characters == 0:
                     return messages, total
@@ -206,8 +216,10 @@ class ContextManager:
         prefix = active_records[:protected_start]
         suffix = active_records[protected_start:]
         # Clear an old batch only under budget pressure, and never expand it on a later run.
+        prefix_tool_names = agent_projection._tool_names_by_message_id(prefix)
         omitted_tool_result_ids.update(
             item.id for item in prefix if item.role == "tool"
+            and prefix_tool_names.get(item.id) != "todo_write"
             and not (item.provider_data or {}).get("_matoloop", {}).get("contextOutputOmitted")
         )
         if omitted_tool_result_ids:

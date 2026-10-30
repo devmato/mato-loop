@@ -369,6 +369,7 @@ def _external_working_directory_policy(
 def _hidden_tool_round_provider_data(provider_data: dict[str, Any]) -> dict[str, Any]:
     safe = dict(provider_data)
     safe.pop("chat_reasoning_details", None)
+    safe.pop("chat_reasoning_content", None)
     replay_items = safe.get("responses_output_items")
     if isinstance(replay_items, list):
         safe["responses_output_items"] = [

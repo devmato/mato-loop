@@ -19,6 +19,7 @@ from mato_loop_backend.agent.projection import ContextError
 from mato_loop_backend.agent.prompts import (
     agent_profile_runtime_instructions,
     general_system_prompt,
+    tool_budget_prompt,
 )
 from mato_loop_backend.agent.repository_instructions import repository_instructions_prompt
 from mato_loop_backend.agent.run_contracts import AgentRunError, _VisibleResponse
@@ -246,6 +247,7 @@ async def execute_loop_body(
     memory_cache = MemoryCache()
     pdf_cache = {}
     continuation_context_stale = False
+    previous_tool_names: tuple[str, ...] = ()
 
     while True:
         continuation_received = await cls._await_continuations(run.id)
@@ -370,11 +372,13 @@ async def execute_loop_body(
             tool_budget_exhausted=tool_budget_exhausted,
             remaining_tool_calls=(None if tool_call_limit is None else max(0, tool_call_limit - tool_calls_used)),
             discovery_records=records[summary_boundary:],
+            previous_tool_names=previous_tool_names,
         )
         integration_settings = turn_tools.integration_settings
         execution_client = turn_tools.execution_client
         effective_toolset = turn_tools.toolset
         schemas = turn_tools.schemas
+        previous_tool_names = tuple(schema["name"] for schema in schemas)
         offered_tool_names = turn_tools.offered_names
         effective_tool_count = turn_tools.effective_count
         tool_schema_tokens = turn_tools.schema_tokens
@@ -421,11 +425,8 @@ async def execute_loop_body(
             memory_write_pending=memory_write_pending,
             memory_write_outcome=memory_write_outcome,
             tool_call_limit=tool_call_limit,
-            remaining_tool_calls=(None if tool_call_limit is None else max(0, tool_call_limit - tool_calls_used)),
-            tool_budget_exhausted=tool_budget_exhausted,
             research_tool_calls_used=research_tool_calls_used,
             research_tool_call_limit=None,
-            research_tools_exhausted=tool_budget_exhausted,
             include_local_time=False,
             offered_tool_names=frozenset(
                 effective_toolset.tools if effective_toolset else ()
@@ -472,12 +473,13 @@ async def execute_loop_body(
             "model": model,
             "tools": schemas,
             "tool_choice": (
-                "none" if tool_budget_exhausted else
                 "required"
-                if search_pending
-                or memory_write_pending
-                or openscad_render_pending
-                or openscad_source_review_pending is not None
+                if not tool_budget_exhausted and (
+                    search_pending
+                    or memory_write_pending
+                    or openscad_render_pending
+                    or openscad_source_review_pending is not None
+                )
                 else "auto"
             ),
             "timeout": runtime_settings.request_timeout_seconds,
@@ -518,6 +520,9 @@ async def execute_loop_body(
                 system_prompt=system_prompt,
                 pdf_context=pdf_context,
                 runtime_instructions=profile_instructions,
+                runtime_context=tool_budget_prompt(
+                    None if tool_call_limit is None else max(0, tool_call_limit - tool_calls_used),
+                ),
                 schemas=schemas,
                 offered_tool_names=frozenset(effective_toolset.tools if effective_toolset else ()),
                 tool_snapshots=collect_tool_snapshots(

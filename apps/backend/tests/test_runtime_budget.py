@@ -97,8 +97,8 @@ async def test_profile_budget_snapshot_and_unlimited_run(monkeypatch, limit, cal
     assert len(requests[0]["pseudonymization_key"]) == 32
     assert tool_registry._execute_definition.await_count == calls
     assert len(_tool_messages(db)) == calls
-    assert bool(requests[-1]["tools"]) is (limit is None)
-    assert requests[-1]["tool_choice"] == ("auto" if limit is None else "none")
+    assert requests[-1]["tools"] == requests[-2]["tools"]
+    assert requests[-1]["tool_choice"] == "auto"
     performance = _assistant_messages(db)[-1].provider_data["_matoloop"]["performance"]
     assert performance["toolCallsUsed"] == calls
     assert performance["researchToolCallsUsed"] == calls
@@ -363,7 +363,7 @@ async def test_retry_snapshots_current_budget_without_overwriting_failed_run(mon
 
     assert len(requests) == count + 1
     assert tool_registry._execute_definition.await_count == count
-    assert bool(requests[-1]["tools"]) is (new_limit is None)
+    assert requests[-1]["tools"] == requests[-2]["tools"]
     assert _assistant_messages(db)[-1].provider_data["_matoloop"]["performance"]["maxToolCalls"] == new_limit
 
 

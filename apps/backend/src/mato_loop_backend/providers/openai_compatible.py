@@ -250,9 +250,11 @@ def _chat_messages(
             message["role"] == "assistant"
             and bool(continuation_scope)
             and provider_data.get("continuation_scope") == continuation_scope
-            and isinstance(provider_data.get("chat_reasoning_details"), list)
         ):
-            item["reasoning_details"] = provider_data["chat_reasoning_details"]
+            if isinstance(provider_data.get("chat_reasoning_details"), list):
+                item["reasoning_details"] = provider_data["chat_reasoning_details"]
+            if isinstance(provider_data.get("chat_reasoning_content"), str):
+                item["reasoning_content"] = provider_data["chat_reasoning_content"]
         if leading_system and item["role"] == "system" and converted:
             converted[0]["content"] += "\n\n" + item["content"]
         else:
@@ -756,6 +758,8 @@ def _chat_result(data: dict[str, Any]) -> ProviderResult:
         function = item.get("function") or {}
         tool_calls.append(_tool_call(item.get("id"), function.get("name"), function.get("arguments")))
     provider_data = {}
+    if isinstance(explicit_reasoning, str) and explicit_reasoning:
+        provider_data["chat_reasoning_content"] = explicit_reasoning
     if isinstance(message.get("reasoning_details"), list):
         provider_data["chat_reasoning_details"] = message["reasoning_details"]
     return ProviderResult(
@@ -949,6 +953,8 @@ async def chat_completions(
         reasoning_finished_at = reasoning_finished_at or time.monotonic()
         duration_ms = round((reasoning_finished_at - reasoning_started_at) * 1000)
     provider_data = {"chat_reasoning_details": reasoning_details} if reasoning_details else {}
+    if explicit_reasoning_parts:
+        provider_data["chat_reasoning_content"] = "".join(explicit_reasoning_parts)
     return ProviderResult(
         content="".join(content_parts),
         tool_calls=tool_calls,

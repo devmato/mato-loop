@@ -1816,6 +1816,7 @@ async def test_direct_message_reloads_expired_memories_after_rollback(monkeypatc
     )
     db.get.return_value.memory_mode = "full"
     db.scalars.return_value = SimpleNamespace(all=lambda: [])
+    db.execute.return_value = SimpleNamespace(all=lambda: [])
     load_settings = SettingsStore.load
 
     async def load(_db, settings_type, **kwargs):
@@ -2150,7 +2151,7 @@ async def test_required_search_transitions_to_the_shared_streaming_loop(monkeypa
             ProviderResult(
                 content="Ich recherchiere.",
                 tool_calls=[_search_call("search-1", "Aktuelle Frage")],
-                provider_data={"chat_reasoning_details": [{"text": "Intern"}]},
+                provider_data={"chat_reasoning_details": [{"text": "Intern"}], "chat_reasoning_content": "Intern"},
                 finish_reason="tool_calls",
             ),
             ProviderResult(
@@ -2175,6 +2176,7 @@ async def test_required_search_transitions_to_the_shared_streaming_loop(monkeypa
     assert "Web research contract:" in projections[0]["system_prompt"]
     assert "Web research contract:" in projections[1]["system_prompt"]
     persisted_contents = [message.content for message in _assistant_messages(db)]
+    assert all("chat_reasoning_content" not in (message.provider_data or {}) for message in _assistant_messages(db))
     assert "Ich recherchiere." not in persisted_contents
     assert answer in persisted_contents
     assert all(event.get("delta") != "Ich recherchiere." for event in events)
@@ -2851,7 +2853,7 @@ async def test_tool_call_limit_applies_after_required_gate(monkeypatch) -> None:
 
     assert exc_info.value.code == "agent.toolCallLimitReached"
     assert len(requests) == 2
-    assert requests[1]["tools"] == []
+    assert requests[1]["tools"] == requests[0]["tools"]
     assert tool_registry._execute_definition.await_count == 1
 
 
@@ -2873,13 +2875,12 @@ async def test_exact_tool_call_limit_allows_tool_free_final_response(monkeypatch
     await AgentRuntime._execute_loop(db, run)
 
     assert len(requests) == 2
-    assert requests[1]["tools"] == []
+    assert requests[1]["tools"] == requests[0]["tools"]
     assert "Tool budget: 1 calls" in projections[0][
         "system_prompt"
     ]
-    assert "Tool budget exhausted. No tools are available." in projections[1][
-        "system_prompt"
-    ]
+    assert "Tool budget exhausted. Do not call tools." in projections[1]["runtime_context"]
+    assert projections[1]["system_prompt"] == projections[0]["system_prompt"]
     assert _assistant_messages(db)[-1].content == answer
 
 
@@ -2903,7 +2904,7 @@ async def test_oversized_tool_batch_executes_nothing(monkeypatch) -> None:
     await AgentRuntime._execute_loop(db, run)
 
     assert len(requests) == 2
-    assert requests[-1]["tools"] == [] and requests[-1]["tool_choice"] == "none"
+    assert requests[-1]["tools"] == requests[0]["tools"] and requests[-1]["tool_choice"] == "auto"
     assert len(_tool_messages(db)) == 2
     assert all(json.loads(message.content)["error"]["code"] == "agent.toolCallLimitReached" for message in _tool_messages(db))
     assert _assistant_messages(db)[-1].provider_data["_matoloop"]["completionCause"] == "agent.toolCallLimitReached"

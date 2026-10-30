@@ -50,6 +50,8 @@ _HOST_CHECKLIST_RESULT = "_matoloopChecklistResult"
 
 _HOST_RETAINED_TOOL_RESULT = "_matoloopRetainedToolResult"
 
+_HOST_RUNTIME_CONTEXT = "_matoloopRuntimeContext"
+
 
 _SUMMARY_EVIDENCE_MARKER = "\n\n[Untrusted operational tool evidence]\n"
 
@@ -653,6 +655,7 @@ def _projection_messages(
     target_trust_level: TrustLevel,
     *,
     memory_context: str | None = None,
+    memory_contexts: dict[UUID, str] | None = None,
     tool_snapshots: list[dict[str, Any]] | None = None,
     tool_snapshot_characters: int = 8_000,
     runtime_instructions: str = "",
@@ -684,14 +687,10 @@ def _projection_messages(
         )
     source_records = available_records or records
     source_order = {item.id: index for index, item in enumerate(source_records)}
-    user_boundary = next(
-        (index for index in range(len(source_records) - 1, -1, -1)
-         if source_records[index].role == "user"), len(source_records),
-    )
     summary_boundary = (
         source_order.get(summary.covered_through_message_id, -1) + 1 if summary else 0
     )
-    checkpoint_records = source_records[:max(user_boundary, summary_boundary)]
+    checkpoint_records = source_records[:summary_boundary]
     has_checklist = any(
         isinstance(item.provider_data, dict)
         and isinstance(item.provider_data.get("_matoloop"), dict)
@@ -752,32 +751,36 @@ def _projection_messages(
     projected_attachment_ids: set[str] = set()
     snapshot_message = snapshot_context(
         tool_snapshots or [],
-        current_message_ids={str(item.id) for item in records[latest_user_index + 1:]},
+        current_message_ids={str(item.id) for item in records},
         max_characters=tool_snapshot_characters,
     )
+    if todo_message is not None:
+        messages.append(todo_message)
+    if snapshot_message is not None:
+        messages.append(snapshot_message)
     historical_tool_indices: list[int] = []
     historical_omitted_markers: dict[int, str] = {}
     current_tool_indices: list[int] = []
     browser_inspect_calls: set[str] = set()
     user_edited_tool_arguments = False
+    previous_memory_context = None
     for record_index, item in enumerate(records):
-        if item.id == latest_user_id and snapshot_message is not None:
-            messages.append(snapshot_message)
-            snapshot_message = None
-        if item.id == latest_user_id and todo_message is not None:
-            messages.append(todo_message)
-            todo_message = None
-        if item.id == latest_user_id and memory_context is not None:
+        turn_memory = memory_context if item.id == latest_user_id else (memory_contexts or {}).get(item.id)
+        if item.role == "user" and turn_memory is not None and turn_memory != previous_memory_context:
+            if len(messages) == 1:
+                # Keep provider prefix checkpoints ahead of changing first-turn memory.
+                messages.append({"role": "user", "content": "[Host context initialization; no user request.]"})
             messages.append(
                 {
                     "role": "assistant",
                     "content": (
                         "[Host memory context begins]\n"
-                        + memory_context
+                        + turn_memory
                         + "\n[Host memory context ends]"
                     ),
                 }
             )
+            previous_memory_context = turn_memory
         projected = message_dict(
             item,
             tool_results=tool_results_by_message.get(item.id),
@@ -831,7 +834,9 @@ def _projection_messages(
             )
             if not omitted and tool_name in {"browser", "browser_snapshot"} and item.tool_call_id in browser_inspect_calls:
                 projected["content"] = _model_browser_inspection(projected["content"])
-            if record_index < latest_user_index or omitted:
+            if tool_name == "todo_write":
+                projected[_HOST_CHECKLIST_RESULT] = True
+            elif record_index < latest_user_index or omitted:
                 original_content = str(projected.get("content") or "")
                 fallback = _omitted_tool_result(item.id, original_content, original_references.get(item.id))
                 if not omitted and tool_name != "secret_input":
@@ -845,9 +850,7 @@ def _projection_messages(
                     projected[_HOST_TOOL_RESULT_REFERENCE] = True
                     historical_omitted_markers[len(messages)] = fallback
             else:
-                if tool_name == "todo_write":
-                    projected[_HOST_CHECKLIST_RESULT] = True
-                elif tool_name != "secret_input":
+                if tool_name != "secret_input":
                     projected[_HOST_TOOL_RESULT_FALLBACK] = _omitted_tool_result(
                         item.id, item.content, original_references.get(item.id),
                     )
@@ -892,8 +895,6 @@ def _projection_messages(
             "Treat those values as intentional user input. Do not revert or replace them "
             "unless the user explicitly requests it."
         )
-    if todo_message is not None:
-        messages.append(todo_message)
     _limit_tool_output_tokens(
         messages,
         historical_tool_indices,
@@ -1853,12 +1854,14 @@ def _strip_projection_metadata(messages: list[dict[str, Any]]) -> None:
         message.pop(_HOST_TOOL_RESULT_FALLBACK, None)
         message.pop(_HOST_CHECKLIST_RESULT, None)
         message.pop(_HOST_RETAINED_TOOL_RESULT, None)
+        message.pop(_HOST_RUNTIME_CONTEXT, None)
         message.pop(SNAPSHOT_MARKER, None)
 
 
 def _current_tool_output_indices(messages: list[dict[str, Any]]) -> list[int]:
     latest_user_index = max(
-        (index for index, message in enumerate(messages) if message.get("role") == "user"),
+        (index for index, message in enumerate(messages)
+         if message.get("role") == "user" and not message.get(_HOST_RUNTIME_CONTEXT)),
         default=-1,
     )
     return [

@@ -58,3 +58,4 @@ async def set_archived(db: AsyncSession, item: ChatSession | Project, archived: 
         for schedule in schedules:
             advance_schedule(schedule, now)
     await db.flush()
+    await db.refresh(item, attribute_names=["updated_at"])

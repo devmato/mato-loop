@@ -440,6 +440,7 @@ async def test_archive_restoration_keeps_individual_session_state_and_drops_queu
     queued = await AutomationService.enqueue_manual(db, automation.id, tree.user.id)
     await set_archived(db, session, True)
     await set_archived(db, project, True)
+    assert session.updated_at is not None and project.updated_at is not None
     await set_archived(db, project, False)
     assert await is_session_archived(db, session)
     await db.refresh(queued)

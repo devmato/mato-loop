@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import any_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.context import _model_order
 from mato_loop_backend.agent.run_support import (
     AUTOMATIC_EPISODE_EXCERPT_MAX_CHARACTERS,
     AUTOMATIC_EPISODE_MAX_DISTANCE,
@@ -29,6 +32,7 @@ from mato_loop_backend.agent.runtime_memory import (
 )
 from mato_loop_backend.memory import policy as memory_policy
 from mato_loop_backend.memory.embeddings import EmbeddingError, embedding_client
+from mato_loop_backend.memory.episode_indexing import _eligible_filters
 from mato_loop_backend.memory.episode_retrieval import (
     EpisodeReference,
     EpisodeRetrievalService,
@@ -37,10 +41,109 @@ from mato_loop_backend.memory.retrieval import (
     MemoryRetrievalService,
     MemoryRetrieveMode,
 )
-from mato_loop_backend.memory.service import MemoryScope, MemoryService
-from mato_loop_backend.models import ChatSession, MemoryRecord, Message
+from mato_loop_backend.memory.service import (
+    MemoryScope,
+    MemoryService,
+    memory_content_hash_exclusion,
+    memory_visibility_filter,
+)
+from mato_loop_backend.models import ChatSession, ContextSummary, MemoryRecord, Message
+from mato_loop_backend.sessions.trust import session_visibility_filters
 from mato_loop_backend.settings import AgentRuntimeSettings, MemorySettings
 from mato_loop_backend.settings.models import ModelConfig, TrustLevel
+
+
+class MemoryContextSnapshot(BaseModel):
+    content: str
+    trust_level: TrustLevel
+    project_id: UUID | None
+    memories: dict[UUID, int] = Field(default_factory=dict)
+    messages: dict[UUID, UUID] = Field(default_factory=dict)
+    project_sessions: set[UUID] = Field(default_factory=set)
+
+
+def memory_context_snapshot(
+    content: str | None, source: str | None, session: ChatSession, trust_level: TrustLevel,
+) -> dict[str, Any] | None:
+    if content is None:
+        return None
+    try:
+        payload = json.loads(source) if source else {}
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    snapshot = MemoryContextSnapshot(content=content, trust_level=trust_level, project_id=session.project_id)
+    snapshot.memories = {
+        UUID(item["id"]): item["revision"]
+        for item in [*payload.get("durableMemories", []), *payload.get("memoryOverview", [])]
+    }
+    for item in payload.get("priorSessionEpisodes", []):
+        session_id = UUID(item["sessionId"])
+        message_ids = [item["sessionReadArguments"]["around_message_id"]]
+        message_ids.extend(message["id"] for message in item.get("messages", []))
+        snapshot.messages.update((UUID(message_id), session_id) for message_id in message_ids)
+    for item in payload.get("projectSessionIndex", {}).get("sessions", []):
+        arguments = item["sessionReadArguments"]
+        session_id = UUID(arguments["session_id"])
+        snapshot.project_sessions.add(session_id)
+        snapshot.messages[UUID(arguments["around_message_id"])] = session_id
+    return snapshot.model_dump(mode="json")
+
+
+async def historical_memory_contexts(
+    db: AsyncSession, session: ChatSession, records: list[Message], *,
+    trust_level: TrustLevel, excluded_content_hashes: frozenset[str],
+) -> dict[UUID, str]:
+    snapshots = {}
+    records = _model_order([item for item in records if item.error_code is None])
+    current_user_id = next((item.id for item in reversed(records) if item.role == "user"), None)
+    covered_id = await db.scalar(
+        select(ContextSummary.covered_through_message_id)
+        .where(ContextSummary.session_id == session.id)
+        .order_by(ContextSummary.created_at.desc(), ContextSummary.id.desc()).limit(1)
+    )
+    boundary = next((index + 1 for index, item in enumerate(records) if item.id == covered_id), 0)
+    records = records[boundary:]
+    for record in records:
+        if record.role != "user" or record.id == current_user_id:
+            continue
+        value = (record.provider_data or {}).get("_matoloop", {}).get("memoryContext")
+        if value is None:
+            continue
+        try:
+            snapshot = MemoryContextSnapshot.model_validate(value)
+        except ValidationError:
+            continue
+        if snapshot.trust_level == trust_level and snapshot.project_id == session.project_id:
+            snapshots[record.id] = snapshot
+    memory_ids = {memory_id for snapshot in snapshots.values() for memory_id in snapshot.memories}
+    revisions = {}
+    if memory_ids:
+        revisions = dict((await db.execute(select(MemoryRecord.id, MemoryRecord.revision).where(
+            MemoryRecord.id == any_(list(memory_ids)), MemoryRecord.user_id == session.user_id,
+            memory_visibility_filter(trust_level), memory_content_hash_exclusion(excluded_content_hashes),
+        ))).all())
+    message_ids = {message_id for snapshot in snapshots.values() for message_id in snapshot.messages}
+    sources = {}
+    if message_ids:
+        sources = {message_id: (session_id, project_id) for message_id, session_id, project_id in (
+            await db.execute(select(Message.id, ChatSession.id, ChatSession.project_id)
+                             .join(ChatSession, ChatSession.id == Message.session_id).where(
+                Message.id == any_(list(message_ids)), ChatSession.user_id == session.user_id,
+                ChatSession.id != session.id, ChatSession.session_type == "chat",
+                ChatSession.memory_mode == "full", *_eligible_filters(),
+                *session_visibility_filters(trust_level),
+            ))
+        ).all()}
+    # A revoked, edited or deleted source invalidates its whole historical envelope.
+    return {
+        record_id: snapshot.content for record_id, snapshot in snapshots.items()
+        if all(revisions.get(memory_id) == revision for memory_id, revision in snapshot.memories.items())
+        and all(sources.get(message_id, (None, None))[0] == session_id
+                and (session_id not in snapshot.project_sessions or sources[message_id][1] == session.project_id)
+                for message_id, session_id in snapshot.messages.items())
+    }
 
 
 @dataclass
@@ -63,6 +166,7 @@ class MemoryCache:
 @dataclass
 class MemoryTurn:
     candidates: list[tuple[str | None, int, int]]
+    historical_contexts: dict[UUID, str] = field(default_factory=dict)
     scope: MemoryScope | None = None
     overview_prefetched: bool = False
     overview_has_more: bool = False
@@ -87,6 +191,11 @@ async def prepare_memory_context(
         cache.overview_required = _memory_overview_requested(records)
     turn = MemoryTurn(candidates=[])
     if memory_state.read_enabled:
+        if not _automatic_context_suppressed(records):
+            turn.historical_contexts = await historical_memory_contexts(
+                db, session, records, trust_level=trust_level,
+                excluded_content_hashes=excluded_content_hashes,
+            )
         if cache.scope is None:
             cache.scope = await MemoryService.scope(
                 db, owner_id=session.user_id, readable_by=trust_level,

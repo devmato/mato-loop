@@ -161,7 +161,8 @@ def _attachment_reference(
     }
 
 
-async def test_complete_passes_model_capabilities_and_explicit_timeout(monkeypatch) -> None:
+@pytest.mark.parametrize("replay", [{"chat_reasoning_details": [{"data": "opaque"}]}, {"chat_reasoning_content": "Explicit reasoning"}])
+async def test_complete_passes_model_capabilities_and_explicit_timeout(monkeypatch, replay) -> None:
     provider = LlmProviderConfig(
         name="Local",
         adapter_type="openai-compatible",
@@ -184,7 +185,7 @@ async def test_complete_passes_model_capabilities_and_explicit_timeout(monkeypat
         captured.update(kwargs)
         return ProviderResult(
             content="OK",
-            provider_data={"chat_reasoning_details": [{"data": "opaque"}]},
+            provider_data=dict(replay),
         )
 
     monkeypatch.setattr(service_module, "chat_completions", fake_chat_completions)
@@ -441,6 +442,7 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
                 "responses_output_items": [{"id": "opaque"}],
                 "reasoning_encrypted_content": "opaque",
                 "chat_reasoning_details": [{"data": "opaque"}],
+                "chat_reasoning_content": "Private reasoning",
             },
             reasoning=PublicReasoning(text="Gedanke zu " + pseudonym),
         )

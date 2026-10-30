@@ -902,6 +902,7 @@ class ProviderService:
                         "responses_output_items",
                         "reasoning_encrypted_content",
                         "chat_reasoning_details",
+                        "chat_reasoning_content",
                     ):
                         result.provider_data.pop(key, None)
                     return result
@@ -911,6 +912,7 @@ class ProviderService:
                 result.provider_data.get("responses_output_items")
                 or result.provider_data.get("reasoning_encrypted_content")
                 or result.provider_data.get("chat_reasoning_details")
+                or result.provider_data.get("chat_reasoning_content")
             ):
                 result.provider_data["continuation_scope"] = request.continuation_scope
             return result

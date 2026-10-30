@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import run_support
 from mato_loop_backend.agent.context import ContextManager
-from mato_loop_backend.agent.memory_context import MemoryTurn
+from mato_loop_backend.agent.memory_context import MemoryTurn, memory_context_snapshot
 from mato_loop_backend.agent.projection import (
     ContextError,
     ContextProjection,
@@ -53,6 +53,7 @@ async def build_turn_context(
     session_automations: list[dict[str, Any]] | None = None,
     repository_context_loader: Callable[..., Awaitable[str]] | None = None,
     pdf_context: dict[str, dict] | None = None,
+    runtime_context: str | None = None,
 ) -> tuple[ContextProjection, int, int]:
     async def summarize(source: str, output_tokens: int) -> SummaryResult:
         await run_support._publish_run_phase(run.id, "compacting_context")
@@ -124,6 +125,7 @@ async def build_turn_context(
         if memory_turn.scope is not None else None
     )
     compacted_summary = None
+    selected_memory_snapshot = None
     for attempt in range(2):
         projection = None
         memory_count = 0
@@ -147,7 +149,9 @@ async def build_turn_context(
                     records=records,
                     system_prompt=system_prompt,
                     runtime_instructions=runtime_instructions,
+                    runtime_context=runtime_context,
                     memory_context=memory_context,
+                    memory_contexts=memory_turn.historical_contexts,
                     tool_snapshots=tool_snapshots,
                     tool_schemas=schemas,
                     model=model,
@@ -161,6 +165,7 @@ async def build_turn_context(
                 )
                 memory_count = candidate_memory_count
                 episode_count = candidate_episode_count
+                selected_memory_snapshot = memory_context_snapshot(memory_context, candidate_text, session, trust_level)
                 break
             except ContextError as exc:
                 if exc.code != "agent.contextWindowExceeded" or candidate_index == len(memory_turn.candidates) - 1:
@@ -216,6 +221,15 @@ async def build_turn_context(
                 projection.counted_input_fingerprint = prepared.input_token_fingerprint
         projection.prepared_request = prepared
         break
+    current_user = next((item for item in reversed(records) if item.role == "user"), None)
+    if current_user is not None and selected_memory_snapshot is not None:
+        data = current_user.provider_data or {}
+        metadata = data.get("_matoloop", {})
+        if metadata.get("memoryContext") != selected_memory_snapshot:
+            current_user.provider_data = {
+                **data, "_matoloop": {**metadata, "memoryContext": selected_memory_snapshot},
+            }
+            await db.commit()
     if compacted_summary is not None:
         projection.compacted = True
         projection.context_summary = summary = compacted_summary

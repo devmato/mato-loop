@@ -70,6 +70,7 @@ def select_turn_tools(
     tool_budget_exhausted: bool,
     remaining_tool_calls: int | None = None,
     discovery_records: list[Message] | None = None,
+    previous_tool_names: tuple[str, ...] = (),
 ) -> TurnTools:
     capabilities = effective_tool_capabilities(
         tool_settings,
@@ -165,7 +166,7 @@ def select_turn_tools(
         execution_operations=execution_operations,
     )
     if tool_budget_exhausted and toolset is not None:
-        toolset = toolset.only()
+        toolset = toolset.only(*previous_tool_names)
     elif remaining_tool_calls == 1 and toolset is not None:
         toolset = toolset.without("secret_input")
     schemas = toolset.schemas() if toolset else []

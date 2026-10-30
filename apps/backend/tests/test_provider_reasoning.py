@@ -1,6 +1,7 @@
 import json
 
 import httpx
+import pytest
 
 from mato_loop_backend.providers.base import ProviderRequest
 from mato_loop_backend.providers.openai_compatible import (
@@ -87,6 +88,7 @@ def test_chat_result_exposes_explicit_reasoning_and_usage() -> None:
     assert result.content == "Ergebnis"
     assert result.reasoning is not None
     assert result.reasoning.text == "Optionen verglichen."
+    assert result.provider_data["chat_reasoning_content"] == "Optionen verglichen."
     assert result.reasoning.reasoning_tokens == 5
     assert result.usage["cached_input_tokens"] == 7
     assert result.usage["cache_write_input_tokens"] == 3
@@ -114,27 +116,32 @@ def test_chat_result_preserves_private_reasoning_details_separately() -> None:
     assert "opaque" not in result.reasoning.text
 
 
-def test_chat_reasoning_details_replay_only_in_matching_scope() -> None:
+@pytest.mark.parametrize("field", ["adapterType", "providerId", "modelConfigId", "credentialId", "endpoint", "trustLevel"])
+def test_chat_reasoning_details_replay_only_in_matching_scope(field) -> None:
     scope = {
         "adapterType": "openai-compatible",
         "providerId": "provider-1",
         "modelConfigId": "model-1",
         "credentialId": None,
         "endpoint": "https://provider.test/v1",
+        "trustLevel": "private",
     }
     message = {
         "role": "assistant",
         "content": "Antwort",
         "provider_data": {
             "chat_reasoning_details": [{"data": "opaque"}],
+            "chat_reasoning_content": "Explicit reasoning",
             "continuation_scope": scope,
         },
     }
 
     assert "reasoning_details" in _chat_messages([message], scope)[0]
+    assert _chat_messages([message], scope)[0]["reasoning_content"] == "Explicit reasoning"
     assert "reasoning_details" not in _chat_messages(
-        [message], {**scope, "modelConfigId": "model-2"}
+        [message], {**scope, field: "different"}
     )[0]
+    assert "reasoning_content" not in _chat_messages([message], {**scope, field: "different"})[0]
 
 
 def test_responses_result_exposes_summary_but_not_encrypted_state() -> None:
@@ -283,12 +290,19 @@ def test_halogen_profile_is_exact_and_discovery_takes_precedence() -> None:
     assert profile.options == (ReasoningEffort.LOW, ReasoningEffort.MEDIUM)
 
 
-async def test_chat_stream_routes_tagged_reasoning_separately(monkeypatch) -> None:
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_chat_stream_routes_tagged_reasoning_separately(monkeypatch, explicit) -> None:
     events = [
         {"choices": [{"delta": {"content": "<thi"}}]},
         {"choices": [{"delta": {"content": "nk>Plan"}}]},
         {"choices": [{"delta": {"content": "en</think>Antwort"}, "finish_reason": "stop"}]},
     ]
+    if explicit:
+        events = [
+            {"choices": [{"delta": {"reasoning_content": "Plan"}}]},
+            {"choices": [{"delta": {"reasoning_content": "en"}}]},
+            {"choices": [{"delta": {"content": "Antwort"}, "finish_reason": "stop"}]},
+        ]
     body = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
     real_client = httpx.AsyncClient
     transport = httpx.MockTransport(lambda _request: httpx.Response(200, text=body))
@@ -318,6 +332,7 @@ async def test_chat_stream_routes_tagged_reasoning_separately(monkeypatch) -> No
     assert result.content == "Antwort"
     assert result.reasoning is not None
     assert result.reasoning.text == "Planen"
+    assert result.provider_data.get("chat_reasoning_content") == ("Planen" if explicit else None)
 
 
 async def test_chat_stream_stops_at_done_without_waiting_for_eof(monkeypatch) -> None:

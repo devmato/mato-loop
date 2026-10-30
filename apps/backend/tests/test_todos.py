@@ -4,7 +4,11 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from mato_loop_backend.agent.projection import _projection_messages, _prune_tool_outputs_to_budget
+from mato_loop_backend.agent.projection import (
+    _projection_messages,
+    _prune_tool_outputs_to_budget,
+    _strip_projection_metadata,
+)
 from mato_loop_backend.agent.todos import session_todos
 from mato_loop_backend.models import ContextSummary, Message
 from mato_loop_backend.settings import TrustLevel
@@ -94,9 +98,15 @@ def test_checklist_checkpoint_preserves_prefix_and_chronological_updates() -> No
     )
 
     records = [earlier_user, *earlier_exchange, latest_user]
+    summary = ContextSummary(covered_through_message_id=earlier_exchange[-1].id, content="Earlier work")
 
     def project(values):
-        return _projection_messages("System", None, values, TrustLevel.PUBLIC)
+        messages = _projection_messages(
+            "System", summary, values[values.index(latest_user):], TrustLevel.PUBLIC,
+            available_records=values,
+        )
+        _strip_projection_metadata(messages)
+        return messages
 
     before = project(records)
     checkpoint = before[-2]
@@ -115,6 +125,8 @@ def test_checklist_checkpoint_preserves_prefix_and_chronological_updates() -> No
         before = after
     assert session_todos(records) == []
     assert project(records[:-2])[-2:] != before[-2:]  # Undo removes the reset.
+    followup = Message(id=uuid4(), session_id=session_id, role="user", content="Next request")
+    assert project([*records, followup])[:len(before)] == before
 
 
 @pytest.mark.parametrize("snapshot", [[], [{"content": "Remaining", "status": "pending"}]])
@@ -122,15 +134,17 @@ async def test_compacted_checklist_is_reconstructed_and_current_results_survive_
     user = Message(id=uuid4(), session_id=uuid4(), role="user", content="Task")
     covered = _todo_exchange(snapshot)
     later = _todo_exchange([{"content": "x" * 160, "status": "pending"}] * 12)
+    followup = Message(id=uuid4(), session_id=user.session_id, role="user", content="Continue")
     summary = ContextSummary(covered_through_message_id=covered[-1].id, content="Summary")
-    source = [user, *covered, *later]
+    source = [user, *covered, *later, followup]
     projected = _projection_messages(
-        "System", summary, [user, *later], TrustLevel.PUBLIC,
+        "System", summary, [user, *later, followup], TrustLevel.PUBLIC,
         available_records=source, current_turn_tool_output_tokens=0,
+        omitted_tool_result_ids={later[-1].id},
     )
     checkpoint = next(item for item in projected if "Checklist at retained-context" in item["content"])
     assert json.dumps({"todos": snapshot}, separators=(",", ":")) in checkpoint["content"]
-    assert projected[-1]["content"] == later[-1].content
+    assert projected[-2]["content"] == later[-1].content
 
     async def estimate(messages):
         return sum(len(message["content"]) for message in messages)
@@ -138,4 +152,4 @@ async def test_compacted_checklist_is_reconstructed_and_current_results_survive_
     await _prune_tool_outputs_to_budget(
         projected, estimate_request=estimate, characters_per_token=4, input_budget=1,
     )
-    assert projected[-1]["content"] == later[-1].content
+    assert projected[-2]["content"] == later[-1].content

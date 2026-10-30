@@ -203,6 +203,10 @@ def test_current_result_is_not_duplicated_and_pin_budget_preserves_whole_entries
     messages = _projection_messages("Host rules.", None, [user, call, record], TrustLevel.PRIVATE, tool_snapshots=snapshots)
     assert not any(message.get(SNAPSHOT_MARKER) for message in messages)
     assert any(message["role"] == "tool" and "Production" in message["content"] for message in messages)
+    followup = Message(id=uuid4(), session_id=session_id, role="user", content="Next request")
+    assert not any(message.get(SNAPSHOT_MARKER) for message in _projection_messages(
+        "Host rules.", None, [user, call, record, followup], TrustLevel.PRIVATE, tool_snapshots=snapshots,
+    ))
     single = snapshot_context(snapshots, current_message_ids=set(), max_characters=8_000)
     assert single is not None
     budget = len(single["content"])

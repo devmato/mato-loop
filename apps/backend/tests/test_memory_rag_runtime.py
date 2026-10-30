@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -7,6 +8,10 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.context import ContextManager
+from mato_loop_backend.agent.memory_context import (
+    historical_memory_contexts,
+    memory_context_snapshot,
+)
 from mato_loop_backend.agent.projection import ContextError, ContextProjection
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.runtime_memory import (
@@ -67,6 +72,36 @@ from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.registry import EffectiveToolSet
 
 pytestmark = pytest.mark.usefixtures("mock_db_settings")
+
+
+@pytest.mark.parametrize("change", [None, "revision", "memory_access", "session_access", "project", "trust", "compacted"])
+async def test_historical_memory_context_revalidates_sources(change):
+    session = ChatSession(id=uuid4(), user_id=uuid4(), project_id=uuid4())
+    memory_id, source_id, source_message_id = uuid4(), uuid4(), uuid4()
+    source = json.dumps({
+        "durableMemories": [{"id": str(memory_id), "revision": 1}],
+        "projectSessionIndex": {"sessions": [{"sessionReadArguments": {
+            "session_id": str(source_id), "around_message_id": str(source_message_id),
+        }}]},
+    })
+    user = Message(id=uuid4(), session_id=session.id, role="user", content="Earlier request", provider_data={
+        "_matoloop": {"memoryContext": memory_context_snapshot("Private reference", source, session, TrustLevel.PRIVATE)},
+    })
+    memories = [] if change == "memory_access" else [(memory_id, 2 if change == "revision" else 1)]
+    sources = [] if change == "session_access" else [(
+        source_message_id, source_id, uuid4() if change == "project" else session.project_id,
+    )]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = user.id if change == "compacted" else None
+    db.execute.side_effect = [SimpleNamespace(all=lambda: memories), SimpleNamespace(all=lambda: sources)]
+
+    contexts = await historical_memory_contexts(
+        db, session, [user, Message(id=uuid4(), session_id=session.id, role="user", content="Current request")],
+        trust_level=TrustLevel.PUBLIC if change == "trust" else TrustLevel.PRIVATE,
+        excluded_content_hashes=frozenset(),
+    )
+
+    assert contexts == ({user.id: "Private reference"} if change is None else {})
 
 
 @pytest.mark.parametrize(
