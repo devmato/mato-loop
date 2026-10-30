@@ -48,6 +48,13 @@ def test_prompt_scope_and_model_switch(profile, delegated, expected):
     assert (build_model_instructions("Qwen3.8-27B") in prompt) is expected
 
 
+@pytest.mark.parametrize("profile", [plan_profile(), build_profile()])
+def test_coding_profiles_share_batching_guidance(profile):
+    prompt = agent_profile_runtime_instructions(profile)
+    assert "batch independent read, glob, and grep calls" in prompt
+    assert "group coherent changes to the same file into one patch" in prompt
+
+
 def test_custom_profile_inherits_build_model_instructions():
     profile = resolve_agent_profile(
         CustomAgentProfile(

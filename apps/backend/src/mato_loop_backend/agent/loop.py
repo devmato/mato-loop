@@ -62,6 +62,7 @@ from mato_loop_backend.models import (
     Project,
     WebSearchPolicy,
 )
+from mato_loop_backend.privacy import ProtectionCache
 from mato_loop_backend.providers.base import ProviderImageInput, ToolCall
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.settings import (
@@ -243,6 +244,7 @@ async def execute_loop_body(
     truncated_tool_batches = 0
     live_tool_calls: dict[UUID, list[dict[str, Any]]] = {}
     pseudonymization_key = secrets.token_bytes(32)
+    pseudonymization_cache = ProtectionCache()
     session_read_cursors: dict[UUID, UUID | None] = {}
     memory_cache = MemoryCache()
     pdf_cache = {}
@@ -486,6 +488,7 @@ async def execute_loop_body(
             "target_trust_level": model_trust_level,
             "pseudonymization_enabled": run_pseudonymization_enabled,
             "pseudonymization_key": pseudonymization_key,
+            "pseudonymization_cache": pseudonymization_cache,
             "prompt_cache_key": str(chat_session.id),
             "required_image_ids": (),
             "reasoning_effort": (

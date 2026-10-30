@@ -497,7 +497,8 @@ async def test_run_privacy_keeps_serialized_prefix_and_request_scope(monkeypatch
         config={"base_url": "http://public.test/v1", "api_type": api_type},
     )
     model = ModelConfig(provider_id=provider.id, model_id="public-model")
-    options = dict(provider=provider, model=model, tools=[], pseudonymization_key=b"r" * 32)
+    options = dict(provider=provider, model=model, tools=[], pseudonymization_key=b"r" * 32,
+                   pseudonymization_cache=service_module.ProtectionCache())
     source = [{"role": "user", "content": "Contact anna@example.com"}]
     first = await ProviderService.prepare_request(messages=source, **options)
     # Candidate preparation neither changes identities nor grants later restoration access.

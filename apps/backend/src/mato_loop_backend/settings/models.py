@@ -409,6 +409,26 @@ def general_profile() -> AgentProfile:
     )
 
 
+CODING_PROFILE_TOOL_AVAILABILITY = dict.fromkeys(
+    (
+        "notify", "silence",
+        "list_execution_agents", "select_execution_agent",
+        "download_file", "fetch_transcript",
+        "generate_qr_code", "read_qr_code",
+        "generate_image", "edit_image", "generate_speech", "generate_audio",
+        "transcribe_audio", "analyze_video", "analyze_audio",
+        "session_browse",
+        "list_automations", "get_automation", "create_automation", "edit_automation",
+        "run_automation", "delete_automation",
+        "memory_write", "memory_browse",
+        "save_skill", "edit_skill",
+        "variable_read", "variable_write", "secret_input",
+        "customize_matoloop",
+    ),
+    False,
+)
+
+
 def plan_profile() -> AgentProfile:
     policies = {
         "filesystem.read": ToolExecutionPolicy.AUTO,
@@ -473,6 +493,7 @@ def plan_profile() -> AgentProfile:
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),
         delegation_enabled=True,
+        tool_availability=CODING_PROFILE_TOOL_AVAILABILITY.copy(),
         session_write_paths=None,
     )
 
@@ -515,6 +536,7 @@ def build_profile() -> AgentProfile:
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),
         delegation_enabled=True,
+        tool_availability=CODING_PROFILE_TOOL_AVAILABILITY.copy(),
         session_write_paths=None,
     )
 

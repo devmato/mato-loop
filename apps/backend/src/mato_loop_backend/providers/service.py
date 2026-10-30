@@ -27,6 +27,7 @@ from mato_loop_backend.media.attachments import (
     validate_image,
 )
 from mato_loop_backend.privacy import (
+    ProtectionCache,
     PseudonymizationError,
     RequestPseudonymizer,
     StreamingPseudonymRestorer,
@@ -555,6 +556,7 @@ class ProviderService:
         target_trust_level: TrustLevel | None = None,
         pseudonymization_enabled: bool | None = None,
         pseudonymization_key: bytes | None = None,
+        pseudonymization_cache: ProtectionCache | None = None,
         image_inputs: list[ProviderImageInput] | None = None,
         media_inputs: list[ProviderMediaInput] | None = None,
         prompt_cache_key: str | None = None,
@@ -636,7 +638,9 @@ class ProviderService:
         )
         media.extend(direct_media)
         pseudonymizer = (
-            RequestPseudonymizer(key=pseudonymization_key) if use_pseudonymization else None
+            RequestPseudonymizer(
+                key=pseudonymization_key, protection_cache=pseudonymization_cache
+            ) if use_pseudonymization else None
         )
         if pseudonymizer is not None:
             try:
@@ -725,6 +729,7 @@ class ProviderService:
         target_trust_level: TrustLevel | None = None,
         pseudonymization_enabled: bool | None = None,
         pseudonymization_key: bytes | None = None,
+        pseudonymization_cache: ProtectionCache | None = None,
         image_inputs: list[ProviderImageInput] | None = None,
         media_inputs: list[ProviderMediaInput] | None = None,
         prompt_cache_key: str | None = None,
@@ -751,6 +756,7 @@ class ProviderService:
             target_trust_level=target_trust_level,
             pseudonymization_enabled=pseudonymization_enabled,
             pseudonymization_key=pseudonymization_key,
+            pseudonymization_cache=pseudonymization_cache,
             image_inputs=image_inputs,
             media_inputs=media_inputs,
             prompt_cache_key=prompt_cache_key,

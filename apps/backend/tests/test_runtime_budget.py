@@ -95,6 +95,7 @@ async def test_profile_budget_snapshot_and_unlimited_run(monkeypatch, limit, cal
     assert len(requests) == calls + 1
     assert len({request["pseudonymization_key"] for request in requests}) == 1
     assert len(requests[0]["pseudonymization_key"]) == 32
+    assert len({id(request["pseudonymization_cache"]) for request in requests}) == 1
     assert tool_registry._execute_definition.await_count == calls
     assert len(_tool_messages(db)) == calls
     assert requests[-1]["tools"] == requests[-2]["tools"]

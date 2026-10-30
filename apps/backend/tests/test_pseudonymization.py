@@ -3,6 +3,7 @@ import json
 import pytest
 
 from mato_loop_backend.privacy import (
+    ProtectionCache,
     PseudonymizationError,
     RequestPseudonymizer,
     StreamingPseudonymRestorer,
@@ -180,6 +181,36 @@ def test_run_key_stabilizes_identity_without_sharing_restoration_authority() -> 
     second.retain_transmitted({"messages": [{"role": "user", "content": "No contact"}]})
     with pytest.raises(PseudonymizationError):
         second.restore_text(shared)
+
+
+def test_run_cache_rescans_only_new_text(monkeypatch) -> None:
+    cache = ProtectionCache()
+    key = b"r" * 32
+    protected = RequestPseudonymizer(key=key, protection_cache=cache).protect_text(
+        "anna@example.com"
+    )
+    analyze = pseudonymization_module._analyze
+    calls = []
+    monkeypatch.setattr(pseudonymization_module, "_analyze", lambda text: calls.append(text) or analyze(text))
+    current = RequestPseudonymizer(key=key, protection_cache=cache)
+
+    assert current.protect_text("anna@example.com") == protected
+    assert current.restore_text(protected) == "anna@example.com"
+    current.protect_text("new@example.com")
+    assert calls == ["new@example.com"]
+
+
+def test_run_cache_evicts_old_candidates_and_skips_oversized_text(monkeypatch) -> None:
+    monkeypatch.setattr(pseudonymization_module, "_PROTECTION_CACHE_MAX_BYTES", 2048)
+    calls = []
+    monkeypatch.setattr(pseudonymization_module, "_analyze", lambda text: calls.append(text) or [])
+    cache = ProtectionCache()
+    candidates = ["a" * 800, "b" * 800, "x" * 4096, "a" * 800]
+
+    for text in candidates:
+        RequestPseudonymizer(key=b"r" * 32, protection_cache=cache).protect_text(text)
+
+    assert calls == candidates
 
 
 def test_exact_originals_and_single_pass_restoration(monkeypatch) -> None:

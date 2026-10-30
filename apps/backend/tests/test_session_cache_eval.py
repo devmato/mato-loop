@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
+import pytest
+
 from mato_loop_backend import session_cache_eval
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.session_cache_eval import (
@@ -19,6 +21,15 @@ def test_parser_accepts_codex_with_model_default() -> None:
     assert args.adapter == "openai-codex"
     assert args.model is None
     assert args.reasoning_effort is None
+
+
+def test_openai_compatible_requires_explicit_model(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("sys.argv", ["session-cache", "--adapter", "openai-compatible"])
+
+    with pytest.raises(SystemExit):
+        session_cache_eval.main()
+
+    assert "--model is required" in capsys.readouterr().err
 
 
 async def test_session_payload_omits_unspecified_reasoning_effort() -> None:

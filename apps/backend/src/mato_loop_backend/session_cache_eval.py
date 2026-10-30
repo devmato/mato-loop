@@ -910,7 +910,7 @@ def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description="Evaluate provider caching across real MatoLoop sessions.")
     value.add_argument("--api-base", default="http://backend:6020/api")
     value.add_argument(
-        "--adapter", choices=("lemonade", "openai-codex"), default="lemonade"
+        "--adapter", choices=("lemonade", "openai-compatible", "openai-codex"), default="lemonade"
     )
     value.add_argument("--model")
     value.add_argument(
@@ -930,7 +930,11 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    raise SystemExit(asyncio.run(run(parser().parse_args())))
+    argument_parser = parser()
+    args = argument_parser.parse_args()
+    if not args.model and args.adapter not in DEFAULT_MODELS:
+        argument_parser.error("--model is required for --adapter openai-compatible")
+    raise SystemExit(asyncio.run(run(args)))
 
 
 if __name__ == "__main__":

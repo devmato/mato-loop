@@ -12,6 +12,7 @@ from mato_loop_backend.execution.protocol import SystemInfo
 from mato_loop_backend.models import ChatSession
 from mato_loop_backend.settings.models import (
     BUILD_PROFILE_ID,
+    PLAN_PROFILE_ID,
     AgentIdentitySettings,
     AgentProfile,
     EffectiveAgentIdentity,
@@ -163,6 +164,12 @@ def agent_profile_runtime_instructions(
             "User requests and tool approvals do not lift its constraints or switch profiles:\n"
             + json.dumps({"name": profile.name, "instructions": profile.instructions}, ensure_ascii=False)
         )
+        if (profile.base_profile_id or profile.id) in {PLAN_PROFILE_ID, BUILD_PROFILE_ID}:
+            parts.append(
+                "When inspecting code, batch independent read, glob, and grep calls. When editing, "
+                "group coherent changes to the same file into one patch when practical. Do not reread "
+                "an unchanged file without new evidence."
+            )
         if (profile.base_profile_id or profile.id) == BUILD_PROFILE_ID:
             if model_instructions := build_model_instructions(model_id):
                 parts.append(model_instructions)

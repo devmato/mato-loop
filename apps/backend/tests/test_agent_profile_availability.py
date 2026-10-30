@@ -26,6 +26,7 @@ from mato_loop_backend.settings.effective import (
 from mato_loop_backend.settings.models import (
     GENERAL_PROFILE_ID,
     AgentProfile,
+    AgentProfileAccessOverrides,
     AgentProfileOverrides,
     AgentProfilesSettings,
     CustomAgentProfile,
@@ -36,6 +37,7 @@ from mato_loop_backend.settings.models import (
     ToolSettings,
     TrustLevel,
     UserIntegrationSettings,
+    apply_profile_overrides,
     build_profile,
     general_profile,
     plan_profile,
@@ -44,6 +46,7 @@ from mato_loop_backend.settings.store import SettingsStore
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.coding import _coding_analyze
 from mato_loop_backend.tools.context import ToolContext
+from mato_loop_backend.tools.context_search import source_available
 from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.web import _web_search
 
@@ -61,6 +64,20 @@ def test_todo_tool_follows_profile_availability(profile, enabled):
     effective = tool_registry.effective(IntegrationSettings(), tool_settings=tools)
 
     assert ("todo_write" in effective.tools) is enabled
+
+
+@pytest.mark.parametrize("profile", [plan_profile(), build_profile()])
+def test_coding_profiles_share_slim_overridable_tool_baseline(profile):
+    assert profile.tool_availability == plan_profile().tool_availability == build_profile().tool_availability
+    for name in ("task", "web_search", "webfetch", "search_tools", "memory_retrieve", "update_agent_identity"):
+        assert profile.tool_availability.get(name) is not False
+    assert source_available(ToolSettings(tool_availability=profile.tool_availability), "memories")
+    for name in ("memory_write", "list_automations", "select_execution_agent", "save_skill"):
+        assert profile.tool_availability[name] is False
+    overridden = apply_profile_overrides(profile, AgentProfileAccessOverrides(
+        tool_availability={"memory_write": True},
+    ))
+    assert overridden.tool_availability["memory_write"] is True
 
 
 @pytest.mark.parametrize("temporary,available", [(False, True), (True, True), (True, False)])

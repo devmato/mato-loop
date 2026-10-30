@@ -5,8 +5,10 @@ import hmac
 import json
 import re
 import secrets
+from collections import OrderedDict
 from collections.abc import Callable
 from functools import lru_cache
+from sys import getsizeof
 from threading import Lock
 from typing import Any
 
@@ -21,6 +23,40 @@ from presidio_analyzer.predefined_recognizers import (
     IpRecognizer,
     PhoneRecognizer,
 )
+
+_PROTECTION_CACHE_MAX_BYTES = 16 * 1024 * 1024
+
+
+class ProtectionCache:
+    def __init__(self) -> None:
+        self._entries: OrderedDict[tuple[str, str | None], tuple[str, dict[str, str], int]] = OrderedDict()
+        self._size_bytes = 0
+        self._lock = Lock()
+
+    def get(self, key: tuple[str, str | None]) -> tuple[str, dict[str, str]] | None:
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None:
+                self._entries.move_to_end(key)
+                return entry[0], entry[1]
+        return None
+
+    def store(self, key: tuple[str, str | None], protected: str, originals: dict[str, str]) -> None:
+        # Allow for containers and conservatively count shared strings twice.
+        size = (256 + sum(getsizeof(value) for value in (*key, protected)) + getsizeof(originals)
+                + sum(getsizeof(marker) + getsizeof(original) for marker, original in originals.items()))
+        if size > _PROTECTION_CACHE_MAX_BYTES:
+            return
+        with self._lock:
+            previous = self._entries.pop(key, None)
+            if previous is not None:
+                self._size_bytes -= previous[2]
+            while self._size_bytes + size > _PROTECTION_CACHE_MAX_BYTES:
+                _, oldest = self._entries.popitem(last=False)
+                self._size_bytes -= oldest[2]
+            self._entries[key] = (protected, originals, size)
+            self._size_bytes += size
+
 
 _SECRET_SCAN_LOCK = Lock()
 _MARKER_PATTERN = re.compile(r"\[\[MLP_.*?(?:\]\]|$)", re.DOTALL)
@@ -157,10 +193,14 @@ class RequestPseudonymizer:
         "in the input."
     )
 
-    def __init__(self, *, key: bytes | None = None) -> None:
-        # Only the random identity key is run-local; restoration stays request-local.
+    def __init__(
+        self, *, key: bytes | None = None,
+        protection_cache: ProtectionCache | None = None,
+    ) -> None:
+        # Protection results and identity keys are run-local; restoration stays request-local.
         self._key = key if key is not None else secrets.token_bytes(32)
         self._originals: dict[str, str] = {}
+        self._protection_cache = protection_cache
 
     @property
     def max_marker_length(self) -> int:
@@ -247,6 +287,12 @@ class RequestPseudonymizer:
     def protect_text(self, text: str, *, field_name: str | None = None) -> str:
         if not text:
             return text
+        cache_key = (text, field_name)
+        cached = self._protection_cache.get(cache_key) if self._protection_cache is not None else None
+        if cached is not None:
+            protected, originals = cached
+            self._originals.update(originals)
+            return protected
         try:
             results = _analyze(text)
             # Keep keyword-based protection for structured fields such as {"password": "value"}.
@@ -269,6 +315,7 @@ class RequestPseudonymizer:
             selected.append(result)
             occupied.append((result.start, result.end))
         protected = text
+        detected: dict[str, str] = {}
         for result in sorted(selected, key=lambda item: item.start, reverse=True):
             original = text[result.start : result.end]
             identity = json.dumps((result.entity_type, original), ensure_ascii=False).encode()
@@ -276,8 +323,10 @@ class RequestPseudonymizer:
             marker = f"{self.marker_prefix}{digest}]]"
             if marker in self._originals and self._originals[marker] != original:
                 raise PseudonymizationError("privacy.pseudonymizationFailed")
-            self._originals[marker] = original
+            self._originals[marker] = detected[marker] = original
             protected = protected[: result.start] + marker + protected[result.end :]
+        if self._protection_cache is not None:
+            self._protection_cache.store(cache_key, protected, detected)
         return protected
 
     def restore_text(
