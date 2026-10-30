@@ -36,6 +36,7 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationResource,
     ToolContribution,
 )
+from mato_loop_backend.integrations.service import remember_resource_labels
 from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import (
@@ -318,6 +319,7 @@ class _PageToken(BaseModel):
     binding_revision: str = Field(alias="r", max_length=64)
     book_key: str = Field(alias="b", pattern=_BOOK_KEY_PATTERN)
     page_id: int = Field(alias="p", ge=1)
+    name: str | None = Field(alias="n", default=None, max_length=255)
     chapter_id: int | None = Field(alias="c", default=None, ge=1)
     # Revision the agent observed. Carried in the token so conflict detection
     # does not depend on the model passing it back.
@@ -331,6 +333,7 @@ class _ChapterToken(BaseModel):
     binding_revision: str = Field(alias="r", max_length=64)
     book_key: str = Field(alias="b", pattern=_BOOK_KEY_PATTERN)
     chapter_id: int = Field(alias="c", ge=1)
+    name: str | None = Field(alias="n", default=None, max_length=255)
 
 
 class _AttachmentToken(BaseModel):
@@ -340,6 +343,7 @@ class _AttachmentToken(BaseModel):
     binding_revision: str = Field(alias="r", max_length=64)
     book_key: str = Field(alias="b", pattern=_BOOK_KEY_PATTERN)
     attachment_id: int = Field(alias="a", ge=1)
+    name: str | None = Field(alias="n", default=None, max_length=255)
 
 
 _BOOKSTACK_ERROR_CODES = {
@@ -580,6 +584,7 @@ def _page_token(
         r=_revision_fingerprint(revision),
         b=book_key,
         p=page.id,
+        n=page.name[:255],
         c=page.chapter_id,
         u=page.updated_at,
     )
@@ -598,6 +603,7 @@ def _chapter_token(
         r=_revision_fingerprint(revision),
         b=book_key,
         c=chapter.id,
+        n=chapter.name[:255],
     )
     return (
         CredentialCipher()
@@ -617,6 +623,7 @@ def _attachment_token(
         r=_revision_fingerprint(revision),
         b=book_key,
         a=attachment.id,
+        n=attachment.name[:255],
     )
     return (
         CredentialCipher()
@@ -684,6 +691,14 @@ def _shelf_payload(shelf: BookStackShelf) -> dict[str, Any]:
         "name": _bounded(shelf.name, 255),
         "description": _bounded(shelf.description, 2_000),
     }
+
+
+async def _remember_shelves(arguments: KnowledgeIntegrationArguments, context: Any, shelves: tuple[BookStackShelf, ...]) -> None:
+    instance, revision = _binding(context, arguments.integration_id)
+    await remember_resource_labels(context, instance, {
+        f"{_revision_fingerprint(revision)}:shelf:{shelf.id}": _display_text(shelf.name)
+        for shelf in shelves
+    })
 
 
 def _attachment_summary(
@@ -1227,6 +1242,7 @@ async def knowledge_list_shelves(
             _revision,
         ):
             shelves, truncated = await client.list_shelves()
+        await _remember_shelves(arguments, context, shelves)
         payload: dict[str, Any] = {
             "shelves": [_shelf_payload(shelf) for shelf in shelves]
         }
@@ -1246,6 +1262,7 @@ async def knowledge_read_shelf(arguments: KnowledgeShelfArguments, context: Any)
             _revision,
         ):
             contents = await client.read_shelf(_shelf_id(arguments.shelf_key))
+        await _remember_shelves(arguments, context, (contents.shelf,))
         return _result(
             {
                 "shelf": _shelf_payload(contents.shelf),
@@ -1289,6 +1306,7 @@ async def knowledge_create_shelf(
                 description=arguments.description,
                 book_ids=_book_ids(arguments.book_keys),
             )
+        await _remember_shelves(arguments, context, (shelf,))
         return _result({"shelf": _shelf_payload(shelf)})
     except ValueError:
         return _invalid("integration_id")
@@ -1366,6 +1384,7 @@ async def knowledge_update_shelf(
                 description=arguments.description,
                 book_ids=book_ids,
             )
+        await _remember_shelves(arguments, context, (shelf,))
         return _result({"shelf": _shelf_payload(shelf)})
     except ValueError:
         return _invalid("integration_id")
@@ -1735,6 +1754,46 @@ def _permission(
 
     instance, revision = _binding(context, arguments.integration_id)
     resource_key = getattr(arguments, "book_key", None) if resource else None
+    items = []
+    for field, model, label, id_field in (
+        ("page_token", _PageToken, "Seite", "page_id"),
+        ("chapter_token", _ChapterToken, "Kapitel", "chapter_id"),
+        ("attachment_token", _AttachmentToken, "Anhang", "attachment_id"),
+    ):
+        value = getattr(arguments, field, None)
+        if value:
+            try:
+                token = _decode_token(model, value, arguments.integration_id, revision, arguments.book_key)
+            except ValueError:
+                continue
+            name = _display_text(token.name) or label
+            items.append(PermissionDisplayItem(label, f"{name} (ID {getattr(token, id_field)})"))
+    if isinstance(arguments, KnowledgeShelfArguments):
+        labels = getattr(getattr(context, "tool_settings", None), "resource_labels", {})
+        name = labels.get(str(instance.id), {}).get(f"{_revision_fingerprint(revision)}:{arguments.shelf_key}")
+        shelf = f"{name} ({arguments.shelf_key})" if name else arguments.shelf_key
+        items.append(PermissionDisplayItem("Regal", shelf))
+    if items:
+        for field, label, format in (
+            ("name", "Name", "text"), ("description", "Beschreibung", "text"),
+            ("markdown", "Inhalt", "code"), ("url", "Quell-URL", "text"),
+            ("link", "Link", "text"), ("path", "Quelldatei", "code"), ("root", "Dateibereich", "text"),
+        ):
+            value = getattr(arguments, field, None)
+            if value is not None:
+                items.append(PermissionDisplayItem(label, value, format))
+        for field, label in (
+            ("book_keys", "Bücher (ersetzen)"), ("add_book_keys", "Bücher hinzufügen"),
+            ("remove_book_keys", "Bücher entfernen"),
+        ):
+            keys = getattr(arguments, field, None)
+            if keys is not None:
+                labels = getattr(getattr(context, "tool_settings", None), "resource_labels", {}).get(str(instance.id), {})
+                items.append(PermissionDisplayItem(label, tuple(
+                    f"{labels[key]} ({key})" if labels.get(key) else key for key in keys
+                ) or ("Liste leeren",), "list"))
+    if deletion_scope:
+        items.append(PermissionDisplayItem("Löschumfang", deletion_scope))
     return (
         integration_operation_permission(
             capability=capability,
@@ -1747,7 +1806,7 @@ def _permission(
             ),
             title=title,
             summary=summary,
-            display_items=(PermissionDisplayItem("Löschumfang", deletion_scope),) if deletion_scope else (),
+            display_items=tuple(items),
         ),
     )
 

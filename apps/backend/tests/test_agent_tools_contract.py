@@ -1043,6 +1043,7 @@ async def test_bound_integration_tool_rechecks_source_after_approval(
     )
 
     context = _context(tmp_path, call)
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
     result = await effective.execute(call, context)
 
     assert result.metadata == {"errorCode": "tool.unavailable"}
@@ -1288,6 +1289,7 @@ async def test_contributed_authorization_must_cover_every_declared_action(
     monkeypatch.setattr(mock_tools_catalog, 'effective_integration_contributions', Mock(return_value=IntegrationContributions(tools=(contribution,))))
     settings = IntegrationSettings(instances=[integration])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=ToolSettings()))
     effective = ToolRegistry([]).effective(settings)
     call = ToolCall(
         id="integration", name="integration_example", arguments={"value": "test"}
@@ -1367,6 +1369,7 @@ async def test_resource_policy_disabled_blocks_contributed_tool_effect(
     )
     context = _context(tmp_path, call)
     context.ask_handler = AsyncMock(side_effect=authorize)
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=settings))
 
     result = await effective.execute(call, context)
 

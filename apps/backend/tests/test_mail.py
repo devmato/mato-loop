@@ -235,6 +235,7 @@ async def test_mail_registry_rejects_invalid_tokens_without_approval_or_executio
         integration_settings=binding.integration_settings,
         ask_handler=AsyncMock(side_effect=AssertionError("invalid tokens must not ask")),
     )
+    monkeypatch.setattr("mato_loop_backend.tools.access.profile_tool_settings", AsyncMock(return_value=context.tool_settings))
     effective = ToolRegistry([]).effective(binding.integration_settings)
 
     result = await effective.execute(call, context)

@@ -259,6 +259,7 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_access_l
 ) -> None:
     instance = ToolSettings(
         public_permissions={"policies": {"filesystem.read": "ask"}},
+        resource_labels={"shared": {"project-id": "searxng"}},
         web_access=WebAccessSettings(
             user_agent="Instance Agent",
             max_response_mib=7,
@@ -272,7 +273,7 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_access_l
             "integrationId": uuid4(),
             "calendarKey": "calendar:" + "a" * 32,
         },
-        resource_labels={"personal": {"calendar:test": "Privat"}},
+        resource_labels={"personal": {"calendar:test": "Privat"}, "shared": {"project-id": "Old name"}},
         web_access=WebAccessSettings(
             user_agent="Personal Agent",
             max_response_mib=99,
@@ -290,7 +291,9 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_access_l
     assert effective.web_access.public_addresses_only is False
     assert effective.web_search.primary_provider == "no_key"
     assert effective.default_calendar == personal.default_calendar
-    assert effective.resource_labels == personal.resource_labels
+    assert effective.resource_labels == {
+        "shared": {"project-id": "searxng"}, "personal": {"calendar:test": "Privat"},
+    }
 
 
 async def test_effective_tools_keeps_personal_integration_defaults_when_tool_snapshot_is_off(

@@ -30,6 +30,7 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationResource,
     ToolContribution,
 )
+from mato_loop_backend.integrations.service import remember_resource_labels
 from mato_loop_backend.models import Credential
 from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.security import load_credential, read_credential
@@ -232,6 +233,56 @@ def _public(item: Any, kind: str) -> dict[str, Any]:
     return result
 
 
+def _label_key(args: ArcaneInstance, revision: str, kind: str, resource_id: str) -> str:
+    binding = hashlib.sha256(revision.encode()).hexdigest()
+    environment = getattr(args, "environment_id", "") if kind != "environments" else ""
+    return f"{binding}:{environment}:{kind}:{resource_id}"
+
+
+async def _remember_resources(args: ArcaneInstance, context: Any, kind: str, items: list[dict[str, Any]]) -> None:
+    named = []
+    for item in items:
+        name = item.get("name")
+        if kind == "images":
+            tags = item.get("repoTags")
+            name = ", ".join(tag for tag in tags[:3] if isinstance(tag, str)) if isinstance(tags, list) else None
+        resource_id = item.get("id")
+        if isinstance(resource_id, str | int) and not isinstance(resource_id, bool) and isinstance(name, str) and name.strip():
+            named.append((str(resource_id), " ".join(name.split())[:80]))
+    if named:
+        instance, revision = _binding(context, args.integration_id)
+        await remember_resource_labels(context, instance, {
+            _label_key(args, revision, kind, resource_id): name for resource_id, name in named
+        })
+
+
+def _resource_label(args: ArcaneInstance, context: Any, kind: str, resource_id: str) -> str:
+    _instance, revision = _binding(context, args.integration_id)
+    labels = getattr(getattr(context, "tool_settings", None), "resource_labels", {})
+    name = labels.get(str(args.integration_id), {}).get(_label_key(args, revision, kind, resource_id))
+    return f"{name} ({resource_id})" if name and name != resource_id else resource_id
+
+
+def _target_display(args: ArcaneInstance, context: Any, target: str) -> str:
+    if isinstance(args, ArcaneAction):
+        kind = _ACTION_ROUTES[args.action][0] if args.action in _ACTION_ROUTES else {
+            "auto_update": "containers", "rename_volume": "volumes", "tag_image": "images",
+            "connect_network": "networks", "disconnect_network": "networks",
+        }.get(args.action)
+        resource_id = args.resource_id
+    elif isinstance(args, ArcaneLogs):
+        kind, resource_id = "containers", args.container_id
+    elif isinstance(args, ArcaneProjectConfig | ArcaneProjectSave):
+        kind, resource_id = "projects", args.project_id
+    else:
+        kind, resource_id = getattr(args, "kind", None), getattr(args, "resource_id", None)
+    if kind and resource_id:
+        target = target.replace(resource_id, _resource_label(args, context, kind, resource_id), 1)
+    if isinstance(args, ArcaneAction) and args.action in {"connect_network", "disconnect_network"}:
+        target = target.rsplit(" → ", 1)[0] + " → " + _resource_label(args, context, "containers", args.name)
+    return target
+
+
 def _result(value: Any) -> Any:
     from mato_loop_backend.tools.contracts import ToolResult
 
@@ -254,7 +305,9 @@ async def arcane_environments(args: ArcaneInstance, context: Any) -> Any:
     try:
         async with _client(args, context) as client:
             items = await _environments(client)
-        return _result([_public(item, "environments") for item in items])
+        safe = [_public(item, "environments") for item in items]
+        await _remember_resources(args, context, "environments", safe)
+        return _result(safe)
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
@@ -270,7 +323,9 @@ async def arcane_list(args: ArcaneList, context: Any) -> Any:
             data = []
         if not isinstance(data, list) or len(data) > args.limit:
             raise ArcaneError("integration.invalidResponse")
-        return _result({"items": [_public(item, args.kind) for item in data], "pagination": pagination})
+        safe = [_public(item, args.kind) for item in data]
+        await _remember_resources(args, context, args.kind, safe)
+        return _result({"items": safe, "pagination": pagination})
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
@@ -283,6 +338,7 @@ async def arcane_get(args: ArcaneGet, context: Any) -> Any:
             path = f"/environments/{args.environment_id}/{args.kind}/{segment(args.resource_id)}"
             data, _ = await client.request("GET", path + (f"/{args.view}" if args.view != "summary" else ""))
         safe = _public(data, args.kind)
+        await _remember_resources(args, context, args.kind, [{**safe, "id": args.resource_id}])
         if args.view == "updates" and isinstance(data.get("updateInfo"), dict):
             info = data["updateInfo"]
             safe["updateInfo"] = {key: info[key] for key in ("status", "hasUpdate", "imageCount", "imagesWithUpdates", "imagesNotPulled", "errorCount")
@@ -316,7 +372,9 @@ async def arcane_project_config(args: ArcaneProjectConfig, context: Any) -> Any:
         binding = _project_snapshot_context(args, context, args.project_id)
         async with _client(args, context) as client:
             data, _ = await client.request("GET", f"/environments/{args.environment_id}/projects/{segment(args.project_id)}/compose", max_bytes=MAX_CONFIG_RESPONSE_BYTES)
-        return _result(project_snapshot(configuration(data), **binding))
+        snapshot = configuration(data)
+        await _remember_resources(args, context, "projects", [{"id": args.project_id, "name": snapshot.get("name")}])
+        return _result(project_snapshot(snapshot, **binding))
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
@@ -362,7 +420,9 @@ async def arcane_project_save(args: ArcaneProjectSave, context: Any) -> Any:
                 data, _ = await client.request("PUT", path, body=body, max_bytes=MAX_CONFIG_RESPONSE_BYTES)
             else:
                 data, _ = await client.request("POST", path, multipart={"project": body, "manifest": {"fileChanges": []}})
-        return _result({"saved": True, "project": _public(data, "projects"), "deploymentRequired": True})
+        project = _public(data, "projects")
+        await _remember_resources(args, context, "projects", [project])
+        return _result({"saved": True, "project": project, "deploymentRequired": True})
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
@@ -456,6 +516,8 @@ def _permission(args: ArcaneInstance, context: Any, capability: str, operation: 
     instance, revision = _binding(context, args.integration_id)
     material = args.model_dump_json(exclude_unset=True)
     target_key = hashlib.sha256(target.encode()).hexdigest()[:24]
+    target_display = _target_display(args, context, target)
+    environment = _resource_label(args, context, "environments", args.environment_id) if isinstance(args, ArcaneEnvironment) else "Instanz"
     label = {
         "start": "Container starten", "stop": "Container stoppen", "restart": "Container neu starten",
         "pause": "Container pausieren", "unpause": "Container fortsetzen", "redeploy": "Container erneut bereitstellen",
@@ -472,9 +534,9 @@ def _permission(args: ArcaneInstance, context: Any, capability: str, operation: 
         operation_key=f"arcane:{hashlib.sha256(material.encode()).hexdigest()}",
         resource_key=getattr(args, "environment_id", None),
         grant_resource_key=f"{getattr(args, 'environment_id', 'account')}:{target_key}",
-        resource_display=f'Arcane "{instance.name[:100]}" · {getattr(args, "environment_id", "Instanz")}',
-        title=f"Arcane: {label}?", summary=f"Der Agent möchte {label.lower()}: {target[:160]}.",
-        display_items=(PermissionDisplayItem("Ziel", target[:160]),),
+        resource_display=f'Arcane "{instance.name[:100]}" · {environment}',
+        title=f"Arcane: {label}?", summary=f"Der Agent möchte {label.lower()}: {target_display}.",
+        display_items=(PermissionDisplayItem("Ziel", target_display),),
     ), sensitive_access=sensitive_access),)
 
 

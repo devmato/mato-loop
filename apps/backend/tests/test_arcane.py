@@ -8,6 +8,7 @@ import httpx
 import pytest
 from aiohttp import web
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.integrations.arcane.adapter as arcane_module
 import mato_loop_backend.integrations.arcane.client as arcane_client
@@ -114,6 +115,13 @@ def test_arcane_actions_and_permissions_are_target_bound():
     assert permission.policy_resource_key == "0"
     assert "db/data" in permission.summary
     assert segment("db/data") == "db%2Fdata"
+    context.tool_settings = ToolSettings(resource_labels={str(instance.id): {
+        arcane_module._label_key(arguments, revision, "volumes", "db/data"): "Database",
+    }})
+    named = _delete_permission(arguments, context)[0]
+    assert (named.resource_scope, named.session_grants[0].resource_scope) == (
+        permission.resource_scope, permission.session_grants[0].resource_scope,
+    )
     deploy = ArcaneAction(integration_id=instance.id, environment_id="0", action="up", resource_id="project")
     assert [request.capability for request in arcane_module._manage_permission(deploy, context)] == ["arcane.manage", "arcane.read"]
     context.bound_options["binding_revision"] = "stale"
@@ -134,6 +142,35 @@ def test_arcane_does_not_release_remote_secrets():
                     "apiKey": "secret", "mounts": [{"source": "/sensitive"}]}, "containers") == {
         "id": "x", "name": "app"
     }
+
+
+@pytest.mark.asyncio
+async def test_arcane_permissions_display_observed_environment_and_project_names(monkeypatch):
+    instance = IntegrationInstance(name="Host", integration_type="infrastructure", adapter_type="arcane",
+                                   config={"base_url": "https://arcane.example.test"})
+    revision = json.dumps(instance.binding_data(), ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    context = SimpleNamespace(db=AsyncMock(spec=AsyncSession), tool_settings=ToolSettings(),
+        integration_settings=IntegrationSettings(instances=[instance]),
+        bound_options={"integration_id": str(instance.id), "binding_revision": revision})
+    context.db.scalar.return_value = None
+    remote = AsyncMock(side_effect=[([{"id": "0", "name": "Docker host"}], None),
+                                   ([{"id": "project-id", "name": "searxng"}], None)])
+
+    @asynccontextmanager
+    async def client(_args, _context):
+        yield SimpleNamespace(request=remote)
+
+    monkeypatch.setattr(arcane_module, "_client", client)
+    await arcane_module.arcane_environments(arcane_module.ArcaneInstance(integration_id=instance.id), context)
+    # The database returns the labels persisted by the preceding authorized call.
+    context.db.scalar.return_value = context.db.add.call_args.args[0]
+    await arcane_list(ArcaneList(integration_id=instance.id, environment_id="0", kind="projects"), context)
+    request = arcane_module._project_config_permission(
+        ArcaneProjectConfig(integration_id=instance.id, environment_id="0", project_id="project-id"), context,
+    )[0]
+    assert (request.resource_display, request.display_items[0].value) == (
+        'Arcane "Host" · Docker host (0)', "searxng (project-id)",
+    )
 
 
 @pytest.mark.asyncio
@@ -231,8 +268,10 @@ async def test_arcane_project_configuration_round_trip_and_update_guards(monkeyp
                                    config={"base_url": "https://arcane.example.test"})
     revision = json.dumps(instance.binding_data(), ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     context = SimpleNamespace(session=SimpleNamespace(id=uuid4()), integration_settings=IntegrationSettings(instances=[instance]), one_time_secrets={},
+                              db=AsyncMock(spec=AsyncSession), tool_settings=ToolSettings(),
                               bound_options={"integration_id": str(instance.id), "binding_revision": revision},
                               ask_handler=AsyncMock(return_value=PermissionDecision.ALLOW))
+    context.db.scalar.return_value = None
     context.current_integrations = AsyncMock(return_value=context.integration_settings)
     config = {"id": "project", "name": "app", "composeContent": "services:\n  app:\n    image: nginx:stable\n    environment:\n      PASSWORD: compose-secret\n      SESSION: YWI=\n",
               "envContent": "PASSWORD=supersecret\nPORT=8080\n",

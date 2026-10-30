@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,9 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.settings.effective import personal_integration_tool_settings
 from mato_loop_backend.settings.models import IntegrationPermissions
+
+if TYPE_CHECKING:
+    from mato_loop_backend.tools.context import ToolContext
 
 
 class IntegrationSettingsError(RuntimeError):
@@ -76,6 +80,23 @@ async def _save_settings(
     owner_id: UUID | None,
 ) -> None:
     await SettingsStore.save(db, settings, user_id=owner_id)
+
+
+async def remember_resource_labels(
+    context: ToolContext, instance: IntegrationInstance, labels: dict[str, str]
+) -> None:
+    if not labels:
+        return
+    tools = await _load_tools(context.db, instance.owner_id, for_update=True)
+    key = str(instance.id)
+    previous = tools.resource_labels.get(key, {})
+    merged = {name: value for name, value in previous.items() if name not in labels} | labels
+    # shortcut: cap labels at 1,000 per integration; add dedicated storage if larger working sets need names.
+    merged = dict(list(merged.items())[-1_000:])
+    if merged != previous:
+        tools.resource_labels[key] = merged
+        await _save_settings(context.db, tools, instance.owner_id)
+    context.tool_settings.resource_labels[key] = merged
 
 
 async def save_with_policy_cleanup(

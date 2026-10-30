@@ -302,6 +302,14 @@ async def execute_definition(
                     return ToolResult.error(
                         "tool.invalidArguments", field=definition.resource_argument
                     )
+            from mato_loop_backend.tools.access import profile_tool_settings
+
+            context.tool_settings = await profile_tool_settings(context)
+            if (
+                context.tool_settings._agent_profile_unavailable
+                or not _tool_available(definition.name, context.tool_settings)
+            ):
+                return ToolResult.error("tool.unavailable")
             requests = definition.authorization_factory(arguments, context)
             if inspect.isawaitable(requests):
                 requests = await requests
@@ -330,14 +338,6 @@ async def execute_definition(
             ):
                 return ToolResult.error("tool.unavailable")
             if resource_key is not None:
-                from mato_loop_backend.tools.access import profile_tool_settings
-
-                context.tool_settings = await profile_tool_settings(context)
-                if (
-                    context.tool_settings._agent_profile_unavailable
-                    or not _tool_available(definition.name, context.tool_settings)
-                ):
-                    return ToolResult.error("tool.unavailable")
                 if self._policy_resolver is not None and any(
                     self._policy_resolver(
                         context.tool_settings,

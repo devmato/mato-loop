@@ -225,6 +225,21 @@ async def test_allowed_resource_is_revalidated_without_metadata_release(prefligh
     )
 
 
+async def test_approval_uses_refreshed_labels_instead_of_batch_settings(preflight, monkeypatch):
+    case = preflight
+    refreshed = ToolSettings(resource_labels={str(case.instance.id): {case.resource.key: "Project name"}})
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=refreshed))
+    request = case.authorization_factory.return_value[0]
+
+    def authorization(_arguments, context):
+        labels = context.tool_settings.resource_labels.get(str(case.instance.id), {})
+        return (replace(request, resource_display=labels.get(case.resource.key, case.resource.key)),)
+
+    case.authorization_factory.side_effect = authorization
+    await case.effective.execute(case.call, case.context)
+    assert case.context.ask_handler.await_args.args[0].resource_display == "Project name"
+
+
 async def test_denied_approval_does_not_fetch_content_or_mutate(preflight):
     case = preflight
     case.context.ask_handler.side_effect = None

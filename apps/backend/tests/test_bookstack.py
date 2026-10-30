@@ -1,12 +1,14 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.integrations.bookstack.adapter as integrations_bookstack_adapter
 import mato_loop_backend.web.fetch as web_fetch
@@ -61,6 +63,7 @@ from mato_loop_backend.integrations.bookstack.client import (
     BookStackShelf,
     BookStackShelfContents,
 )
+from mato_loop_backend.integrations.contracts import IntegrationResource
 from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
     integration_adapter,
@@ -126,7 +129,10 @@ def test_delegation_keeps_removed_resource_limits_visible_to_aggregate_filters()
 
 
 def _context(instance: IntegrationInstance, revision: str) -> SimpleNamespace:
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
     return SimpleNamespace(
+        db=db,
         bound_options={
             "integration_id": str(instance.id),
             "binding_revision": revision,
@@ -313,6 +319,47 @@ def test_book_deletion_displays_the_included_content() -> None:
     ]
 
 
+@pytest.mark.parametrize("kind", ["page", "chapter", "attachment"])
+def test_bookstack_permissions_display_names_from_bound_tokens(kind) -> None:
+    instance = _base()
+    revision = _revision(instance)
+    adapter = integrations_bookstack_adapter
+    resource, token_factory, arguments_model, permission_factory, label, resource_id = {
+        "page": (_page(), adapter._page_token, KnowledgeDeletePageArguments, adapter._delete_page_permission, "Seite", 21),
+        "chapter": (BookStackChapter(id=11, book_id=7, name="Kapitel", slug="kapitel"),
+                    adapter._chapter_token, adapter.KnowledgeDeleteChapterArguments, adapter._delete_chapter_permission, "Kapitel", 11),
+        "attachment": (BookStackAttachment(id=3, page_id=21, name="Anhang", extension="pdf", external=False),
+                       adapter._attachment_token, KnowledgeDeleteAttachmentArguments, adapter._delete_attachment_permission, "Anhang", 3),
+    }[kind]
+    token = token_factory(resource, instance.id, revision, "book:7")
+    arguments = arguments_model(integration_id=instance.id, book_key="book:7", **{f"{kind}_token": token})
+    permission = permission_factory(arguments, _context(instance, revision))[0]
+    assert permission.display_items[0].value == f"{label} (ID {resource_id})"
+
+
+async def test_invalid_page_token_keeps_the_stale_reference_error_through_executor(monkeypatch) -> None:
+    instance = _base()
+    integrations = IntegrationSettings(instances=[instance])
+    settings = ToolSettings()
+    monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
+    monkeypatch.setattr("mato_loop_backend.tools.access.profile_tool_settings", AsyncMock(return_value=settings))
+    discovery = AsyncMock(return_value=(IntegrationResource("book:7", "Handbuch"),))
+    monkeypatch.setattr("mato_loop_backend.tools.executor.integration_adapter",
+                        lambda *_args: replace(BOOKSTACK_ADAPTER, resource_loader=discovery))
+    call = ToolCall("invalid-page", "knowledge_read_page", {
+        "integration_id": str(instance.id), "book_key": "book:7", "page_token": "invalid",
+    })
+    context = ToolContext(
+        db=AsyncMock(spec=AsyncSession), run_id=uuid4(),
+        session=ChatSession(id=uuid4(), user_id=uuid4()), tool_call=call, root_files=None,
+        integration_settings=integrations, tool_settings=settings,
+        ask_handler=AsyncMock(return_value=PermissionDecision.ALLOW),
+    )
+    result = await tool_registry.effective(integrations, tool_settings=settings).execute(call, context)
+    error = json.loads(result.content)["error"]
+    assert (error["code"], error["field"]) == ("integration.staleReference", "page_token")
+
+
 async def test_page_token_is_binding_scoped(monkeypatch) -> None:
     instance = _base()
     revision = _revision(instance)
@@ -451,6 +498,10 @@ async def test_shelf_tools_map_keys_to_bookstack_identifiers(monkeypatch) -> Non
     assert json.loads(listing.content)["shelves"] == [
         {"shelfKey": "shelf:4", "name": "Technik", "description": None}
     ]
+    permission = integrations_bookstack_adapter._delete_shelf_permission(
+        KnowledgeShelfArguments(integration_id=instance.id, shelf_key="shelf:4"), context,
+    )[0]
+    assert permission.display_items[0].value == "Technik (shelf:4)"
 
     contents = await knowledge_read_shelf(
         KnowledgeShelfArguments(integration_id=instance.id, shelf_key="shelf:4"), context

@@ -336,8 +336,11 @@ async def load_effective_tools(
         instance.tool_availability.update(dict.fromkeys(BROWSER_TOOL_ACTIONS, False))
     personal = await SettingsStore.load_optional(db, UserToolSettings, user_id=user_id)
     if personal is not None:
+        shared_labels = instance.resource_labels
         for field in _INTEGRATION_TOOL_FIELDS:
             setattr(instance, field, getattr(personal, field))
+        # Personal settings may contain old copies of shared integration labels.
+        instance.resource_labels = personal.resource_labels | shared_labels
     for branch in (instance.private_permissions, instance.public_permissions):
         branch.policies = {key: value for key, value in branch.policies.items() if key in tool_registry.actions_by_capability}
         branch.integration_policies = {}
