@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,8 @@ class CredentialCipher:
     def __init__(self, key_path: Path | None = None) -> None:
         config = get_runtime_config()
         self.key_path = key_path or config.secrets_dir / "credential.key"
-        self._fernet = Fernet(self._load_or_create_key())
+        self._key = self._load_or_create_key()
+        self._fernet = Fernet(self._key)
 
     def _load_or_create_key(self) -> bytes:
         self.key_path.parent.mkdir(parents=True, exist_ok=True)
@@ -31,6 +33,9 @@ class CredentialCipher:
     def encrypt(self, payload: dict[str, Any]) -> bytes:
         serialized = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode()
         return self._fernet.encrypt(serialized)
+
+    def derive_key(self, context: bytes) -> bytes:
+        return hmac.digest(self._key, context, "sha256")
 
     def decrypt(self, payload: bytes) -> dict[str, Any]:
         value = json.loads(self._fernet.decrypt(payload))

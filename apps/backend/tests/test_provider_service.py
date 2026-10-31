@@ -716,6 +716,7 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(mon
     assert "temperature" not in captured["body"]
     assert "text" not in captured["body"]
     assert captured["body"]["prompt_cache_key"] == "session-1"
+    assert captured["headers"]["session-id"] == "session-1"
     assert captured["body"]["reasoning"]["effort"] == "low"
 
     await ProviderService.complete(

@@ -237,6 +237,8 @@ async def _codex_operation(
         accept="text/event-stream" if request.stream else "application/json",
     )
     headers["OpenAI-Beta"] = "responses=experimental"
+    if request.prompt_cache_key:
+        headers["session-id"] = request.prompt_cache_key
 
     async def execute() -> ProviderResult:
         return await runtime.responses_api(

@@ -44,6 +44,7 @@ from mato_loop_backend.agent.subagents import (
 from mato_loop_backend.agent.tool_round import execute_tool_batch
 from mato_loop_backend.agent.turn_context import build_turn_context
 from mato_loop_backend.agent.turn_tools import select_turn_tools
+from mato_loop_backend.auth.credentials import CredentialCipher
 from mato_loop_backend.automations import AutomationService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
@@ -62,7 +63,7 @@ from mato_loop_backend.models import (
     Project,
     WebSearchPolicy,
 )
-from mato_loop_backend.privacy import ProtectionCache
+from mato_loop_backend.privacy import shared_protection_cache
 from mato_loop_backend.providers.base import ProviderImageInput, ToolCall
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.settings import (
@@ -243,8 +244,12 @@ async def execute_loop_body(
     budget_finalization = False
     truncated_tool_batches = 0
     live_tool_calls: dict[UUID, list[dict[str, Any]]] = {}
-    pseudonymization_key = secrets.token_bytes(32)
-    pseudonymization_cache = ProtectionCache()
+    pseudonymization_key = (
+        CredentialCipher().derive_key(
+            b"matoloop:privacy-session:v1\0" + chat_session.user_id.bytes + chat_session.id.bytes
+        ) if run_pseudonymization_enabled else secrets.token_bytes(32)
+    )
+    pseudonymization_cache = shared_protection_cache()
     session_read_cursors: dict[UUID, UUID | None] = {}
     memory_cache = MemoryCache()
     pdf_cache = {}

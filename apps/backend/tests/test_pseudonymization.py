@@ -183,7 +183,7 @@ def test_run_key_stabilizes_identity_without_sharing_restoration_authority() -> 
         second.restore_text(shared)
 
 
-def test_run_cache_rescans_only_new_text(monkeypatch) -> None:
+def test_protection_cache_rescans_only_new_text_and_separates_keys(monkeypatch) -> None:
     cache = ProtectionCache()
     key = b"r" * 32
     protected = RequestPseudonymizer(key=key, protection_cache=cache).protect_text(
@@ -197,14 +197,18 @@ def test_run_cache_rescans_only_new_text(monkeypatch) -> None:
     assert current.protect_text("anna@example.com") == protected
     assert current.restore_text(protected) == "anna@example.com"
     current.protect_text("new@example.com")
-    assert calls == ["new@example.com"]
+    other = RequestPseudonymizer(key=b"o" * 32, protection_cache=cache)
+    other_protected = other.protect_text("anna@example.com")
+    assert other_protected != protected
+    with pytest.raises(PseudonymizationError):
+        current.restore_value(other_protected)
+    assert calls == ["new@example.com", "anna@example.com"]
 
 
-def test_run_cache_evicts_old_candidates_and_skips_oversized_text(monkeypatch) -> None:
-    monkeypatch.setattr(pseudonymization_module, "_PROTECTION_CACHE_MAX_BYTES", 2048)
+def test_protection_cache_evicts_old_candidates_and_skips_oversized_text(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(pseudonymization_module, "_analyze", lambda text: calls.append(text) or [])
-    cache = ProtectionCache()
+    cache = ProtectionCache(2048)
     candidates = ["a" * 800, "b" * 800, "x" * 4096, "a" * 800]
 
     for text in candidates:

@@ -204,17 +204,26 @@ async def test_truncated_repairs_are_bounded_even_with_unlimited_budget(monkeypa
     tool_registry._execute_definition.assert_not_awaited()
 
 
-async def test_independent_runtime_invocations_do_not_share_privacy_keys(monkeypatch):
+@pytest.mark.parametrize("scope", ["same_session", "other_session", "other_owner"])
+async def test_runtime_privacy_keys_are_owner_and_session_scoped(monkeypatch, scope):
+    owner_id, session_id = uuid4(), uuid4()
     keys = []
-    for _ in range(2):
+    for index in range(2):
         db, run, requests, _projections, _events = await _runtime_setup(
             monkeypatch, [ProviderResult(content="Done")],
             search_policy=WebSearchPolicy.AVAILABLE,
         )
+        session = db.get.return_value
+        session.id = run.session_id = uuid4() if index and scope == "other_session" else session_id
+        session.user_id = uuid4() if index and scope == "other_owner" else owner_id
         await AgentRuntime._execute_loop(db, run)
         keys.append(requests[0]["pseudonymization_key"])
         assert all("pseudonymization_key" not in str(item.provider_data) for item in _assistant_messages(db))
-    assert keys[0] != keys[1]
+    assert (keys[0] == keys[1]) == (scope == "same_session")
+    assert len({id(request["pseudonymization_cache"]) for request in requests}) == 1
+    if scope == "same_session":
+        from mato_loop_backend.privacy import shared_protection_cache
+        assert requests[0]["pseudonymization_cache"] is shared_protection_cache()
 
 
 async def test_alternative_edit_patch_repair_retains_original_failure(monkeypatch):

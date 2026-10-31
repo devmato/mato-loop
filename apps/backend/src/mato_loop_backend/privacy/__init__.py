@@ -3,6 +3,7 @@ from mato_loop_backend.privacy.pseudonymization import (
     PseudonymizationError,
     RequestPseudonymizer,
     StreamingPseudonymRestorer,
+    shared_protection_cache,
 )
 
 __all__ = [
@@ -10,4 +11,5 @@ __all__ = [
     "PseudonymizationError",
     "RequestPseudonymizer",
     "StreamingPseudonymRestorer",
+    "shared_protection_cache",
 ]

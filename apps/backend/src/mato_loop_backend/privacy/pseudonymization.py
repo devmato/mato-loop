@@ -25,13 +25,17 @@ from presidio_analyzer.predefined_recognizers import (
 )
 
 _PROTECTION_CACHE_MAX_BYTES = 16 * 1024 * 1024
+_SESSION_PROTECTION_CACHE_MAX_BYTES = 64 * 1024 * 1024
 
 
 class ProtectionCache:
-    def __init__(self) -> None:
-        self._entries: OrderedDict[tuple[str, str | None], tuple[str, dict[str, str], int]] = OrderedDict()
+    def __init__(self, max_bytes: int = _PROTECTION_CACHE_MAX_BYTES) -> None:
+        self._entries: OrderedDict[
+            tuple[bytes, str, str | None], tuple[str, dict[str, str], int]
+        ] = OrderedDict()
         self._size_bytes = 0
         self._lock = Lock()
+        self._max_bytes = max_bytes
 
     def get(self, key: tuple[str, str | None]) -> tuple[str, dict[str, str]] | None:
         with self._lock:
@@ -45,17 +49,24 @@ class ProtectionCache:
         # Allow for containers and conservatively count shared strings twice.
         size = (256 + sum(getsizeof(value) for value in (*key, protected)) + getsizeof(originals)
                 + sum(getsizeof(marker) + getsizeof(original) for marker, original in originals.items()))
-        if size > _PROTECTION_CACHE_MAX_BYTES:
+        if size > self._max_bytes:
             return
         with self._lock:
             previous = self._entries.pop(key, None)
             if previous is not None:
                 self._size_bytes -= previous[2]
-            while self._size_bytes + size > _PROTECTION_CACHE_MAX_BYTES:
+            while self._size_bytes + size > self._max_bytes:
                 _, oldest = self._entries.popitem(last=False)
                 self._size_bytes -= oldest[2]
             self._entries[key] = (protected, originals, size)
             self._size_bytes += size
+
+
+_SESSION_PROTECTION_CACHE = ProtectionCache(_SESSION_PROTECTION_CACHE_MAX_BYTES)
+
+
+def shared_protection_cache() -> ProtectionCache:
+    return _SESSION_PROTECTION_CACHE
 
 
 _SECRET_SCAN_LOCK = Lock()
@@ -197,10 +208,11 @@ class RequestPseudonymizer:
         self, *, key: bytes | None = None,
         protection_cache: ProtectionCache | None = None,
     ) -> None:
-        # Protection results and identity keys are run-local; restoration stays request-local.
+        # Restoration is request-local; a shared cache is keyed by an HMAC of this key.
         self._key = key if key is not None else secrets.token_bytes(32)
         self._originals: dict[str, str] = {}
         self._protection_cache = protection_cache
+        self._protection_cache_key = None
 
     @property
     def max_marker_length(self) -> int:
@@ -288,7 +300,12 @@ class RequestPseudonymizer:
         if not text:
             return text
         cache_key = (text, field_name)
-        cached = self._protection_cache.get(cache_key) if self._protection_cache is not None else None
+        cached = None
+        if self._protection_cache is not None:
+            if self._protection_cache_key is None:
+                self._protection_cache_key = hmac.digest(self._key, b"matoloop:privacy-text-cache:v1", "sha256")
+            cache_key = (self._protection_cache_key, *cache_key)
+            cached = self._protection_cache.get(cache_key)
         if cached is not None:
             protected, originals = cached
             self._originals.update(originals)
