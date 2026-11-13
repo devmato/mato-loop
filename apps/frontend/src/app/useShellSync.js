@@ -158,7 +158,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     if (all || resources.has('approvals')) reload('approvals', approvals.fetchPending(config))
     if (all || resources.has('questions')) reload('questions', questions.fetchPending(config))
     if (all || resources.has('notifications')) reload('notifications', notifications.fetchLatest(config))
-    if ((sessionsChanged || resources.has('approvals') || resources.has('questions'))
+    if ((sessionsChanged || resources.has('projects') || resources.has('approvals') || resources.has('questions'))
       && (home.loaded || home.loadRequest)) reload('messages', home.load(config))
     if (sessionsChanged) {
       if (route.name === 'chat' && routeSessionId.value

@@ -9,6 +9,7 @@ import { useControlCenterStore } from 'stores/control-center'
 import { useIntegrationStore } from 'stores/integrations'
 import { useAutomationStore } from 'stores/automations'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
+import { useHomeStore } from 'src/features/home/store'
 import { useRoute } from 'vue-router'
 
 const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, terminal, workspace } = vi.hoisted(() => {
@@ -80,7 +81,10 @@ vi.mock('src/features/chat/store', async () => {
   return { useChatStore: () => store }
 })
 vi.mock('stores/projects', () => ({ useProjectStore: () => projects }))
-vi.mock('src/features/home/store', () => ({ useHomeStore: () => ({ load: vi.fn().mockResolvedValue() }) }))
+vi.mock('src/features/home/store', () => {
+  const store = { loaded: false, load: vi.fn().mockResolvedValue() }
+  return { useHomeStore: () => store }
+})
 vi.mock('stores/approvals', () => ({ useApprovalStore: () => pending }))
 vi.mock('stores/questions', () => ({ useQuestionStore: () => pending }))
 vi.mock('stores/agent-identity', () => ({ useAgentIdentityStore: () => ({ fetchIdentity: vi.fn().mockResolvedValue() }) }))
@@ -132,6 +136,7 @@ let app, root
 beforeEach(async () => {
   vi.clearAllMocks()
   useInAppNotificationStore().unreadCount = 0
+  useHomeStore().loaded = false
   document.head.innerHTML = '<title>MatoLoop</title><link rel="icon" type="image/svg+xml" href="/icons/matoloop.svg">'
   useAutomationStore().items = []
   quasar.dark.isActive = false
@@ -233,6 +238,19 @@ it('refreshes only changed data through SSE without recurring REST polling', asy
   expect([notifications.fetchLatest.mock.calls.length, pending.fetchPending.mock.calls.length,
     projects.fetchAll.mock.calls.length]).toEqual([1, 0, 0])
   visibility.mockRestore()
+})
+
+it('refreshes cached Home sessions on a project-only invalidation while viewing a session', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  const home = useHomeStore()
+  home.loaded = true
+  const load = vi.spyOn(home, 'load').mockResolvedValue()
+  useRoute().query = { session: 'standalone' }
+  try {
+    EventSource.instances[0].emit([{ resource: 'projects' }])
+    await vi.advanceTimersByTimeAsync(50)
+    expect(load).toHaveBeenCalledWith({ suppressErrorToast: true })
+  } finally { load.mockRestore(); visibility.mockRestore() }
 })
 
 it('retries a failed notification reload without polling unrelated resources', async () => {
