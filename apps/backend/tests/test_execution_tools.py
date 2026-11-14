@@ -455,7 +455,7 @@ async def test_workspace_read_dispatches_absolute_filesystem_path(tmp_path) -> N
 async def test_repository_prefetch_does_not_access_unapproved_paths(decision) -> None:
     def stat(arguments):
         path = arguments["path"]
-        if path.endswith("AGENTS.md"):
+        if path.endswith(("AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", "copilot-instructions.md", "/rules", "/instructions")):
             raise ExecutionClientError("file.pathNotFound")
         return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file", size=1, modified_at=0.0)
 
@@ -470,7 +470,7 @@ async def test_repository_prefetch_does_not_access_unapproved_paths(decision) ->
     prompt = await repository_instructions_prompt(client, records, AsyncMock(return_value=decision), checked_entries=checked, discovery_scope=scope)
     assert client.requests == []
     assert "Some repository instructions could not be loaded." in prompt
-    assert list(checked.values()) == [{
+    assert [entry for entry in checked.values() if entry["path"].endswith("/AGENTS.md")] == [{
         "path": directory + "/AGENTS.md", "directory": directory,
         "status": "approval_required" if decision == PermissionDecision.ASK else "denied",
     } for directory in ("/work", "/work/src")]
@@ -479,7 +479,7 @@ async def test_repository_prefetch_does_not_access_unapproved_paths(decision) ->
 async def test_repository_prefetch_reuses_historical_target_discovery() -> None:
     def stat(arguments):
         path = arguments["path"]
-        if path.endswith("AGENTS.md"):
+        if path.endswith(("AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", "copilot-instructions.md", "/rules", "/instructions")):
             raise ExecutionClientError("file.pathNotFound")
         return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file", size=1, modified_at=0.0)
 
@@ -498,7 +498,7 @@ async def test_repository_prefetch_reuses_historical_target_discovery() -> None:
         execution_directory_permission(client.agent_id, "/work/src/new.svg", capability="filesystem.write"),
         client, records, authorize, checked, discovery_scope=scope,
     )
-    assert (warm_requests, len(client.requests) - warm_requests) == (3, 4)
+    assert (warm_requests, len(client.requests) - warm_requests) == (16, 17)
 
 
 async def test_repository_prefetch_preserves_authorization_errors() -> None:
@@ -513,7 +513,7 @@ async def test_repository_prefetch_preserves_authorization_errors() -> None:
 async def test_repository_prefetch_overlaps_authorized_instruction_stats() -> None:
     def stat(arguments):
         path = arguments["path"]
-        if path.endswith("AGENTS.md"):
+        if path.endswith(("AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", "copilot-instructions.md", "/rules", "/instructions")):
             raise ExecutionClientError("file.pathNotFound")
         return WorkspaceStatResult(path=path, kind="file", size=1, modified_at=0.0)
 
@@ -543,6 +543,8 @@ async def test_repository_prefetch_does_not_defer_unchanged_aggregate_size_omiss
 
     def stat(arguments):
         path = arguments["path"]
+        if path.endswith(("CLAUDE.md", "GEMINI.md", ".cursorrules", "copilot-instructions.md", "/rules", "/instructions")):
+            raise ExecutionClientError("file.pathNotFound")
         return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file",
                                    size=len(content), modified_at=0.0)
 
@@ -573,6 +575,8 @@ async def test_repository_prefetch_does_not_defer_unchanged_aggregate_size_omiss
 async def test_repository_prefetch_reports_unreadable_files(kind, size, status) -> None:
     def stat(arguments):
         path = arguments["path"]
+        if path.endswith(("CLAUDE.md", "GEMINI.md", ".cursorrules", "copilot-instructions.md", "/rules", "/instructions")):
+            raise ExecutionClientError("file.pathNotFound")
         if path.endswith("AGENTS.md") and status == "missing":
             raise ExecutionClientError("file.pathNotFound")
         return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else kind,
@@ -607,7 +611,7 @@ async def test_repository_prefetch_stops_at_git_and_permission_boundaries(root, 
     }, {"filesystem.stat", "filesystem.read"}, cwd)
     prompt = await repository_instructions_prompt(client, [], authorize)
     assert (
-        "Do not rediscover AGENTS.md files yourself. "
+        "Do not rediscover repository instruction files yourself. "
         "Read explicitly referenced guidelines when relevant to the current task." in prompt
     )
     assert [entry["path"] for entry in json.loads(prompt.splitlines()[-2])["files"]] == (
@@ -622,6 +626,8 @@ async def test_repository_prefetch_keeps_rules_stable_when_discovery_changes(chi
 
     def stat(arguments):
         path = arguments["path"]
+        if path.endswith(("CLAUDE.md", "GEMINI.md", ".cursorrules", "copilot-instructions.md", "/rules", "/instructions")):
+            raise ExecutionClientError("file.pathNotFound")
         if path == "/work/other/AGENTS.md" or (path == "/work/src/AGENTS.md" and child_status == "missing"):
             raise ExecutionClientError("file.pathNotFound")
         return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file",
@@ -648,6 +654,8 @@ async def test_repository_prefetch_keeps_rules_stable_when_discovery_changes(chi
 async def test_repository_prefetch_reports_partial_context_budget_omission() -> None:
     def stat(arguments):
         path = arguments["path"]
+        if path.endswith(("CLAUDE.md", "GEMINI.md", ".cursorrules", "copilot-instructions.md", "/rules", "/instructions")):
+            raise ExecutionClientError("file.pathNotFound")
         return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file",
                                    size=2_000, modified_at=0.0)
 
@@ -657,7 +665,7 @@ async def test_repository_prefetch_reports_partial_context_budget_omission() -> 
             lines_read=1, has_more=False, truncated_lines=[], sha256="a" * 64,
         )
 
-    fits = AsyncMock(side_effect=lambda context: len(context) < 1_500)
+    fits = AsyncMock(side_effect=lambda context: len(context) < 2_500)
 
     client = FakeExecutionClient({"filesystem.stat": stat, "filesystem.read": read},
                                  {"filesystem.stat", "filesystem.read"}, "/work")
@@ -667,6 +675,156 @@ async def test_repository_prefetch_reports_partial_context_budget_omission() -> 
     )
     assert "Some repository instructions could not be loaded." in prompt
     assert fits.await_count == 2
+
+
+def _repository_client(files: dict[str, str], root: str = "/work") -> FakeExecutionClient:
+    def directories():
+        return {"/".join(file.split("/")[:index])
+                for file in files for index in range(2, len(file.split("/")))}
+
+    def stat(arguments):
+        path = arguments["path"]
+        if path in files:
+            return WorkspaceStatResult(path=path, kind="file", size=len(files[path].encode()), modified_at=0.0)
+        if path == root + "/.git" or path in directories():
+            return WorkspaceStatResult(path=path, kind="directory", size=None, modified_at=0.0)
+        raise ExecutionClientError("file.pathNotFound")
+
+    def listing(arguments):
+        path = arguments["path"]
+        return WorkspaceListResult(entries=[
+            {"name": child.rsplit("/", 1)[-1], "path": child,
+             "kind": "file" if child in files else "directory",
+             "size": len(files[child].encode()) if child in files else None, "modifiedAt": 0.0}
+            for child in sorted(set(files) | directories()) if child.rsplit("/", 1)[0] == path
+        ], has_more=False)
+
+    def read(arguments):
+        return WorkspaceReadResult(content=files[arguments["path"]], lines_read=1, has_more=False,
+                                   truncated_lines=[], sha256="a" * 64)
+
+    return FakeExecutionClient(
+        {"filesystem.stat": stat, "filesystem.list": listing, "filesystem.read": read},
+        {"filesystem.stat", "filesystem.list", "filesystem.read"}, root,
+    )
+
+
+@pytest.mark.parametrize("root", ["/work", "C:/work"])
+async def test_repository_prefetch_loads_portable_main_files_in_their_repository_scope(root) -> None:
+    files = {root + "/" + path: path for path in (
+        "AGENTS.md", "CLAUDE.md", "GEMINI.md", ".claude/CLAUDE.md",
+        ".github/copilot-instructions.md", ".cursorrules", "src/CLAUDE.md",
+    )}
+    client = _repository_client(files, root)
+    prompt = await repository_instructions_prompt(
+        client, [], AsyncMock(return_value=PermissionDecision.ALLOW), target_paths=(root + "/src/main.py",),
+    )
+    assert {entry["path"]: (entry["directory"], entry["content"])
+            for entry in json.loads(prompt.splitlines()[-2])["files"]} == {
+        path: (root + "/src" if path == root + "/src/CLAUDE.md" else root, content)
+        for path, content in files.items()
+    }
+
+
+@pytest.mark.parametrize("target,expected", [
+    ("src/main.py", {"copilot", "claude", "cursor", "always"}),
+    ("src/nested/main.pyi", {"copilot", "claude", "always"}),
+    ("app/(auth)/page.py", {"copilot", "claude", "always"}),
+    ("README.md", {"always"}),
+])
+async def test_repository_prefetch_respects_path_patterns_and_cursor_activation(target, expected) -> None:
+    client = _repository_client({
+        "/work/AGENTS.md": "Root",
+        "/work/.github/instructions/backend/python.instructions.md": '---\napplyTo: "src/**/*.{py,pyi},app/(auth)/**/*.py"\n---\ncopilot',
+        "/work/.claude/rules/python.md": '---\npaths:\n  - "**/*.{py,pyi}"\n---\nclaude',
+        "/work/.claude/rules/global.md": "---\n---\nempty-frontmatter",
+        "/work/.cursor/rules/python.mdc": '---\nglobs: "src/*.py"\nalwaysApply: false\n---\ncursor',
+        "/work/.cursor/rules/always.mdc": '---\nalwaysApply: true\nglobs: "unrelated/**"\n---\nalways',
+        "/work/.cursor/rules/manual.mdc": "---\n---\nDo not apply manual content automatically.",
+        "/work/.cursor/rules/relevant.mdc": '---\ndescription: "Database migrations"\n---\nDo not apply relevant content automatically.',
+        "/work/.cursor/rules/ignored.md": "Wrong extension",
+    })
+    prompt = await repository_instructions_prompt(
+        client, [], AsyncMock(return_value=PermissionDecision.ALLOW), target_paths=("/work/" + target,),
+    )
+    payload = json.loads(prompt.splitlines()[-2])
+    assert (
+        {entry["content"] for entry in payload["files"]},
+        {(entry["activation"], entry["description"]) for entry in payload["availableRules"]},
+    ) == (expected | {"Root", "empty-frontmatter"}, {("manual", ""), ("relevant", "Database migrations")})
+
+
+async def test_repository_prefetch_retains_root_rules_at_the_directory_limit() -> None:
+    files = {
+        "/work/.github/copilot-instructions.md": "Repository-wide Copilot rules.",
+        "/work/.cursorrules": "Repository-wide Cursor rules.",
+    }
+    prompt = await repository_instructions_prompt(
+        _repository_client(files), [], AsyncMock(return_value=PermissionDecision.ALLOW),
+        target_paths=tuple(f"/work/directory-{index}/main.py" for index in range(63)),
+    )
+    assert all(content in prompt for content in files.values())
+
+
+@pytest.mark.parametrize("change", ["created", "modified", "deleted", "permission_revoked"])
+async def test_repository_prefetch_revalidates_scoped_rules_before_effects(change) -> None:
+    rule_path = "/work/.github/instructions/python.instructions.md"
+    files = {rule_path: '---\napplyTo: "src/**/*.py"\n---\nUse typed functions.'} if change != "created" else {}
+    client = _repository_client(files)
+    records = [SimpleNamespace(id=uuid4(), role="tool", error_code=None, provider_data={"_matoloop": {
+        "computerRead": {"executionAgentId": str(client.agent_id), "currentDirectory": "/work", "path": "/work/src/main.py"},
+    }})]
+    revoked = False
+
+    async def authorize(request):
+        return PermissionDecision.DENY if revoked and json.loads(request.resource_scope)["path"] == rule_path else PermissionDecision.ALLOW
+
+    checked = {}
+    await repository_instructions_prompt(client, records, authorize, checked_entries=checked)
+    if change == "deleted":
+        del files[rule_path]
+    elif change == "permission_revoked":
+        revoked = True
+    else:
+        files[rule_path] = '---\napplyTo: "src/**/*.py"\n---\nUpdated instructions.'
+    _, deferred = await check_repository_instruction_targets(
+        execution_directory_permission(client.agent_id, "/work/src/main.py", capability="filesystem.write"),
+        client, records, authorize, checked,
+    )
+    assert deferred
+
+
+@pytest.mark.parametrize("metadata", [
+    "applyTo: [", "applyTo: true", 'applyTo: "**"\napplyTo: "other/**"',
+    'applyTo: &glob "**"\nother: *glob', 'applyTo: "!private/**"',
+    'applyTo: "src/@(main|test)/**"',
+])
+async def test_repository_prefetch_does_not_promote_invalid_scoped_rules_to_global(metadata) -> None:
+    client = _repository_client({
+        "/work/.github/instructions/invalid.instructions.md": f"---\n{metadata}\n---\nInvalid rules.",
+    })
+    prompt = await repository_instructions_prompt(client, [], AsyncMock(return_value=PermissionDecision.ALLOW))
+    assert prompt == "Some repository instructions could not be loaded. Do not assume the supplied rules are complete."
+
+
+@pytest.mark.parametrize("blocked", [
+    "/work/.github/instructions", "/work/.github/instructions/python.instructions.md",
+])
+async def test_repository_prefetch_authorizes_rule_listing_and_contents_independently(blocked) -> None:
+    client = _repository_client({
+        "/work/.github/instructions/python.instructions.md": '---\napplyTo: "**"\n---\nPrivate rules.',
+    })
+
+    async def authorize(request):
+        return PermissionDecision.ASK if json.loads(request.resource_scope)["path"] == blocked else PermissionDecision.ALLOW
+
+    prompt = await repository_instructions_prompt(
+        client, [], authorize, target_paths=("/work/main.py",),
+    )
+    assert (
+        prompt == "Some repository instructions could not be loaded. Do not assume the supplied rules are complete."
+        and not any(arguments["path"] == blocked for _operation, arguments in client.requests)
+    )
 
 
 async def test_workspace_read_sends_generated_image_to_model(tmp_path) -> None:

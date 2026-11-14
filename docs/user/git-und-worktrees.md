@@ -10,6 +10,16 @@ Git läuft auf dem ausgewählten Computer mit dessen Git-Installation und Anmeld
 
 Git-App und Befehlspalette allein erzeugen keinen Chat. Erst Sessionstart oder Agentenauftrag speichert die Unterhaltung.
 
+## Repository-Regeln verwenden
+
+Lege gemeinsame Coding-Vorgaben bevorzugt in `AGENTS.md` ab. Vorhandene Regeln anderer Coding-Werkzeuge musst du nicht kopieren: **Plan** und **Build** berücksichtigen auch `CLAUDE.md`, `GEMINI.md`, `.claude/CLAUDE.md`, `.github/copilot-instructions.md` und `.cursorrules`. Bei eigenen Agenten steuerst du das mit **Repository-Regeln automatisch laden** im Agenteneditor.
+
+Regeln in Unterverzeichnissen gelten nur dort und darunter. Zusätzlich berücksichtigt MatoLoop passende Dateimuster aus `.github/instructions/**/*.instructions.md` (`applyTo`), `.claude/rules/**/*.md` (`paths`) und `.cursor/rules/**/*.mdc` (`globs`). Die Muster beziehen sich auf die Repository-Wurzel beziehungsweise das Verzeichnis mit `.claude` oder `.cursor`, nicht auf den Ablageordner der einzelnen Regeldatei. Cursor-Regeln mit `alwaysApply: true` gelten ohne Dateimuster. Regeln nur mit Beschreibung werden dem Agenten zur passenden Auswahl angeboten; manuelle Cursor-Regeln liest er erst, wenn du sie ausdrücklich mit Namen oder Pfad anforderst.
+
+Alle passenden Dateien ergänzen sich. Spezifischere Verzeichnisregeln gehen allgemeineren vor; bei ungelösten Widersprüchen soll der Agent nachfragen. Lege deshalb dieselbe Vorgabe nicht in mehreren Dateien unterschiedlich ab.
+
+Die Dateien brauchen normale Leserechte auf dem gewählten Computer; zusätzliche Regelordner brauchen auch Rechte zum Auflisten. MatoLoop lädt weder persönliche Regeln aus deinem Homeverzeichnis noch symbolische Links automatisch. Herstellerspezifische Einstellungen wie `excludeAgent` und automatische `@`-Importe werden nicht ausgewertet. Referenzierte Richtlinien kann der Agent bei Bedarf mit den normalen Dateitools lesen. Bei fehlenden Rechten, ungültigen Regeln oder erreichten Größen- und Kontextgrenzen erhält das Modell einen Hinweis auf unvollständige Regeln. Das Einlesen ersetzt keine technische Durchsetzung und erteilt keine zusätzlichen Toolrechte.
+
 ## Änderungen ansehen
 
 **Git > Änderungen** vergleicht HEAD mit dem aktuellen Arbeitsstand. Die Liste enthält staged und unstaged Änderungen sowie neue, nicht ignorierte Dateien des Repositorys oder Worktrees. Auch eigene, bereits vorhandene Änderungen zählen mit. Die Zahlen sind kein Änderungsprotokoll einzelner KI-Antworten.
