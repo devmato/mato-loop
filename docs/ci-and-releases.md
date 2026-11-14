@@ -33,7 +33,7 @@ Pull requests run the complete test and production-image build path, but registr
 
 ## Runner Requirements
 
-GitHub workflows use GitHub-hosted `ubuntu-latest` runners. Native test jobs keep the same pinned toolchains and system packages as the Forgejo jobs. The migration job publishes its PostgreSQL service port and connects through `localhost`; Forgejo job containers use the `db` hostname.
+GitHub workflows use GitHub-hosted `ubuntu-latest` runners, plus `windows-latest` for native browser verification. The Windows job installs pinned Playwright and matching Chromium and verifies setup, automation, authenticated streaming, file staging and chat isolation. It gates image builds and publication alongside the Linux jobs. Linux native test jobs keep the same pinned toolchains and system packages as the Forgejo jobs. The migration job publishes its PostgreSQL service port and connects through `localhost`; Forgejo job containers use the `db` hostname.
 
 The GitHub Agent test step runs its installed virtual-environment Python as root, matching the development container and supporting device-node and ownership fixtures. Image builds and publication copy the caller's Docker `config.json` into a private temporary directory so existing runner authentication remains available; cleanup removes only the temporary copy. No personal Docker Hub token is required by these workflows, and Docker Hub transport or rate-limit failures can still occur.
 

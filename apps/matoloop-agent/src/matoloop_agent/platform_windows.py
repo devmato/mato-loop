@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from .browser_contracts import BROWSER_ARGUMENT_MODELS
+from .browser_windows import WindowsBrowserManager
 from .cache_windows import WindowsCache
 from .config import AgentConfig
 from .credentials_windows import WindowsCredentialStore
@@ -150,6 +152,19 @@ class WindowsPlatform:
         return {"started": True}
 
     def run_auxiliary(self, command: str, arguments: list[str]) -> bool:
+        if command in {"browser-install", "browser-setup", "browser-worker"}:
+            from .browser_windows import contain_process_tree
+
+            contain_process_tree()
+        if command in {"browser-install", "browser-setup"}:
+            from .browser_windows import finish_setup
+
+            raise SystemExit(asyncio.run(finish_setup(install_packages=command == "browser-setup")))
+        if command == "browser-worker":
+            from .browser_worker import serve
+
+            asyncio.run(serve(Path(arguments[0])))
+            return True
         return False
 
     def build_runtime(
@@ -210,10 +225,11 @@ class WindowsPlatform:
             process=process,
             terminal=unavailable,
             search=WindowsSearch(filesystem),
-            browser=unavailable,
+            browser=WindowsBrowserManager(config, None, filesystem),
             openscad=unavailable,
             transfer=transfer,
             operations=operations
+            + tuple(sorted(BROWSER_ARGUMENT_MODELS))
             + (
                 ("maintenance.start", "maintenance.update.interrupt")
                 if self._maintenance_available(config)

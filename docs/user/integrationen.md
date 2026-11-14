@@ -29,7 +29,7 @@ Zugangsdaten werden verschlüsselt gespeichert und nicht wieder im Klartext ange
 | tbs.Desk | Basis-URL | Benutzername und Passwort |
 | OpenCode | Basis-URL | Benutzername und optionales Passwort |
 | OpenSCAD | Eigener verbundener Linux-Computer | Geprüfter Binary-Pfad über **Erkennen** |
-| Browser | Eigener verbundener Linux-Computer | [Browser einrichten](browser.md#browser-einrichten) |
+| Browser | Eigener verbundener Linux- oder Windows-Computer | [Browser einrichten](browser.md#browser-einrichten) |
 | SearXNG | Globale Serveradresse mit aktivierter JSON-Schnittstelle | Je nach Server |
 | Jina Reader | Globale Reader-Basis-URL | Optionaler API-Schlüssel; [Webabrufe konfigurieren](webrecherche-und-quellen.md#webabrufe-konfigurieren) |
 

@@ -198,7 +198,7 @@ After material edits, render the exact entrypoint/project and inspect geometry d
 
 ## Browser
 
-The personal Linux Agent adapter binds one owned computer and disposable browser per chat/computer. Ordinary use includes website JavaScript; unrestricted Python has separate permission and worker-account OS authority. Build-based profiles default to automatic browser use outside `ask_all`; other profiles ask. Python defaults to ask everywhere. Explicit overrides remain authoritative.
+The personal Linux/Windows Agent adapter binds one owned computer and disposable browser per chat/computer. Ordinary use includes website JavaScript; unrestricted Python has separate permission and worker-account OS authority. Build-based profiles default to automatic browser use outside `ask_all`; other profiles ask. Python defaults to ask everywhere. Explicit overrides remain authoritative.
 
 Model tools do not require an open viewer. Native setup is explicit; containers contain the shared runtime. [browser.md](browser.md) owns isolation, input fencing, grants, transfer, cancellation and deployment limits. Upgrade effects are linked from the [upgrade guide](user/aktualisierung.md#browserrechte-und-alte-websiteprofile).
 

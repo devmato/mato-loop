@@ -7,7 +7,8 @@
       </q-card-section>
       <q-card-section class="q-pt-none">
         <div role="status" aria-live="polite">{{ browserStatusLabel(setup.status) }}</div>
-        <div class="text-caption app-muted">Die Einrichtung verwendet ein eigenes Terminal, unabhängig vom Chat. Ein angefordertes sudo-Passwort hier eingeben. Schließen beendet die Einrichtung nicht.</div>
+        <div v-if="interactive" class="text-caption app-muted">Die Einrichtung verwendet ein eigenes Terminal, unabhängig vom Chat. Ein angefordertes sudo-Passwort hier eingeben. Schließen beendet die Einrichtung nicht.</div>
+        <div v-else class="text-caption app-muted">Die Windows-Einrichtung läuft ohne Eingaben und ohne Administratorrechte. Hier siehst du den Fortschritt. Schließen beendet die Einrichtung nicht.</div>
         <div v-if="setup.status?.browserVersion" class="text-caption">Chromium: {{ setup.status.browserVersion }}</div>
         <div v-if="setup.status?.playwrightVersion" class="text-caption">Playwright: {{ setup.status.playwrightVersion }}</div>
         <div v-if="setup.status?.missing?.length" class="text-caption">Fehlende Komponenten: {{ setup.status.missing.join(', ') }}</div>
@@ -33,7 +34,7 @@ import { useBrowserSetupStore } from 'stores/browser-setup'
 import { browserStatusLabel } from 'src/features/browser/helpers'
 import { useConfirm } from 'src/composables/confirm'
 
-const props = defineProps({ modelValue: Boolean, integrationId: { type: String, required: true } })
+const props = defineProps({ modelValue: Boolean, integrationId: { type: String, required: true }, interactive: { type: Boolean, default: true } })
 defineEmits(['update:modelValue'])
 const setup = useBrowserSetupStore()
 const { confirm } = useConfirm()
@@ -46,7 +47,7 @@ function initialize() {
   viewerGeneration = setup.generation
   Terminal.strings.promptLabel = 'Eingabe für die Browser-Einrichtung'
   Terminal.strings.tooMuchOutput = 'Zu viel Ausgabe für die vollständige Sprachausgabe.'
-  terminal = new Terminal({ screenReaderMode: true, convertEol: false, cursorBlink: true,
+  terminal = new Terminal({ screenReaderMode: true, convertEol: !props.interactive, cursorBlink: true,
     disableStdin: true, scrollback: 5000, minimumContrastRatio: 4.5,
     theme: { background: '#111318', foreground: '#f1f3f5' } })
   fit = new FitAddon()
@@ -55,7 +56,7 @@ function initialize() {
   const instance = terminal
   const generation = viewerGeneration
   terminal.onData((data) => {
-    if (terminal === instance && setup.generation === generation && !writing) setup.input(data)
+    if (props.interactive && terminal === instance && setup.generation === generation && !writing) setup.input(data)
   })
   observer = new ResizeObserver(resize)
   observer.observe(host.value)
@@ -70,7 +71,10 @@ function resize() {
 
 async function start() {
   const generation = setup.generation
-  if (await confirm('Die Browser-Komponenten werden auf diesem Computer installiert. Dafür können Administratorrechte erforderlich sein.', 'Browser einrichten?', { okLabel: 'Einrichten' })
+  const message = props.interactive
+    ? 'Die Browser-Komponenten werden auf diesem Computer installiert. Dafür können Administratorrechte erforderlich sein.'
+    : 'Die Browser-Komponenten werden ohne Administratorrechte im Konto des Windows-Agents installiert.'
+  if (await confirm(message, 'Browser einrichten?', { okLabel: 'Einrichten' })
     && generation === setup.generation && props.modelValue) setup.start()
 }
 
@@ -91,8 +95,11 @@ watch(() => setup.buffer, (value, previous) => {
   writing += 1
   instance.write(append ? value.slice(previous.length) : value, () => { if (terminal === instance) writing -= 1 })
 })
-watch(() => [setup.connected, setup.status?.state], () => {
-  if (terminal) terminal.options.disableStdin = !setup.connected || setup.status?.state !== 'installing'
+watch(() => [props.interactive, setup.connected, setup.status?.state], () => {
+  if (terminal) {
+    terminal.options.disableStdin = !props.interactive || !setup.connected || setup.status?.state !== 'installing'
+    terminal.options.convertEol = !props.interactive
+  }
   resize()
 })
 onBeforeUnmount(dispose)

@@ -455,11 +455,37 @@ try {
     if ($LASTEXITCODE) { Fail 'Could not determine the Agent version.' }
     if ($managedSource) { Remove-Item -LiteralPath $checkout -Recurse -Force }
     $checkout = $snapshot
-    & $uv sync --directory (Join-Path $checkout 'apps\matoloop-agent') --frozen --no-dev --no-editable --active --refresh-package matoloop-agent --refresh-package matoloop-version
+    $browserInstallation = Join-Path $root 'tools\browser'
+    $browserArguments = @()
+    if ((Test-Path -LiteralPath $browserInstallation -PathType Container) -and
+        (Test-Path -LiteralPath (Join-Path $checkout 'apps\matoloop-agent\src\matoloop_agent\browser_windows.py') -PathType Leaf)) {
+        $browserArguments = @('--group', 'browser')
+    }
+    & $uv sync --directory (Join-Path $checkout 'apps\matoloop-agent') --frozen --no-dev --no-editable --active --refresh-package matoloop-agent --refresh-package matoloop-version @browserArguments
     if ($LASTEXITCODE) { Fail 'Could not prepare the new Agent environment.' }
     $executable = Join-Path $newVenv 'Scripts\matoloop-agent.exe'
     & $executable --help | Out-Null
     if ($LASTEXITCODE) { Fail 'The new Agent executable failed its startup check.' }
+    if ($browserArguments.Count) {
+        $browserEnvironment = @{
+            MATOLOOP_BROWSER_DATA_DIR = $data
+            MATOLOOP_BROWSER_ROOT = (Join-Path $data 'tools\browser-update')
+            MATOLOOP_BROWSER_INSTALLATION = $browserInstallation
+        }
+        $previousBrowserEnvironment = @{}
+        try {
+            foreach ($name in $browserEnvironment.Keys) {
+                $previousBrowserEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+                [Environment]::SetEnvironmentVariable($name, $browserEnvironment[$name], 'Process')
+            }
+            & $executable browser-install
+            if ($LASTEXITCODE) { Fail 'The new Agent browser failed its startup check.' }
+        } finally {
+            foreach ($name in $previousBrowserEnvironment.Keys) {
+                [Environment]::SetEnvironmentVariable($name, $previousBrowserEnvironment[$name], 'Process')
+            }
+        }
+    }
     $configFile = Join-Path $data 'config.json'
     $config = if (Test-Path -LiteralPath $configFile) {
         Get-Content -LiteralPath $configFile -Raw -Encoding UTF8 | ConvertFrom-Json

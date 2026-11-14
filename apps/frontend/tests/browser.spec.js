@@ -1,16 +1,30 @@
 // @vitest-environment jsdom
-import { createPinia, setActivePinia } from 'pinia'
+import { createApp, h, nextTick, onMounted } from 'vue'
+import { createPinia, getActivePinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useBrowserStore } from '../src/stores/browser'
 import { useBrowserSetupStore } from '../src/stores/browser-setup'
 import { browserNavigationUrl, browserSocketUrl, clipboardFits } from '../src/features/browser/helpers'
 import { FakeWebSocket } from './terminal-websocket'
+import BrowserSetupDialog from '../src/features/browser/BrowserSetupDialog.vue'
 
-const { api, notifyError, viewers } = vi.hoisted(() => ({
-  api: { get: vi.fn(), put: vi.fn(), post: vi.fn() }, notifyError: vi.fn(), viewers: []
+const { api, notifyError, viewers, terminals } = vi.hoisted(() => ({
+  api: { get: vi.fn(), put: vi.fn(), post: vi.fn() }, notifyError: vi.fn(), viewers: [], terminals: []
 }))
 vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError }))
+vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: vi.fn() }) }))
+vi.mock('@xterm/xterm', () => ({ Terminal: class {
+  static strings = {}
+  constructor(options) { this.options = options; terminals.push(this) }
+  loadAddon() {}
+  open() {}
+  onData(callback) { this.input = callback }
+  dispose() {}
+  reset() {}
+  write(_text, callback) { callback?.() }
+} }))
+vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
 vi.mock('../src/features/browser/view', () => ({ BrowserView: class extends EventTarget {
   constructor(host, url) {
     super()
@@ -35,11 +49,41 @@ beforeEach(() => {
   setActivePinia(createPinia())
   FakeWebSocket.instances = []
   viewers.length = 0
+  terminals.length = 0
   vi.stubGlobal('WebSocket', FakeWebSocket)
   browser = useBrowserStore()
   browser.setDisplayedSession(context.sessionId)
 })
 afterEach(() => { browser.release(); useBrowserSetupStore().release(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+it('keeps Windows setup output read-only while installation is running', async () => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+  const root = document.createElement('div')
+  document.body.append(root)
+  const app = createApp({ render: () => h(BrowserSetupDialog, {
+    modelValue: true, integrationId: 'browser-1', interactive: false
+  }) }).use(getActivePinia())
+  const container = { setup: (_props, { slots }) => () => h('div', slots.default?.()) }
+  for (const name of ['QCard', 'QCardSection', 'QBtn', 'QBanner', 'QCardActions']) app.component(name, container)
+  app.component('QDialog', { setup: (_props, { slots, emit }) => {
+    onMounted(() => emit('show'))
+    return () => h('div', slots.default?.())
+  } })
+  app.directive('close-popup', {})
+  app.config.globalProperties.$q = { screen: { lt: { sm: false } } }
+  try {
+    app.mount(root)
+    const setup = useBrowserSetupStore()
+    setup.socket.open()
+    setup.socket.message({ type: 'state', state: 'installing' })
+    await nextTick()
+    terminals[0].input('ignored')
+    expect({
+      disabled: terminals[0].options.disableStdin,
+      input: setup.socket.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter(message => message.type === 'input')
+    }).toEqual({ disabled: true, input: [] })
+  } finally { app.unmount(); root.remove() }
+})
 
 async function open() {
   browser.connect(context)
