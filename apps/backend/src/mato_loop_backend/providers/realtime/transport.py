@@ -37,7 +37,7 @@ class RealtimeSessionConfig(BaseModel):
             "type": "realtime",
             "model": self.model,
             "instructions": self.instructions,
-            "output_modalities": ["audio"],
+            "output_modalities": ["text"],
             "audio": {
                 "input": {
                     "transcription": {"model": self.transcription_model},

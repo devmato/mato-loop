@@ -109,6 +109,7 @@ class ToolContext:
     # Host preparation survives approval edits; edited values must not be prepared twice.
     prepared_arguments: dict[str, str] = field(default_factory=dict)
     repository_target_paths: tuple[str, ...] = ()
+    handler_started: Callable[[], None] | None = None
 
     async def configured_integrations(self) -> IntegrationSettings:
         from mato_loop_backend.agent.subagents import integration_ceiling_ids

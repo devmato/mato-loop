@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { toRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { notifyError } from 'src/utils/notifications'
 import { useChatStore } from 'src/features/chat/store'
@@ -39,7 +40,7 @@ export const useVoiceStore = defineStore('voice', {
         },
         onClose: () => { if (generation === this.generation) void this.end() }
       })
-      clients.set(this, client)
+      clients.set(toRaw(this.$state), client)
       try { await client.start(sessionId) } catch {
         if (generation === this.generation) await this.end()
         // Axios already displayed the controlled API error.
@@ -47,13 +48,13 @@ export const useVoiceStore = defineStore('voice', {
     },
     toggleMute() {
       this.muted = !this.muted
-      clients.get(this)?.mute(this.muted)
+      clients.get(toRaw(this.$state))?.mute(this.muted)
     },
-    interrupt() { clients.get(this)?.interrupt() },
+    interrupt() { clients.get(toRaw(this.$state))?.interrupt() },
     disposeLocal() {
       this.generation += 1
-      clients.get(this)?.close()
-      clients.delete(this)
+      clients.get(toRaw(this.$state))?.close()
+      clients.delete(toRaw(this.$state))
       this.phase = 'ended'
       this.sessionId = null
       this.connectionId = null

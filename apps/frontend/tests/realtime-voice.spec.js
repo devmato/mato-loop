@@ -75,7 +75,7 @@ describe('Realtime microphone and media lifecycle', () => {
     const root = document.createElement('div')
     const app = createApp(VoicePanel)
     app.use(pinia)
-    for (const name of ['QBanner', 'QList', 'QItem', 'QItemSection', 'QItemLabel']) {
+    for (const name of ['QBanner', 'QCard', 'QCardSection', 'QBadge', 'QList', 'QItem', 'QItemSection', 'QItemLabel']) {
       app.component(name, { render() { return h('div', this.$slots.default?.()) } })
     }
     for (const name of ['QIcon', 'QSpinner', 'QBtn']) app.component(name, { render: () => null })
@@ -109,22 +109,27 @@ describe('Realtime microphone and media lifecycle', () => {
     const voice = useVoiceStore()
     voice.$patch({
       sessionId: 'chat', phase: 'listening', wakeLockActive: false,
-      tasks: [{ taskId: 'task', sessionId: 'chat', runId: 'run', status: 'waiting_approval', active: true, requiresUi: true }]
+      tasks: [
+        { taskId: 'task', sessionId: 'chat', runId: 'run', status: 'waiting_approval', active: true, requiresUi: true },
+        { taskId: 'completed', sessionId: 'chat', status: 'completed', active: false }
+      ]
     })
     api.post.mockResolvedValue({})
     const root = document.createElement('div')
     const app = createApp(VoicePanel)
     app.use(pinia)
-    for (const name of ['QBanner', 'QList', 'QItem', 'QItemSection', 'QItemLabel']) {
+    for (const name of ['QBanner', 'QCard', 'QCardSection', 'QBadge', 'QList', 'QItem', 'QItemSection', 'QItemLabel']) {
       app.component(name, { render() { return h('div', this.$slots.default?.()) } })
     }
     app.component('QIcon', { render: () => null })
+    app.component('QSpinner', { render: () => null })
     app.component('QDialog', { render: () => null })
     app.component('QBtn', { props: ['label'], render() { return h('button', this.label) } })
     try {
       const panel = app.mount(root)
       expect(root.textContent).toContain('Beantworte die Freigabe oder Rückfrage hier im Chat.')
-      expect(root.textContent).toContain('Bildschirm kann sich sperren.')
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(root.textContent).not.toContain('Sprachauftrag · Abgeschlossen')
       const buttons = [...root.querySelectorAll('button')]
       expect(buttons.some((button) => button.textContent === 'Öffnen')).toBe(false)
       buttons.find((button) => button.textContent === 'Stoppen').click()
@@ -160,6 +165,21 @@ describe('Realtime microphone and media lifecycle', () => {
     expect(socket.close).toHaveBeenCalledOnce()
     expect(peer.close).toHaveBeenCalledOnce()
     expect(wakeLock.release).toHaveBeenCalledOnce()
+  })
+
+  it('mutes the active microphone across Pinia action proxies and control updates', async () => {
+    setActivePinia(createPinia())
+    const voice = useVoiceStore()
+    api.post.mockResolvedValue({ data: { connectionId: 'connection', sdpAnswer: 'v=0\r\nanswer' } })
+    try {
+      await voice.start.call(new Proxy(voice, {}), 'chat')
+      peer.connectionState = 'connected'
+      peer.onconnectionstatechange()
+      socket.onmessage({ data: JSON.stringify({ phase: 'listening' }) })
+      voice.toggleMute()
+      socket.onmessage({ data: JSON.stringify({ phase: 'speaking' }) })
+      expect(track.enabled).toBe(false)
+    } finally { await voice.end() }
   })
 
   it.each(['unsupported', 'denied', 'released'])('keeps voice usable and reports an %s screen wake lock', async (state) => {

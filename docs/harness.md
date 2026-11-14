@@ -82,8 +82,9 @@ The projection uses the shared profile runtime-instruction helper and contains
 the selected profile/persona, project instructions,
 eligible maintained session context, a bounded earlier summary and recent
 user/assistant text. The stable voice contract requests German-only speech with
-clear, neutral Standard German pronunciation and no foreign accent. This is a
-model instruction, not acoustic accent validation. Updating this contract
+clear, neutral Standard German pronunciation and no foreign accent. Spoken
+progress updates use natural first-person phrasing without status labels or
+task-record narration. These are model instructions, not acoustic validation. Updating this contract
 invalidates earlier voice prompt prefixes; existing calls keep their original
 instructions until explicitly restarted.
 Public voice models exclude private history/context and any
@@ -98,7 +99,18 @@ MatoLoop does not archive voice audio.
 The only model-facing voice tool is `agent_task`: delegate, status, explicit
 correction or stop. It revalidates the live source binding before effects and
 uses durable call-operation deduplication. At most one linked task is active
-per source chat. Work runs through normal agent admission in that same chat,
+per source chat. Completed function-call items are dispatched before the whole
+Realtime response finishes. Every user turn first generates a text-only decision,
+with no audio output. Only after the decision and any task admission finish does
+the host request speech, overriding the response to audio with tools disabled.
+This prevents a spoken preamble from delaying task admission; accepted work can
+continue during acknowledgement. Direct conversational answers also use this
+extra decision/speech round. Silent assistant drafts remain provider-local, not
+canonical chat messages. Incomplete calls are not dispatched; response completion
+remains a deduplicated fallback. Tool-output continuations wait until response
+generation and audio playback are idle. The phase instructions intentionally
+change the stable voice prompt prefix for newly started calls.
+Work runs through normal agent admission in that same chat,
 using its profile, model policy, project, permissions and computer/directory.
 Only the live connection with a persisted, exact task/run reservation may bypass
 the normal voice/run exclusion. Spoken task text is not parsed as a profile-switch
@@ -110,6 +122,11 @@ It is not a native child/subagent lifecycle. Pending approvals and structured
 questions are handled here in the normal chat UI; spoken consent never resolves them.
 Voice corrections recheck pending UI state against a fresh run under normal
 continuation-admission locks before a continuation can supersede a waiter.
+The browser keys its local media client by the raw Pinia state rather than
+per-action store proxies, so microphone mute, interrupt and teardown operate
+on the same active connection. Successful task entries leave the control list
+after five seconds; failures and pending interactions remain visible, and no
+persistent task or chat result is deleted.
 
 Interrupting speech, ending voice or losing the browser does not cancel accepted
 work. Voice can be explicitly restarted while its own task continues. Explicit
@@ -141,6 +158,17 @@ worktree's own development database. A real provider acceptance test additionall
 requires configured deployments, a safely stored key and explicit authorization
 for provider charges; mocked protocol tests cannot establish region/model
 availability, actual audio quality, autoplay behavior or end-to-end latency.
+
+### Independent tool reads
+
+Existing independent Microsoft 365 read calls in one model response can overlap
+in groups of up to four, without new aggregate queries or changes to tool schemas.
+Discovery and pagination still follow their normal data dependencies. The host
+requires explicit opt-in for database-independent read handlers; authorization
+and canonical result persistence stay serial. Other tools drain pending reads
+before execution. See [parallel reads](tool-permissions.md#parallel-reads) for the
+handler contract. This reduces overlapping external-request latency, not model
+generation or context-preparation time.
 
 ### Message queue
 
@@ -299,7 +327,7 @@ Inactive capability hints retain installed tool names with compact settings/prof
 
 Microsoft 365 calendar-write and To Do tools, including the task-list completion filter, and signature-aware composition guidance intentionally change the offered integration schemas and inactive-tool inventory prefix. Subsequent rounds retain their stable order. Configured signatures are returned by account discovery as turn-local tool data, not embedded into changing tool schemas or reconstructed historical turns.
 
-Microsoft 365 collections return basic fields, with individual details loaded explicitly. The existing session-result reference projection replaces their encrypted resource tokens with short deterministic references in both live and persisted history. This intentionally changes earlier projected Microsoft 365 result prefixes; canonical stored results remain unchanged. Resolving a reference still requires its original successful tool result in the current session, then current connection, permission and version checks. It does not confer authority or cache authorization.
+Microsoft 365 collections return basic fields, bounded mail/calendar previews and task notes/recurrence-presence indicators; [detail reads](integrations.md#microsoft-365) are needed only for missing information. This guidance intentionally changes the offered tool-description prefix. Richer results append to their originating exchanges; historical results are not enriched from current remote state. The existing session-result reference projection replaces encrypted resource tokens with short deterministic references in both live and persisted history. This intentionally changes earlier projected Microsoft 365 result prefixes; canonical stored results remain unchanged. Resolving a reference still requires its original successful tool result in the current session, then current connection, permission and version checks. It does not confer authority or cache authorization.
 
 ### Stability and isolation rules
 

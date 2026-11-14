@@ -187,6 +187,7 @@ class ToolDefinition:
     requires_permission_reason: bool = False
     snapshot_policy: ToolSnapshotPolicy | None = None
     output_preview: bool = True  # Host-only; does not bypass visibility checks or context budgets.
+    parallel_read: bool = False
 
     def schema(self) -> dict[str, Any]:
         if self.arguments_schema is not None:

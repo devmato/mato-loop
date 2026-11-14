@@ -1,7 +1,9 @@
+import asyncio
 import base64
 import hashlib
 import json
 import time
+from dataclasses import replace
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,7 +15,9 @@ import pytest
 from fastapi import FastAPI, Response
 from fastapi.testclient import TestClient
 from PIL import Image
+from runtime_helpers import _runtime_setup, _tool_messages
 
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError, register_error_handlers
 from mato_loop_backend.api.routes import mail as mail_routes
 from mato_loop_backend.api.routes import microsoft365 as routes
@@ -24,19 +28,24 @@ from mato_loop_backend.integrations.microsoft365 import adapter, client, oauth, 
 from mato_loop_backend.integrations.microsoft365 import mail as graph_mail
 from mato_loop_backend.integrations.registry import effective_integration_contributions
 from mato_loop_backend.integrations.service import IntegrationSettingsError
-from mato_loop_backend.models import Credential, UserAccount
+from mato_loop_backend.models import Credential, UserAccount, WebSearchPolicy
 from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.permissions.resolution import tool_execution_policy
-from mato_loop_backend.providers.base import ToolCall
+from mato_loop_backend.providers.base import ProviderResult, ToolCall
+from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.security import CredentialCipher
 from mato_loop_backend.settings import (
     InstanceLimits,
     IntegrationInstance,
     IntegrationSettings,
+    SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
     UserIntegrationSettings,
 )
+from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.references import model_tool_references
 from mato_loop_backend.tools.registry import ToolRegistry
 
@@ -72,6 +81,192 @@ def account(flow="device_code"):
         credential_id=uuid4(),
         config={"tenant_id": str(uuid4()), "client_id": str(uuid4()), "auth_flow": flow},
     )
+
+
+async def _parallel_todo_runtime(monkeypatch, count):
+    instance = account()
+    instance.config["read_tasks"] = True
+    response = ProviderResult(tool_calls=[
+        ToolCall(str(index), "m365_todo", {
+            "integration_id": str(instance.id), "operation": "list_lists", "limit": index,
+        })
+        for index in range(1, count + 1)
+    ])
+    execute = tool_registry._execute_definition
+    db, run, *_ = await _runtime_setup(
+        monkeypatch, [response, ProviderResult(content="Done")],
+        search_policy=WebSearchPolicy.DISABLED, input_budget_tokens=100_000,
+    )
+    db.get.return_value.user_id = instance.owner_id
+    load_optional = SettingsStore.load_optional
+
+    async def personal_integrations(db, kind, **kwargs):
+        if kind is UserIntegrationSettings:
+            return UserIntegrationSettings(instances=[instance])
+        return await load_optional(db, kind, **kwargs)
+
+    monkeypatch.setattr(SettingsStore, "load_optional", personal_integrations)
+    monkeypatch.setattr(tool_registry, "_execute_definition", execute)
+    monkeypatch.setattr(AgentRuntime, "_authorize", AsyncMock(return_value=PermissionDecision.ALLOW))
+    monkeypatch.setattr(organizer, "access_token", AsyncMock(return_value="access"))
+    return db, run, response.tool_calls
+
+
+@pytest.mark.usefixtures("skill_library")
+async def test_existing_todo_reads_overlap_with_a_bound_and_keep_result_order(monkeypatch):
+    db, run, calls = await _parallel_todo_runtime(monkeypatch, 6)
+    gates = {4: asyncio.Event(), 6: asyncio.Event()}
+    completed = {4: asyncio.Event(), 6: asyncio.Event()}
+    active, completion_order = set(), []
+    peak = 0
+
+    async def page(_client, _path, _model, *, params, **kwargs):
+        nonlocal peak
+        index = params["$top"]
+        end = 4 if index <= 4 else 6
+        active.add(index)
+        peak = max(peak, len(active))
+        if index == end:
+            gates[end].set()
+        await gates[end].wait()
+        if index != end:
+            await completed[end].wait()
+        active.remove(index)
+        completion_order.append(str(index))
+        if index == end:
+            completed[end].set()
+        return [], None
+
+    refreshing = False
+
+    async def refresh(_session):
+        nonlocal refreshing
+        assert not refreshing
+        refreshing = True
+        await asyncio.sleep(0)
+        refreshing = False
+
+    db.refresh.side_effect = refresh
+    monkeypatch.setattr(client.GraphClient, "page", page)
+    await asyncio.wait_for(AgentRuntime._execute_loop(db, run), timeout=10)
+    assert peak == 4, [(message.tool_call_id, message.content) for message in _tool_messages(db)]
+    assert completion_order != [call.id for call in calls]
+    assert [message.tool_call_id for message in _tool_messages(db)] == [call.id for call in calls]
+
+
+@pytest.mark.usefixtures("skill_library")
+@pytest.mark.parametrize("misdeclared_write", [False, True])
+async def test_non_read_tool_drains_reads_before_starting_the_next_group(monkeypatch, misdeclared_write):
+    db, run, calls = await _parallel_todo_runtime(monkeypatch, 3)
+    calls.insert(2, ToolCall("barrier", "silence", {}))
+    second_started = asyncio.Event()
+    active, trace = set(), []
+
+    async def page(_client, _path, _model, *, params, **kwargs):
+        index = params["$top"]
+        active.add(index)
+        trace.append(f"start:{index}")
+        if index == 1:
+            await second_started.wait()
+        elif index == 2:
+            second_started.set()
+        active.remove(index)
+        trace.append(f"end:{index}")
+        return [], None
+
+    async def barrier(_arguments, _context):
+        assert not active
+        trace.append("barrier")
+        return ToolResult.json({})
+
+    monkeypatch.setattr(client.GraphClient, "page", page)
+    monkeypatch.setitem(tool_registry._definitions, "silence", replace(
+        tool_registry._definitions["silence"], handler=barrier, parallel_read=misdeclared_write,
+        actions=(ToolAction("tasks.write", "Aufgaben ändern", category="write", mutates=True),),
+    ))
+    await asyncio.wait_for(AgentRuntime._execute_loop(db, run), timeout=10)
+    assert trace.index("end:1") < trace.index("barrier") < trace.index("start:3")
+
+
+@pytest.mark.usefixtures("skill_library")
+@pytest.mark.parametrize("decision,executed", [
+    (PermissionDecision.USER_DENIED, []),
+    (PermissionDecision.DENY, [2]),
+])
+async def test_parallel_reads_keep_denials_before_effects(monkeypatch, decision, executed):
+    db, run, _calls = await _parallel_todo_runtime(monkeypatch, 2)
+    page = AsyncMock(return_value=([], None))
+    monkeypatch.setattr(client.GraphClient, "page", page)
+    monkeypatch.setattr(AgentRuntime, "_authorize", AsyncMock(side_effect=[
+        decision, PermissionDecision.ALLOW,
+    ]))
+    await AgentRuntime._execute_loop(db, run)
+    assert [call.kwargs["params"]["$top"] for call in page.call_args_list] == executed
+
+
+@pytest.mark.usefixtures("skill_library")
+async def test_cancelling_a_run_joins_started_parallel_reads(monkeypatch):
+    db, run, _calls = await _parallel_todo_runtime(monkeypatch, 2)
+    started, cancelled = set(), set()
+    both_started = asyncio.Event()
+
+    async def page(_client, _path, _model, *, params, **kwargs):
+        index = params["$top"]
+        started.add(index)
+        if len(started) == 2:
+            both_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.add(index)
+
+    monkeypatch.setattr(client.GraphClient, "page", page)
+    execution = asyncio.create_task(AgentRuntime._execute_loop(db, run))
+    try:
+        await asyncio.wait_for(both_started.wait(), timeout=10)
+    finally:
+        execution.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await execution
+    assert cancelled == {1, 2}
+
+
+@pytest.mark.usefixtures("skill_library")
+async def test_rejected_read_waits_for_earlier_parallel_results(monkeypatch):
+    db, run, calls = await _parallel_todo_runtime(monkeypatch, 2)
+    read_started = False
+    release = asyncio.Event()
+
+    async def page(_client, _path, _model, *, params, **kwargs):
+        nonlocal read_started
+        if params["$top"] == 2:
+            raise client.Microsoft365Error("microsoft365.invalidResponse")
+        read_started = True
+        await release.wait()
+        return [], None
+
+    async def refresh(_session):
+        if read_started:
+            release.set()
+
+    db.refresh.side_effect = refresh
+    monkeypatch.setattr(ProviderService, "complete", AsyncMock(side_effect=[
+        ProviderResult(tool_calls=[
+            ToolCall("previous-failure", calls[1].name, dict(calls[1].arguments)),
+        ]),
+        ProviderResult(tool_calls=calls),
+        ProviderResult(content="Done"),
+    ]))
+    monkeypatch.setattr(client.GraphClient, "page", page)
+    await asyncio.wait_for(AgentRuntime._execute_loop(db, run), timeout=10)
+    assert [
+        (message.tool_call_id, message.provider_data["_matoloop"].get("errorCode"))
+        for message in _tool_messages(db)
+    ] == [
+        ("previous-failure", "microsoft365.invalidResponse"),
+        ("1", None),
+        ("2", "agent.repeatedToolCall"),
+    ]
 
 
 @pytest.fixture
@@ -789,10 +984,15 @@ async def test_graph_tools_read_own_mailbox_with_bound_pagination_and_plain_text
             return httpx.Response(200, json={"value": []})
         assert request.url.path == "/v1.0/me/mailFolders/inbox/messages"
         assert request.url.params["$search"] == '"subject:invoice"'
+        assert {"bodyPreview", "importance"} <= set(request.url.params["$select"].split(","))
         return httpx.Response(
             200,
             json={
-                "value": [{"id": "message-id", "subject": "Invoice"}],
+                "value": [
+                    {"id": "message-id", "subject": "Invoice", "importance": "high", "bodyPreview": "Preview " * 100},
+                    {"id": "empty", "bodyPreview": ""},
+                    {"id": "unknown"},
+                ],
                 "@odata.nextLink": next_link,
             },
         )
@@ -800,6 +1000,9 @@ async def test_graph_tools_read_own_mailbox_with_bound_pagination_and_plain_text
     transport(remote)
     args = adapter.SearchArguments(integration_id=instance.id, query="subject:invoice")
     page = json.loads((await adapter.search(args, context)).content)
+    assert [item.get("bodyPreview") for item in page["messages"]] == [("Preview " * 100)[:255], "", None]
+    assert page["messages"][0]["importance"] == "high"
+    assert len(requests) == 1
     message_token, cursor = page["messages"][0]["messageToken"], page["nextCursor"]
     assert next_link not in cursor
     message = json.loads(
@@ -950,7 +1153,7 @@ async def test_conversation_includes_sent_mail_and_binds_continuation_to_message
         assert request.url.path == "/v1.0/me/messages"
         assert request.url.params["$filter"] == "conversationId eq 'thread''id'"
         return httpx.Response(200, json={
-            "value": [{"id": "sent", "subject": "Re: Request", "body": {"contentType": "text", "content": "Our reply"}}],
+            "value": [{"id": "sent", "subject": "Re: Request", "bodyPreview": "Our reply", "body": {"contentType": "text", "content": "Our reply"}}],
             "@odata.nextLink": client.GRAPH_BASE + "/me/messages?$skiptoken=next",
         })
 
@@ -958,6 +1161,7 @@ async def test_conversation_includes_sent_mail_and_binds_continuation_to_message
     args = adapter.MessageArguments(integration_id=instance.id, message_token=adapter._encode(instance, "message", "source"), view="conversation")
     result = json.loads((await adapter.get_message(args, context)).content)
     assert "body" not in result["messages"][0]
+    assert result["messages"][0]["bodyPreview"] == "Our reply"
     detail = json.loads((await adapter.get_message(args.model_copy(update={
         "message_token": result["messages"][0]["messageToken"], "view": "message",
     }), context)).content)
@@ -1188,11 +1392,14 @@ async def test_calendar_view_uses_offset_period_and_query_bound_paging(transport
         if "$skiptoken" in request.url.params:
             return httpx.Response(200, json={"value": []})
         assert request.url.params["startDateTime"] == "2026-11-11T00:00:00+01:00"
+        assert {"bodyPreview", "importance", "organizer", "showAs"} <= set(request.url.params["$select"].split(","))
         return httpx.Response(200, json={"value": [{
             "id": "occurrence", "subject": "Standup",
             "start": {"dateTime": "2026-11-11T09:00:00", "timeZone": "UTC"},
             "end": {"dateTime": "2026-11-11T09:30:00", "timeZone": "UTC"},
             "body": {"contentType": "text", "content": "Agenda"},
+            "bodyPreview": "Agenda " * 100, "importance": "high", "showAs": "busy",
+            "organizer": {"emailAddress": {"name": "Organizer", "address": "organizer@example.com"}},
         }], "@odata.nextLink": client.GRAPH_BASE + "/me/calendar/calendarView?$skiptoken=next"})
 
     transport(remote)
@@ -1203,6 +1410,12 @@ async def test_calendar_view_uses_offset_period_and_query_bound_paging(transport
     assert permission.capability == "calendar.read"
     page = json.loads((await adapter.read_calendar(args, context)).content)
     assert not {"body", "id", "attendees", "recurrence", "changeKey"} & page["events"][0].keys()
+    assert page["events"][0]["bodyPreview"] == ("Agenda " * 100)[:255]
+    assert {key: page["events"][0][key] for key in ("importance", "showAs", "organizer")} == {
+        "importance": "high", "showAs": "busy",
+        "organizer": {"emailAddress": {"name": "Organizer", "address": "organizer@example.com"}},
+    }
+    assert len(requests) == 2
     transport(lambda _request: httpx.Response(200, json={
         **organizer_resource("event"), "id": "occurrence", "body": {"contentType": "text", "content": "Agenda"},
     }))
@@ -1502,6 +1715,7 @@ async def test_todo_tokens_and_pagination_remain_owner_and_query_bound(transport
     projected = model_tool_references("m365_todo", content, uuid4())
     assert len(json.loads(projected)["resources"]) == 60 and len(projected) <= 16_000
     assert not {"id", "body", "recurrence", "@odata.etag", "lastModifiedDateTime"} & page["resources"][0].keys()
+    assert json.loads(projected)["resources"][0]["hasNotes"] is True
     detail = json.loads((await organizer.read_todo(organizer.TodoRead(
         integration_id=instance.id, operation="get", resource_token=page["resources"][0]["resourceToken"],
     ), context)).content)
@@ -1511,6 +1725,27 @@ async def test_todo_tokens_and_pagination_remain_owner_and_query_bound(transport
     assert result.is_error and "staleReference" in result.content
     with pytest.raises(client.Microsoft365Error, match="staleReference"):
         organizer._todo_reference(todo_token(account()), instance)
+
+
+@pytest.mark.parametrize(("fields", "expected"), [
+    ({}, {"hasNotes": None}),
+    ({"body": None, "recurrence": None}, {"hasNotes": None, "isRecurring": False}),
+    ({"body": {"contentType": "text", "content": " \n "}}, {"hasNotes": False}),
+    ({"body": {"contentType": "text", "content": "Notes"}}, {"hasNotes": True}),
+    ({"body": {"contentType": "html", "content": "<div><p>&nbsp;</p></div>"}}, {"hasNotes": False}),
+    ({"body": {"contentType": "html", "content": '<div><img src="cid:image"></div>'}}, {"hasNotes": True}),
+    ({"recurrence": {
+        "pattern": {"type": "daily", "interval": 1},
+        "range": {"type": "noEnd", "startDate": "2026-11-14"},
+    }}, {"hasNotes": None, "isRecurring": True}),
+])
+def test_task_summary_distinguishes_empty_notes_from_unknown_and_media(fields, expected):
+    summary = organizer._resource(
+        "task", "/me/todo/lists/list/tasks/task",
+        organizer.Task.model_validate({**organizer_resource("task"), **fields}),
+        account(), summary=True,
+    )
+    assert {key: value for key, value in summary.items() if key in {"hasNotes", "isRecurring"}} == expected
 
 
 @pytest.mark.parametrize(("option", "required"), [

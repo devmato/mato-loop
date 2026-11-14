@@ -172,6 +172,8 @@ class Message(_Remote):
     isRead: bool = False
     hasAttachments: bool = False
     body: Body | None = None
+    bodyPreview: str | None = None
+    importance: str | None = Field(default=None, max_length=128)
     conversationId: str | None = Field(default=None, max_length=4096)
     isDraft: bool = False
 
@@ -212,6 +214,8 @@ class Event(_Remote):
     location: Location | None = None
     organizer: Recipient | None = None
     body: Body | None = None
+    bodyPreview: str | None = None
+    importance: str | None = Field(default=None, max_length=128)
     changeKey: str | None = Field(default=None, max_length=4096)
     type: str = Field(default="singleInstance", max_length=128)
     seriesMasterId: str | None = Field(default=None, max_length=4096)
@@ -220,7 +224,7 @@ class Event(_Remote):
     recurrence: dict[str, Any] | None = None
 
 
-SUMMARY_FIELDS = "id,subject,from,toRecipients,receivedDateTime,isRead,hasAttachments,conversationId,isDraft"
+SUMMARY_FIELDS = "id,subject,from,toRecipients,receivedDateTime,isRead,hasAttachments,conversationId,isDraft,importance,bodyPreview"
 RemoteModel = TypeVar("RemoteModel", bound=BaseModel)
 
 

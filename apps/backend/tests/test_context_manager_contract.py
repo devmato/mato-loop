@@ -969,7 +969,7 @@ async def test_selected_computer_metadata_does_not_relocate_session_files(bound)
 @pytest.mark.parametrize("serialize, history_key", [
     (service_module._chat_body, "messages"), (service_module._responses_body, "input"),
 ])
-@pytest.mark.parametrize("large_result", [None, "shell", "mcp", "text", "browser", "attachment", "m365_todo"])
+@pytest.mark.parametrize("large_result", [None, "shell", "mcp", "text", "browser", "attachment", "m365_todo", "m365_search", "m365_calendar"])
 async def test_recorded_computers_preserve_provider_request_prefix(serialize, history_key, large_result) -> None:
     session = _session()
     agent_id = uuid4()
@@ -979,13 +979,24 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
                                    execution_agent_id=agent_id, execution_agent_connected=True)
     records = [_message(session.id, "user", "Inspect the computer.")]
     bodies = []
+    collection = {
+        "m365_todo": ("resources", "resourceToken", "task"),
+        "m365_search": ("messages", "messageToken", "mail"),
+        "m365_calendar": ("events", "eventToken", "event"),
+    }.get(large_result)
     for index in range(2):
         call = _message(session.id, "assistant", "")
-        call.tool_calls = [{"id": str(index), "name": "m365_todo" if large_result == "m365_todo" else "browser" if large_result == "browser" else "shell_run",
+        call.tool_calls = [{"id": str(index), "name": large_result if collection else "browser" if large_result == "browser" else "shell_run",
                             "arguments": {"command": "pwd"}}]
         result = _message(session.id, "tool", "/work")
-        if large_result == "m365_todo":
-            result.content = json.dumps({"resources": [{"title": "Task", "resourceToken": "encrypted-token" * 1000}]})
+        if collection:
+            items, token, prefix = collection
+            result.content = json.dumps({items: [{
+                "title" if items == "resources" else "subject": "Item",
+                token: "encrypted-token" * 1000,
+                **({"hasNotes": False, "isRecurring": False} if items == "resources"
+                   else {"bodyPreview": "Known preview", "importance": "high"}),
+            }]})
         elif large_result == "attachment":
             attachment = _attach_image(result)
             attachment.kind = "file"
@@ -1005,9 +1016,9 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
         result.tool_call_id = str(index)
         result.provider_data = {"_matoloop": {"executionAgentId": str(agent_id), "executionAgentAlias": "Server"}}
         records.extend([call, result])
-        if large_result == "m365_todo":
+        if collection:
             compact = json.loads(_projection_messages(system, None, records, TrustLevel.PRIVATE)[-1]["content"])
-            assert compact["resources"][0]["resourceToken"] == f"task:{result.id}:0"
+            assert compact[items][0][token] == f"{prefix}:{result.id}:0"
         elif large_result == "attachment":
             assert "Do not call provide_file" in message_dict(result)["content"]
         elif large_result:

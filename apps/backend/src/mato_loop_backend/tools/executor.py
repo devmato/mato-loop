@@ -69,6 +69,7 @@ async def execute_definition(
     definition = tool.definition
     context.bound_options = dict(tool.selected_options)
     browser_requests: tuple[PermissionRequest, ...] = ()
+    diagnostic_owner = None
 
     if not _tool_available(definition.name, context.tool_settings):
         return ToolResult.error("tool.unavailable")
@@ -408,6 +409,10 @@ async def execute_definition(
             return ToolResult.json({"permissionsReady": True, "executed": False}) if (
                 selected_integration_id is not None or aggregate_integration_ids
             ) else ToolResult.error("permission.preflightUnavailable")
+        if handler_started := getattr(context, "handler_started", None):
+            # Serial preparation may refresh the shared ORM session during handler I/O.
+            diagnostic_owner = (context.session.user_id, context.session.id)
+            handler_started()
         result = await definition.handler(arguments, context)
         if definition.releases_private_data and not result.is_error:
             result.metadata["privateIntegrationData"] = True
@@ -447,8 +452,10 @@ async def execute_definition(
     except Exception as exc:
         logger.exception("Tool %s failed", call.name)
         schedule_diagnostic_event(
-            context.session.user_id, "tool.failed", component="tool",
-            session_id=context.session.id, run_id=context.run_id, correlation_id=call.id,
+            diagnostic_owner[0] if diagnostic_owner else context.session.user_id,
+            "tool.failed", component="tool",
+            session_id=diagnostic_owner[1] if diagnostic_owner else context.session.id,
+            run_id=context.run_id, correlation_id=call.id,
             payload={
                 "name": call.name,
                 "errorCode": "tool.executionFailed",

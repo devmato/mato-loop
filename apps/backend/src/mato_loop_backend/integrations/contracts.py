@@ -91,6 +91,7 @@ class ToolContribution:
     permission_reason_instruction: str | None = None
     snapshot_policy: ToolSnapshotPolicy | None = None
     output_preview: bool = True
+    parallel_read: bool = False
 
 
 @dataclass(frozen=True, slots=True)

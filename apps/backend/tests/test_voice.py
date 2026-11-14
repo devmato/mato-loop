@@ -102,7 +102,7 @@ async def begin(tree):
         result = await tree.coordinator.start(db, tree.session.id, tree.user.id, "v=0\r\n", tree.model.id)
     live = next(iter(tree.coordinator.live.values()))
     await tree.queue.put(SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps({
-        "type": "session.updated", "session": {"audio": {"input": {"turn_detection": {"type": "server_vad"}}}, "tools": [delegation.TASK_TOOL]},
+        "type": "session.updated", "session": {"audio": {"input": {"turn_detection": {"type": "server_vad"}}}, "output_modalities": ["text"], "tools": [delegation.TASK_TOOL]},
     })))
     for _ in range(100):
         if live.phase != "starting":
@@ -123,6 +123,7 @@ async def test_voice_admission_transcript_deduplication_and_barge_in(voice_db):
         with pytest.raises(AgentRunError, match="voice.busy"):
             await AgentRuntime.start(db, tree.session, "No reserved task.", voice_connection_id=live.id)
     await tree.coordinator.event(live, {"type": "input_audio_buffer.speech_started", "item_id": "user-1"})
+    await tree.coordinator.event(live, {"type": "response.created", "response": {"metadata": {"matoloop_phase": "speech"}}})
     await tree.coordinator.event(live, {"type": "response.output_item.added", "item": {"id": "assistant-1", "type": "message", "role": "assistant"}})
     await tree.coordinator.event(live, {"type": "response.output_audio_transcript.done", "item_id": "assistant-1", "transcript": "Generated reply"})
     await tree.coordinator.event(live, {"type": "conversation.item.input_audio_transcription.completed", "item_id": "user-1", "transcript": "Hello"})
@@ -134,8 +135,11 @@ async def test_voice_admission_transcript_deduplication_and_barge_in(voice_db):
         assert [(message.role, message.content, message.generation_status) for message in messages] == [
             ("user", "Hello", "completed"), ("assistant", "Generated reply", "interrupted"), ("user", "", "interrupted"),
         ]
+    await tree.coordinator.event(live, {"type": "response.done", "response": {"status": "cancelled"}})
+    await tree.coordinator.event(live, {"type": "response.created", "response": {"metadata": {"matoloop_phase": "speech"}}})
     await tree.coordinator.event(live, {"type": "response.output_item.added", "item": {"id": "assistant-2", "type": "message", "role": "assistant"}})
     await tree.coordinator.event(live, {"type": "response.output_audio_transcript.done", "item_id": "assistant-2", "transcript": "Heard reply"})
+    await tree.coordinator.event(live, {"type": "response.done", "response": {"status": "completed", "output": []}})
     await tree.coordinator.event(live, {"type": "output_audio_buffer.stopped"})
     await tree.coordinator.interrupt(live)
     await tree.coordinator.event(live, {"type": "response.created"})
@@ -310,6 +314,9 @@ async def test_cancelled_responses_never_dispatch_partial_function_calls():
     coordinator._mark_interrupted = AsyncMock()
     coordinator._task = AsyncMock()
     live = SimpleNamespace(response_active=True, output_item=None)
+    await coordinator.event(live, {"type": "response.output_item.done", "item": {
+        "type": "function_call", "status": "incomplete", "name": "agent_task", "arguments": "{}",
+    }})
     await coordinator.event(live, {"type": "response.done", "response": {
         "status": "cancelled", "output": [{"type": "function_call", "name": "agent_task", "arguments": "{}"}],
     }})
@@ -357,27 +364,66 @@ async def test_disabling_a_live_model_revokes_the_binding(voice_db):
 
 async def test_slow_task_dispatch_does_not_block_speech_events():
     coordinator = voice.VoiceCoordinator()
-    entered, release = asyncio.Event(), asyncio.Event()
+    entered, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     async def task(*_args):
         entered.set()
         await release.wait()
+        completed.set()
 
-    coordinator._task = task
+    coordinator._task = AsyncMock(side_effect=task)
     coordinator._interrupt = AsyncMock()
     coordinator._item = AsyncMock()
-    live = SimpleNamespace(response_active=True, batches=asyncio.Queue(), task_lock=asyncio.Lock(), user_speaking=False, phase="listening")
-    await coordinator.event(live, {"type": "response.done", "response": {
-        "status": "completed", "output": [{"type": "function_call"}],
-    }})
+    live = SimpleNamespace(
+        response_active=True, response_is_speech=False, tool_response_pending=False, queued_call_ids=set(),
+        batches=asyncio.Queue(), task_lock=asyncio.Lock(), user_speaking=False,
+        phase="thinking", instructions="", send=AsyncMock(),
+    )
+    call = {"type": "function_call", "status": "completed", "name": "agent_task", "call_id": "early-call", "arguments": "{}"}
+    await coordinator.event(live, {"type": "response.output_item.done", "item": call})
     dispatch = asyncio.create_task(coordinator._dispatch(live))
     try:
         await asyncio.wait_for(entered.wait(), 1)
         await coordinator.event(live, {"type": "input_audio_buffer.speech_started", "item_id": "new-utterance"})
         coordinator._item.assert_awaited_once_with(live, "new-utterance", "user")
+        await coordinator.event(live, {"type": "input_audio_buffer.speech_stopped"})
+        await coordinator.event(live, {"type": "response.done", "response": {
+            "status": "completed", "output": [call],
+        }})
+        responses_before_admission = live.send.await_count
+        release.set()
+        await asyncio.wait_for(completed.wait(), 1)
+        speech = live.send.await_args.args[0]["response"]
+        assert (coordinator._task.await_count, responses_before_admission, {
+            key: speech[key] for key in ("output_modalities", "tools", "tool_choice")
+        }) == (1, 0, {"output_modalities": ["audio"], "tools": [], "tool_choice": "none"})
     finally:
         dispatch.cancel()
         await asyncio.gather(dispatch, return_exceptions=True)
+
+
+async def test_silent_direct_answers_are_spoken_without_persisting_the_draft():
+    coordinator = voice.VoiceCoordinator()
+    coordinator._item = AsyncMock()
+    live = SimpleNamespace(
+        response_active=True, response_is_speech=False, tool_response_pending=False,
+        task_lock=asyncio.Lock(), batches=asyncio.Queue(), user_speaking=False,
+        phase="thinking", instructions="", send=AsyncMock(),
+    )
+    draft = {"type": "message", "role": "assistant", "id": "draft", "content": [
+        {"type": "output_text", "text": "Hallo!"},
+    ]}
+    await coordinator.event(live, {"type": "response.created", "response": {"metadata": None}})
+    await coordinator.event(live, {"type": "response.output_item.added", "item": draft})
+    await coordinator.event(live, {"type": "response.done", "response": {
+        "status": "completed", "output": [draft],
+    }})
+    speech = live.send.await_args.args[0]["response"]
+    await coordinator.event(live, {"type": "response.created", "response": {"metadata": speech["metadata"]}})
+    await coordinator.event(live, {"type": "response.output_item.added", "item": {
+        "type": "message", "role": "assistant", "id": "spoken",
+    }})
+    coordinator._item.assert_awaited_once_with(live, "spoken", "assistant")
 
 
 async def test_public_voice_context_excludes_private_history(monkeypatch):

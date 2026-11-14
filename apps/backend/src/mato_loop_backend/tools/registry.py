@@ -397,6 +397,7 @@ class ToolRegistry:
             permission_reason_instruction=contribution.permission_reason_instruction,
             snapshot_policy=contribution.snapshot_policy,
             output_preview=contribution.output_preview,
+            parallel_read=contribution.parallel_read,
         )
 
     def inactive_capability_groups(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
@@ -361,7 +361,13 @@ async def execute_tool_batch(
                 raise RepositoryInstructionsChanged(targets)
         return decision
 
-    for index, call in enumerate(calls):
+    active_reads: set[asyncio.Task[ToolResult]] = set()
+
+    async def execute_one(
+        index: int, call: ToolCall, *, parallel: bool,
+    ) -> AsyncGenerator[asyncio.Task[ToolResult], None]:
+        nonlocal superseded, repository_deferred
+        read_started = False
         bound_tool = toolset.tools.get(call.name) if toolset is not None else None
         tool_label = bound_tool.definition.label if bound_tool else None
         display = serialized_calls[index]["toolDisplay"]
@@ -546,7 +552,22 @@ async def execute_tool_batch(
                     },
                 )
             try:
-                tool_result = await toolset.execute(call, tool_context)
+                if parallel:
+                    handler_started = asyncio.get_running_loop().create_future()
+                    tool_context.handler_started = lambda: handler_started.set_result(None)
+                    task = asyncio.create_task(toolset.execute(call, tool_context))
+                    read_started = True
+                    active_reads.add(task)
+                    # Only the opted-in handler may overlap. Registry preparation and
+                    # authorization still own the shared database session exclusively.
+                    await asyncio.wait(
+                        (handler_started, task), return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    yield task
+                    tool_result = await task
+                    active_reads.discard(task)
+                else:
+                    tool_result = await toolset.execute(call, tool_context)
             except ToolCallSuperseded:
                 superseded = True
                 tool_result = ToolResult.error("tool.superseded")
@@ -659,6 +680,8 @@ async def execute_tool_batch(
                     )
                 attachment.data = b""
             attachments = tuple(attachment for attachment in attachments if not attachment.ephemeral)
+        if parallel and not read_started:
+            await finish_reads()
         workflow_repair = (
             (call.name == "web_search" and session.web_search_policy == WebSearchPolicy.REQUIRED)
             or call.name == "memory_write"
@@ -697,9 +720,9 @@ async def execute_tool_batch(
             "output": content[:500], "metadata": metadata,
         })
         if error_code == "tool.superseded":
-            continue
+            return
         if metadata.get("repositoryInstructionsDeferred") is True:
-            continue
+            return
         if not isinstance(error_code, str):
             if call.name == "render_openscad" and call.arguments.get("output", "preview") == "preview":
                 rendered_root = call.arguments.get("root")
@@ -815,4 +838,47 @@ async def execute_tool_batch(
             state.skill_load_called = True
             if not isinstance(metadata.get("errorCode"), str):
                 state.skill_load_succeeded = True
+
+    pending: list[AsyncGenerator[asyncio.Task[ToolResult], None]] = []
+    pending_signatures: set[str] = set()
+
+    async def finish_reads() -> None:
+        while pending:
+            execution = pending.pop(0)
+            try:
+                await anext(execution, None)
+            finally:
+                await execution.aclose()
+        pending_signatures.clear()
+
+    try:
+        for index, call in enumerate(calls):
+            bound = toolset.tools.get(call.name) if toolset is not None else None
+            parallel = bool(
+                bound is not None
+                and bound.definition.parallel_read
+                and bound.definition.actions
+                and all(
+                    action.category in {"read", "read_sensitive"} and not action.mutates
+                    for action in bound.definition.actions
+                )
+            )
+            signature = run_support._tool_call_signature(call)
+            if not parallel or len(pending) >= 4 or signature in pending_signatures:
+                await finish_reads()
+            execution = execute_one(index, call, parallel=parallel)
+            task = await anext(execution, None)
+            if task is not None:
+                pending.append(execution)
+                pending_signatures.add(signature)
+                if task.done():
+                    # Apply preparation failures and user denials before admitting more calls.
+                    await finish_reads()
+        await finish_reads()
+    finally:
+        for task in active_reads:
+            task.cancel()
+        await asyncio.gather(*active_reads, return_exceptions=True)
+        for execution in pending:
+            await execution.aclose()
     return state

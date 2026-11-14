@@ -39,6 +39,24 @@ ToolAction("example.write", "Eintrag erstellen", category="write", mutates=True)
 - Use `request_session_permissions` to prepare known access before enabling unattended automations or when the user explicitly requests advance permission preparation, not routinely before interactive work. Ordinary tool calls retain their execution-time authorization checks.
 - Extend existing catalog/permission tests for new classifications and resource boundaries.
 
+### Parallel reads
+
+The runtime overlaps at most four consecutive calls explicitly opted in by a
+host-owned `parallel_read` declaration. Read categories alone, shell analysis and
+external tool hints never opt a handler in. All declared actions must still be
+non-mutating reads. Opted-in handlers must not access the caller's database
+session, approval callbacks, files, or shared mutable runtime state; credential
+refresh may use its own transaction and locking. Registry preparation,
+authorization and post-approval checks remain serial and precede each handler.
+Only handler I/O overlaps. Microsoft 365 mail, calendar and To Do reads opt in;
+downloads, writes and other tools remain serial barriers.
+
+Results are persisted in model-call order, not completion order, preserving the
+live and replayed history. Immediate pre-execution rejections also wait for
+earlier results. Duplicate calls drain earlier results before execution.
+Explicit denial during preparation prevents admission of later calls; reads
+already started may finish. Cancellation cancels and joins outstanding reads.
+
 ## Reusable approvals
 
 - New run/session grants use the action's declared category (`read`, `read_sensitive`, `write`, `delete`) and its host-derived resource. The central matcher lets `write` also satisfy `read` on the same scope and lifetime. Delete and sensitive read remain independent; a write grant stays one revocable row. The existing resolver still checks the concrete capability's effective policy before grants; disabled actions and hard boundaries remain binding. `working_directory.external` is a profile-controlled file-access rule, not a shell rule.

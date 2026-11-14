@@ -46,6 +46,7 @@ async def test_ga_negotiation_keeps_credentials_server_side_and_audio_disabled(
             config = json.loads(request.content)["session"]
             assert config["model"] == "voice-deployment"
             assert config["type"] == "realtime"
+            assert config["output_modalities"] == ["text"]
             assert config["audio"]["input"]["turn_detection"] is None
             assert config["audio"]["input"]["transcription"]["model"] == "transcription-deployment"
             assert config["tools"] == []
