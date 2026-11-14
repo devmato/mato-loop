@@ -171,14 +171,30 @@ class WindowsRuntimeTests(unittest.TestCase):
 
             result = await self.process.exec(
                 current_directory=self.wire,
-                command="Write-Output 'Windows ready'",
+                command=(
+                    "Write-Output 'Windows ready'; "
+                    "[Console]::WriteLine(('{0}|{1}|{2}' -f "
+                    "$env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:HOST_SECRET))"
+                ),
                 timeout=10,
                 stream=stream,
             )
             self.assertEqual(result["exitCode"], 0)
             self.assertIn("Windows ready", "".join(text for _, text in chunks))
+            self.assertIn(
+                "C:\\Program Files|C:\\Program Files (x86)|",
+                "".join(text for _, text in chunks).strip().splitlines(),
+            )
 
-        asyncio.run(execute())
+        with patch.dict(
+            os.environ,
+            {
+                "ProgramFiles": "C:\\Program Files",
+                "ProgramFiles(x86)": "C:\\Program Files (x86)",
+                "HOST_SECRET": "not-inherited",
+            },
+        ):
+            asyncio.run(execute())
 
     def test_pairing_state_is_protected_by_windows_dpapi(self) -> None:
         from pydantic import SecretStr

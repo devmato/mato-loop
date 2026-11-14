@@ -324,6 +324,8 @@ class WindowsProcess:
                 "LOCALAPPDATA",
                 "HOMEDRIVE",
                 "HOMEPATH",
+                "PROGRAMFILES",
+                "PROGRAMFILES(X86)",
             }
         }
         env.update(environment or {})
