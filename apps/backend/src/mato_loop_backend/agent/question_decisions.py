@@ -43,11 +43,17 @@ async def answer_question(
     *,
     idempotent_same_result: bool = False,
     remember_for_session: list[str] | None = None,
+    skipped_question_ids: list[str] | None = None,
 ) -> dict[str, str]:
     protected = bool(
         request.questions
         and request.questions[0].get("type") in {"value", "password"}
     )
+    skipped = frozenset(skipped_question_ids or ())
+    if not skipped <= answers.keys() or any(answers[key] for key in skipped):
+        raise QuestionDecisionError(
+            422, "question.invalidAnswer", field="skipped_question_ids"
+        )
     if request.status != "pending":
         if not (idempotent_same_result and request.status == "answered"):
             raise QuestionDecisionError(409, "question.alreadyAnswered")
@@ -56,6 +62,8 @@ async def answer_question(
         try:
             questions = QuestionArguments.model_validate({"questions": request.questions})
             validated_answers = validate_question_answers(questions, answers)
+            for key in skipped:
+                validated_answers[key] = []
         except ValueError:
             raise QuestionDecisionError(409, "question.alreadyAnswered") from None
         if request.answers == validated_answers:
@@ -77,6 +85,9 @@ async def answer_question(
         raise QuestionDecisionError(
             422, "question.invalidAnswer", field="answers"
         ) from exc
+
+    for key in skipped:
+        validated_answers[key] = []
 
     remembered = frozenset(remember_for_session or ())
     if remembered and (

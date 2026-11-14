@@ -33,9 +33,15 @@ continues with the new instruction rather than leaving it blocked behind a child
 
 The question dock offers Next for navigation and Done on every step to submit the current draft,
 including answers to previously visited questions. Empty answers are allowed, even when all
-questions are unanswered. Ordinary questions retain their configured default-answer behavior.
-The `answered` status means the request is closed, not that every field has a value. Rejection
-discards the draft instead of submitting it.
+questions are unanswered. Empty ordinary answers use their configured defaults unless explicitly
+skipped. The answer API's optional `skipped_question_ids` lists questions with empty answers that
+must remain unanswered; their defaults are not applied.
+The `answered` status means the request is closed, not that every field has a value. For
+multi-question requests, Skip clears only the current answer and advances to the next question;
+on the last question, the button reads **Überspringen und senden** and submits the remaining draft.
+Earlier answers are retained, including protected input. Single-question rejection discards the
+draft instead of submitting it.
+The rejection API and channel-level rejection still reject the entire request.
 
 Protected questions from `secret_input` and `variable_write` also allow empty answer lists.
 Elevated file and shell tools reuse the same protected-input flow directly when no password

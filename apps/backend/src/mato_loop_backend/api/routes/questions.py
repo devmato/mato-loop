@@ -34,6 +34,9 @@ class QuestionAnswerRequest(BaseModel):
     remember_for_session: list[
         Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,79}$")]
     ] = Field(default_factory=list, max_length=5)
+    skipped_question_ids: list[
+        Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,79}$")]
+    ] = Field(default_factory=list, max_length=5)
 
 
 @router.get("/pending")
@@ -96,6 +99,7 @@ async def answer_question(
             request,
             payload.answers,
             remember_for_session=payload.remember_for_session,
+            skipped_question_ids=payload.skipped_question_ids,
         )
     except QuestionDecisionError as exc:
         raise ApiError(exc.status_code, exc.code, field=exc.field) from exc

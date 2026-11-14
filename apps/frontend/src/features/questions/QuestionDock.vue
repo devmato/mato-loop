@@ -151,10 +151,10 @@
         flat
         no-caps
         color="negative"
-        label="Ablehnen"
+        :label="request.questions.length > 1 ? (last ? 'Überspringen und senden' : 'Überspringen') : 'Ablehnen'"
         :loading="rejecting"
         :disable="busy"
-        @click="reject"
+        @click="request.questions.length > 1 ? skip() : reject()"
       />
       <q-space class="question-dock__footer-spacer" />
       <q-btn
@@ -222,6 +222,9 @@ const last = computed(() => draft.index === props.request.questions.length - 1)
 const rememberedQuestionIds = computed(() => props.request.questions
   .filter((item) => item.one_time === true && draft.rememberForSession[item.id] === true && draft.answers[item.id]?.length)
   .map((item) => item.id))
+const skippedQuestionIds = computed(() => props.request.questions
+  .filter((item) => draft.skipped[item.id] && !draft.answers[item.id]?.length)
+  .map((item) => item.id))
 const rejecting = ref(false)
 const ownSubmission = computed(() => questions.submittingId === props.request.id)
 const busy = computed(() => questions.submittingId !== null)
@@ -268,9 +271,19 @@ function next() {
   void finish()
 }
 
+function skip() {
+  const id = current.value.id
+  draft.answers[id] = []
+  draft.skipped[id] = true
+  delete draft.custom[id]
+  draft.customOn[id] = false
+  draft.rememberForSession[id] = false
+  next()
+}
+
 async function finish() {
   try {
-    await questions.answer(props.request.id, draft.answers, rememberedQuestionIds.value)
+    await questions.answer(props.request.id, draft.answers, rememberedQuestionIds.value, skippedQuestionIds.value)
   } catch {
     // Axios already displayed the API error.
   } finally {

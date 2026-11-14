@@ -59,6 +59,7 @@ export const useQuestionStore = defineStore('questions', {
           answers: Object.fromEntries(request.questions.map((question) => [question.id, []])),
           custom: {},
           customOn: {},
+          skipped: {},
           rememberForSession: Object.fromEntries(
             request.questions.filter((question) => question.one_time === true).map((question) => [question.id, false])
           )
@@ -66,12 +67,13 @@ export const useQuestionStore = defineStore('questions', {
       }
       return this.drafts[request.id]
     },
-    async answer(id, answers, rememberForSession = []) {
+    async answer(id, answers, rememberForSession = [], skippedQuestionIds = []) {
       this.submittingId = id
       try {
         await api.post(`/questions/${id}/answers`, {
           answers,
-          ...(rememberForSession.length ? { remember_for_session: rememberForSession } : {})
+          ...(rememberForSession.length ? { remember_for_session: rememberForSession } : {}),
+          ...(skippedQuestionIds.length ? { skipped_question_ids: skippedQuestionIds } : {})
         })
         this.revision += 1
         this.pending = this.pending.filter((item) => item.id !== id)
