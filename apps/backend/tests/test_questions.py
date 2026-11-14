@@ -234,7 +234,8 @@ async def test_agent_question_push_is_sent_after_commit(monkeypatch, redirected)
     push.assert_awaited_once_with(notification_id)
 
 
-async def test_answer_is_persisted_before_agent_resumes(monkeypatch) -> None:
+@pytest.mark.parametrize("skip_note", [False, True])
+async def test_answer_is_persisted_before_agent_resumes(monkeypatch, skip_note) -> None:
     arguments = _arguments()
     request = QuestionRequest(
         id=uuid4(),
@@ -254,10 +255,15 @@ async def test_answer_is_persisted_before_agent_resumes(monkeypatch) -> None:
     monkeypatch.setattr(AgentRuntime, "resolve_question", resolve)
     monkeypatch.setattr(run_events, "publish", AsyncMock())
     answers = {"format": ["Kurz"], "topics": ["API"], "note": []}
-    resolved_answers = {**answers, "note": ["Keine"]}
+    resolved_answers = {**answers, "note": [] if skip_note else ["Keine"]}
 
     result = await answer_question(
-        request.id, QuestionAnswerRequest(answers=answers), user, db
+        request.id,
+        QuestionAnswerRequest(
+            answers=answers, skipped_question_ids=["note"] if skip_note else []
+        ),
+        user,
+        db,
     )
 
     assert request.status == "answered"
@@ -265,6 +271,20 @@ async def test_answer_is_persisted_before_agent_resumes(monkeypatch) -> None:
     db.commit.assert_awaited_once()
     resolve.assert_called_once_with(request.id, resolved_answers)
     assert result == {"status": "answered"}
+
+
+@pytest.mark.parametrize("skipped", [["unknown"], ["format"]])
+async def test_skipped_questions_must_have_known_empty_answers(skipped) -> None:
+    request = QuestionRequest(
+        questions=_arguments().model_dump(mode="json")["questions"], status="pending"
+    )
+    with pytest.raises(QuestionDecisionError, match="question.invalidAnswer"):
+        await answer_question_decision(
+            AsyncMock(spec=AsyncSession),
+            request,
+            {"format": ["Kurz"], "topics": [], "note": []},
+            skipped_question_ids=skipped,
+        )
 
 
 @pytest.mark.parametrize(("filled", "action"), [(True, "create"), (False, "update")])
@@ -535,11 +555,13 @@ async def test_failed_answer_commit_releases_resolution(monkeypatch) -> None:
     release.assert_called_once_with(request.id)
 
 
+@pytest.mark.parametrize("skip_note", [False, True])
 async def test_question_decisions_are_idempotent_only_for_same_final_result(
-    monkeypatch,
+    monkeypatch, skip_note,
 ) -> None:
     arguments = _arguments()
-    answers = {"format": ["Kurz"], "topics": ["API"], "note": ["Keine"]}
+    answers = {"format": ["Kurz"], "topics": ["API"], "note": [] if skip_note else ["Keine"]}
+    skipped = ["note"] if skip_note else []
     request = QuestionRequest(
         id=uuid4(),
         session_id=uuid4(),
@@ -556,7 +578,7 @@ async def test_question_decisions_are_idempotent_only_for_same_final_result(
     monkeypatch.setattr(AgentRuntime, "resolve_question", resolve)
 
     assert await answer_question_decision(
-        db, request, answers, idempotent_same_result=True
+        db, request, answers, idempotent_same_result=True, skipped_question_ids=skipped
     ) == {"status": "answered"}
     with pytest.raises(QuestionDecisionError) as exc_info:
         await answer_question_decision(
@@ -564,6 +586,7 @@ async def test_question_decisions_are_idempotent_only_for_same_final_result(
             request,
             {**answers, "format": ["Ausführlich"]},
             idempotent_same_result=True,
+            skipped_question_ids=skipped,
         )
     assert (exc_info.value.status_code, exc_info.value.code) == (
         409,

@@ -31,8 +31,9 @@ from .browser_contracts import (
     BrowserSetupReadResult,
     BrowserStatus,
 )
+from .browser_storage import browser_file
 from .errors import AgentError
-from .filesystem import Filesystem
+from .platform import FilesystemAdapter
 from .terminal import MAX_BUFFER_BYTES, TerminalManager
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ def browser_command(command: str) -> list[str]:
 
 class BrowserRuntime:
     def __init__(
-        self, config, terminal: TerminalManager, filesystem: Filesystem | None = None
+        self, config, terminal: TerminalManager | None, filesystem: FilesystemAdapter | None = None
     ) -> None:
         self.config = config
         self.terminal = terminal
@@ -110,16 +111,19 @@ class BrowserRuntime:
             raise AgentError("browser.profileOwnerMismatch", "Browser storage owner differs")
         path.chmod(mode)
 
+    def storage_directory(self, path: Path) -> None:
+        self.directory(path, 0o711 if os.getuid() == 0 else 0o700, os.getuid())
+
     def storage(self, owner_id: str | None = None) -> Path:
         identity = hashlib.sha256(
             f"{self.config.backend_url}\n{self.config.agent_id}".encode()
         ).hexdigest()
         tools = self.config.data_dir / "tools"
-        self.directory(tools, 0o711 if os.getuid() == 0 else 0o700, os.getuid())
+        self.storage_directory(tools)
         base = tools / "browser"
-        self.directory(base, 0o711 if os.getuid() == 0 else 0o700, os.getuid())
+        self.storage_directory(base)
         root = base / identity
-        self.directory(root, 0o711 if os.getuid() == 0 else 0o700, os.getuid())
+        self.storage_directory(root)
         if owner_id is not None:
             binding = json.dumps(
                 {
@@ -130,19 +134,14 @@ class BrowserRuntime:
                 sort_keys=True,
             ).encode()
             try:
-                fd = os.open(
-                    root / "binding", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
-                )
+                with browser_file(root / "binding", "wb", create=True) as handle:
+                    handle.write(binding)
             except FileExistsError:
-                fd = os.open(root / "binding", os.O_RDONLY | os.O_NOFOLLOW)
-                with os.fdopen(fd, "rb") as handle:
+                with browser_file(root / "binding") as handle:
                     if handle.read(16_384) != binding:
                         raise AgentError(
                             "browser.profileOwnerMismatch", "Browser binding differs"
                         ) from None
-            else:
-                with os.fdopen(fd, "wb") as handle:
-                    handle.write(binding)
             self.owner_id = owner_id
         return root
 
@@ -171,6 +170,13 @@ class BrowserRuntime:
             if find_spec(name) is None
         ]
 
+    @property
+    def supported(self) -> bool:
+        return sys.platform.startswith("linux")
+
+    def worker_options(self) -> dict:
+        return {"cwd": "/", "start_new_session": True}
+
     async def spawn(self, root: Path) -> None:
         if self.missing_python_packages():
             raise AgentError("browser.dependenciesMissing", "Required browser packages are missing")
@@ -179,8 +185,7 @@ class BrowserRuntime:
             *browser_command("browser-worker"),
             str(root),
             env=environment,
-            cwd="/",
-            start_new_session=True,
+            **self.worker_options(),
             **options,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -318,7 +323,7 @@ class BrowserRuntime:
     async def close(self, *, stop_setup: bool = False) -> None:
         if stop_setup and self.setup is not None:
             if self.setup.exit_code is None:
-                await self.terminal._terminate(self.setup)
+                await self.stop_installation()
             if self.setup_task is not None:
                 await self.setup_task
         closing = getattr(self, "_close_task", None)
@@ -331,17 +336,7 @@ class BrowserRuntime:
                 for view in views:
                     view.cancel()
                 if process is not None:
-                    try:
-                        with contextlib.suppress(ProcessLookupError):
-                            process.terminate()
-                        with contextlib.suppress(TimeoutError):
-                            await asyncio.wait_for(process.wait(), 12)
-                    finally:
-                        # Reap descendants only after the worker's 10-second cleanup budget.
-                        with contextlib.suppress(ProcessLookupError):
-                            os.killpg(process.pid, signal.SIGKILL)
-                        with contextlib.suppress(TimeoutError):
-                            await asyncio.wait_for(process.wait(), 1)
+                    await self.stop_worker(process)
                 if views:
                     await asyncio.wait(views, timeout=1)
 
@@ -357,8 +352,24 @@ class BrowserRuntime:
         if cancelled:
             raise asyncio.CancelledError
 
+    async def stop_installation(self) -> None:
+        await self.terminal._terminate(self.setup)
+
+    async def stop_worker(self, process) -> None:
+        try:
+            with contextlib.suppress(ProcessLookupError):
+                process.terminate()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(process.wait(), 12)
+        finally:
+            # Reap descendants only after the worker's 10-second cleanup budget.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(process.wait(), 1)
+
     async def status(self) -> dict:
-        if not sys.platform.startswith("linux"):
+        if not self.supported:
             return BrowserStatus(state="unsupported", errorCode="browser.unsupported").model_dump(
                 by_alias=True
             )
@@ -477,7 +488,10 @@ class BrowserRuntime:
             exitCode=entry.exit_code,
         ).model_dump(by_alias=True)
 
-    async def relay(self, socket_path: str, relay_id: str, relay_token: str, ready) -> None:
+    async def view_connection(self, endpoint):
+        return await asyncio.open_unix_connection(endpoint["socket"])
+
+    async def relay(self, endpoint, relay_id: str, relay_token: str, ready) -> None:
         url = (
             self.config.backend_url.removesuffix("/execution-agents/connect")
             + f"/browser-relay/{relay_id}"
@@ -494,7 +508,7 @@ class BrowserRuntime:
                 open_timeout=10,
                 proxy=None,
             ) as websocket:
-                reader, writer = await asyncio.open_unix_connection(socket_path)
+                reader, writer = await self.view_connection(endpoint)
                 ready.set_result(True)
 
                 async def outbound():
@@ -585,8 +599,8 @@ class BrowserRuntime:
                     await self.close()
                 if action == "status":
                     return await self.status()
-                if not sys.platform.startswith("linux"):
-                    raise AgentError("browser.unsupported", "Browser requires Linux")
+                if not self.supported:
+                    raise AgentError("browser.unsupported", "Browser host is unsupported")
                 if action == "setup":
                     return await self.start_setup(args.owner_id)
                 if action == "open":
@@ -628,7 +642,7 @@ class BrowserRuntime:
                     result = await self.rpc("view")
                     ready = asyncio.get_running_loop().create_future()
                     view = asyncio.create_task(
-                        self.relay(result["socket"], args.relay_id, args.relay_token, ready)
+                        self.relay(result, args.relay_id, args.relay_token, ready)
                     )
                     self.view_tasks.add(view)
                     view.add_done_callback(self.view_tasks.discard)
@@ -668,6 +682,8 @@ class BrowserRuntime:
 class BrowserManager(BrowserRuntime):
     """Route each chat's opaque browser ID to its own disposable worker."""
 
+    runtime_class = BrowserRuntime
+
     def __init__(self, config, terminal, filesystem=None):
         super().__init__(config, terminal, filesystem)
         self.runtimes: dict[str, BrowserRuntime] = {}
@@ -694,7 +710,7 @@ class BrowserManager(BrowserRuntime):
                     raise AgentError("browser.notConnected", "Browser identifier is unavailable")
                 if len(self.runtimes) >= 8 or (self.setup and self.setup.exit_code is None):
                     raise AgentError("browser.busy", "Browser runtime capacity is unavailable")
-                runtime = BrowserRuntime(self.config, self.terminal, self.filesystem)
+                runtime = self.runtime_class(self.config, self.terminal, self.filesystem)
                 runtime.installation, runtime.container = self.installation, self.container
                 self.runtimes[args.browser_id] = runtime
         try:

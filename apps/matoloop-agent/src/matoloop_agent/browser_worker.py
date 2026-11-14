@@ -1,4 +1,4 @@
-"""Linux browser worker; run_code has full worker-account OS and profile access.
+"""Browser worker; run_code has full worker-account OS and profile access.
 
 Python imports are unrestricted. Output capture protects ordinary print framing,
 not malicious descriptor writes such as os.write; this is not an OS sandbox.
@@ -15,7 +15,6 @@ import hmac
 import inspect
 import json
 import os
-import resource
 import signal
 import struct
 import subprocess
@@ -56,6 +55,7 @@ from .browser_contracts import (
     BrowserStatus,
     decode_chunk,
 )
+from .browser_storage import browser_file
 from .errors import AgentError
 
 
@@ -130,6 +130,8 @@ class BrowserWorker:
         self.execution_metrics = {}
         self.file_origin = None
         self.control_epoch = None
+        self.view_token = os.urandom(32)
+        self.view_endpoint = None
 
     def task(self, coroutine) -> None:
         task = asyncio.create_task(coroutine)
@@ -148,7 +150,9 @@ class BrowserWorker:
         except OSError:
             raise fail("notReady") from None
         # Keep the Unix socket path below Linux's 108-byte sockaddr_un limit.
-        self.temporary = tempfile.TemporaryDirectory(prefix="matoloop-browser-")
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix="matoloop-browser-", dir=self.root if sys.platform == "win32" else None
+        )
         live = Path(self.temporary.name)
         self.live = live
         self.environment = {
@@ -180,22 +184,23 @@ class BrowserWorker:
         launch["viewport"] = self.geometry
         launch["channel"] = "chromium"
         try:
-            browser_major = (
-                subprocess.check_output(
-                    [executable, "--version"],
-                    env=self.environment,
-                    stderr=subprocess.DEVNULL,
-                    text=True,
-                    timeout=5,
+            if sys.platform != "win32":
+                browser_major = (
+                    subprocess.check_output(
+                        [executable, "--version"],
+                        env=self.environment,
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                        timeout=5,
+                    )
+                    .split()[-1]
+                    .split(".")[0]
                 )
-                .split()[-1]
-                .split(".")[0]
-            )
-            # Some firewalls reject the HeadlessChrome token even for ordinary page reads.
-            launch["user_agent"] = (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                f"(KHTML, like Gecko) Chrome/{browser_major}.0.0.0 Safari/537.36"
-            )
+                # Some firewalls reject HeadlessChrome even for ordinary page reads.
+                launch["user_agent"] = (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    f"(KHTML, like Gecko) Chrome/{browser_major}.0.0.0 Safari/537.36"
+                )
             self.context = await self.playwright.chromium.launch_persistent_context(
                 str(live / "profile"),
                 **launch,
@@ -221,7 +226,15 @@ class BrowserWorker:
         await self.context.pages[0].bring_to_front()
         await self.page_sessions[self.context.pages[0]]
         await self.context.pages[0].screenshot(type="png", timeout=8000)
-        self.server = await asyncio.start_unix_server(self.view_client, path=str(live / "view"))
+        if sys.platform == "win32":
+            self.server = await asyncio.start_server(self.authenticated_view, "127.0.0.1", 0)
+            self.view_endpoint = {
+                "port": self.server.sockets[0].getsockname()[1],
+                "token": self.view_token.hex(),
+            }
+        else:
+            self.server = await asyncio.start_unix_server(self.view_client, path=str(live / "view"))
+            self.view_endpoint = {"socket": str(live / "view")}
         return BrowserStatus(
             state="ready",
             browserVersion=self.context.browser.version,
@@ -600,6 +613,25 @@ class BrowserWorker:
                     await self.dispatch_input(current, session.send("Page.stopScreencast"))
                     await self.dispatch_input(current, session.detach())
 
+    async def authenticated_view(self, reader, writer) -> None:
+        task = asyncio.current_task()
+        self.tasks.add(task)
+        try:
+            async with asyncio.timeout(5):
+                supplied = await reader.readexactly(len(self.view_token))
+                if not hmac.compare_digest(supplied, self.view_token):
+                    return
+                writer.write(b"\x01")
+                await writer.drain()
+            await self.view_client(reader, writer)
+        except (TimeoutError, ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            self.tasks.discard(task)
+            writer.close()
+            with contextlib.suppress(ConnectionError):
+                await writer.wait_closed()
+
     async def view_client(self, reader, writer) -> None:
         async with self.input_lock:
             self.viewers.add(writer)
@@ -921,8 +953,7 @@ class BrowserWorker:
                 raise fail("fileTooLarge")
             target = self.live / file_id
             await download.save_as(target)
-            fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
-            with os.fdopen(fd, "rb") as handle:
+            with browser_file(target) as handle:
                 size = os.fstat(handle.fileno()).st_size
                 if size > MAX_FILE_BYTES:
                     raise fail("fileTooLarge")
@@ -995,8 +1026,7 @@ class BrowserWorker:
             or entry.get("snapshot")
         ):
             raise fail("invalidTarget")
-        fd = os.open(self.live / file_id, os.O_RDONLY | os.O_NOFOLLOW)
-        with os.fdopen(fd, "rb") as handle:
+        with browser_file(self.live / file_id) as handle:
             if os.fstat(handle.fileno()).st_size > MAX_FILE_BYTES:
                 raise fail("fileTooLarge")
             # Playwright streams paths; a private hard link preserves the website filename.
@@ -1012,13 +1042,17 @@ class BrowserWorker:
 
     async def file(self, args: BrowserFileArguments) -> dict:
         if args.action == "begin":
+            if sys.platform == "win32":
+                from .windows_paths import absolute
+
+                try:
+                    absolute("C:/" + args.filename)
+                except ValueError:
+                    raise fail("invalidTarget") from None
             if not self.make_file_room() or self.total_size() + args.size > 2 * MAX_FILE_BYTES:
                 raise fail("fileTooLarge")
             file_id = str(uuid4())
-            fd = os.open(
-                self.live / file_id, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
-            )
-            with os.fdopen(fd, "wb"):
+            with browser_file(self.live / file_id, "wb", create=True):
                 pass
             self.files[file_id] = {
                 "id": file_id,
@@ -1058,14 +1092,14 @@ class BrowserWorker:
         path = self.live / args.file_id
         if args.action == "delete":
             path.unlink(missing_ok=True)
-            upload = self.live / "uploads" / args.file_id / entry["filename"]
-            if upload.parent.exists():
-                upload.unlink(missing_ok=True)
-                upload.parent.rmdir()
+            if not entry["download"]:
+                upload = self.live / "uploads" / args.file_id / entry["filename"]
+                if upload.parent.exists():
+                    upload.unlink(missing_ok=True)
+                    upload.parent.rmdir()
             del self.files[args.file_id]
             return {"ok": True}
-        fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
-        with os.fdopen(fd, "r+b") as handle:
+        with browser_file(path, "r+b") as handle:
             size = os.fstat(handle.fileno()).st_size
             if size > MAX_FILE_BYTES:
                 raise fail("fileTooLarge")
@@ -1132,8 +1166,7 @@ class BrowserWorker:
         file_id = staged["fileId"]
         self.files[file_id][kind] = True
         try:
-            fd = os.open(self.live / file_id, os.O_WRONLY | os.O_NOFOLLOW)
-            with os.fdopen(fd, "wb") as handle:
+            with browser_file(self.live / file_id, "wb") as handle:
                 handle.write(data)
             self.files[file_id]["ready"] = True
         except BaseException:
@@ -1867,22 +1900,31 @@ class BrowserWorker:
 
 
 async def serve(root: Path) -> None:
-    if sys.platform != "linux" or os.getuid() == 0:
-        raise RuntimeError("Browser worker requires a non-root Linux user")
+    if sys.platform not in {"linux", "win32"} or (sys.platform == "linux" and os.getuid() == 0):
+        raise RuntimeError("Browser worker requires Linux or Windows and must not run as root")
     os.umask(0o077)
-    # Browser downloads cannot grow a single file without bound, including before completion.
-    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FILE_BYTES, MAX_FILE_BYTES))
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    if sys.platform == "linux":
+        import resource
+
+        # Bound in-progress downloads as well as completed files on POSIX.
+        resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FILE_BYTES, MAX_FILE_BYTES))
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     worker = BrowserWorker(root)
-    reader = asyncio.StreamReader(limit=1024 * 1024)
-    protocol = asyncio.StreamReaderProtocol(reader)
-    await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, sys.stdin.buffer)
-    current = asyncio.current_task()
-    asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, current.cancel)
+    if sys.platform == "win32":
+
+        async def readline():
+            return await asyncio.to_thread(sys.stdin.buffer.readline, 1024 * 1024)
+    else:
+        reader = asyncio.StreamReader(limit=1024 * 1024)
+        protocol = asyncio.StreamReaderProtocol(reader)
+        await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, sys.stdin.buffer)
+        current = asyncio.current_task()
+        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, current.cancel)
+        readline = reader.readline
     # Late task prints must not become a second pipe response after script capture ends.
     protocol_output, sys.stdout = sys.stdout, sys.stderr
     try:
-        while raw := await reader.readline():
+        while raw := await readline():
             op = None
             elapsed_ms = None
             try:
@@ -1922,7 +1964,7 @@ async def serve(root: Path) -> None:
                     args = BrowserResizeArguments.model_validate(request["args"])
                     result = await worker.resize(args.width, args.height)
                 elif op == "view":
-                    result = {"socket": str(worker.live / "view")}
+                    result = worker.view_endpoint
                 elif op == "health":
                     result = {"ok": bool(worker.context and worker.context.browser.is_connected())}
                 elif op == "close":

@@ -24,6 +24,46 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+it.each(['free_text', 'password'])('preserves earlier %s answers when skipping later questions', async (type) => {
+  api.post.mockResolvedValue({ data: { status: 'answered' } })
+  const request = {
+    id: 'question-1',
+    questions: ['first', 'second', 'third'].map((id) => ({
+      id, header: id, question: id, type,
+      ...(type === 'password' ? { one_time: true } : { default_answers: ['Default answer'] })
+    }))
+  }
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(QuestionDock, { request }) })
+  app.use(createPinia()).use(Quasar, { components: {
+    QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QIcon,
+    QInput, QRadio, QResizeObserver, QSeparator, QSpace, QTooltip
+  } })
+  app.mount(root)
+  await nextTick()
+
+  const click = (label) => [...root.querySelectorAll('button')]
+    .find((button) => button.textContent === label).click()
+  const fill = (value) => {
+    const input = root.querySelector('textarea, input')
+    input.value = value
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  fill('Keep this answer')
+  click('Weiter')
+  await nextTick()
+  fill('Discard this answer')
+  click('Überspringen')
+  await nextTick()
+  click('Überspringen und senden')
+
+  await vi.waitFor(() => expect(api.post).toHaveBeenCalledExactlyOnceWith('/questions/question-1/answers', {
+    answers: { first: ['Keep this answer'], second: [], third: [] },
+    skipped_question_ids: ['second', 'third']
+  }))
+})
+
 it('masks password questions, submits exact values, and clears failed drafts', async () => {
   api.post.mockRejectedValue(new Error('network'))
   const request = {

@@ -63,6 +63,17 @@ binding is loaded only on Linux.
 8. For an installation made by the previous published installer, update through the
    WebUI and rerun downloaded setup once. After restarting the terminal, verify
    `matoloop-agent status` without losing pairing or the workspace.
+9. Create a Browser integration for the Windows computer and use **Browser einrichten**.
+   Verify setup output streams without an administrator prompt and status becomes ready.
+   Open **Control Center > Browser**, load an app served by this computer, and exercise
+   typing, screenshots, uploads and downloads. Open a second chat and confirm website
+   logins are not shared. Close the browsers, update the Agent, and verify browser support
+   is retained. A failed Chromium probe must leave the previous Agent active.
+   Run the automated browser regression in a disposable Python environment for the
+   intended checkout, with `PLAYWRIGHT_BROWSERS_PATH` pointing to a separate disposable
+   directory. It exercises package setup; do not use the running Agent's environment
+   or browser installation:
+   `python -m unittest discover -s apps\matoloop-agent\tests -p test_windows_browser.py -v`.
 
 Do not treat the native Windows behavior as verified until these steps pass on
 the target Windows installation. Linux Docker tests exercise protocol and

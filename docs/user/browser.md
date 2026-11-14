@@ -1,11 +1,11 @@
 # Browser verwenden
 
-Mit der Browser-Integration bedienst du gemeinsam mit dem Agenten Webseiten im selben Chat-Browser. Sie benötigt einen eigenen verbundenen Linux-Computer; native und Docker-Agents bieten dieselbe Funktion. Unter Windows ist sie nicht verfügbar.
+Mit der Browser-Integration bedienst du gemeinsam mit dem Agenten Webseiten im selben Chat-Browser. Sie benötigt einen eigenen verbundenen Linux- oder Windows-Computer. Native Agents und Linux-Docker-Agents bieten dieselbe Bedienung.
 
 ## Browser einrichten
 
 1. Lege unter **Einstellungen > Integrationen** eine persönliche Browserverbindung an und wähle den Computer.
-2. Docker-Agents enthalten die Laufzeit bereits. Bei nativen Agents starte bei Bedarf **Browser einrichten** und bestätige benötigte Pakete ausdrücklich.
+2. Docker-Agents enthalten die Laufzeit bereits. Bei nativen Agents starte bei Bedarf **Browser einrichten**. Unter Linux bestätige benötigte Systempakete ausdrücklich. Unter Windows läuft die Einrichtung ohne weitere Eingaben und ohne Administratorrechte im Konto des Agents.
 3. Wähle denselben Computer in der Session und erlaube die Verbindung für das gewünschte Profil. Plan, Build und Sysadmin schließen Integrationen standardmäßig aus.
 4. Öffne **Control Center > Browser** oder bitte den Agenten, eine Webseite aufzurufen.
 
@@ -32,6 +32,14 @@ Scheitert die Wiederverbindung, klicke auf **Browser erneut verbinden** links in
 Klicke zuerst das Datei-Uploadfeld der Website an und wähle dann **Datei hochladen** aus Ablage oder Computer-Dateien. Falls das Websitefeld nicht mehr offen ist, erlaubt **Datei einsetzen** einen erneuten Versuch.
 
 Downloads landen in der **Session-Ablage** und bleiben nach dem Schließen des Browsers erhalten. Computerdateien werden weder verschoben noch gelöscht; Arbeitsverzeichnisse werden nicht synchronisiert. Pro Transfer sind bis zu 1 GiB möglich, soweit niedrigere Instanzlimits und dein Speicherkontingent es erlauben. Vorschau und Verarbeitung haben eigene Grenzen.
+
+Unter Windows wird die Downloadgröße erst nach Abschluss geprüft. Halte ausreichend freien Speicher für laufende Downloads bereit; die Transfergrenze begrenzt deren vorübergehenden Platzbedarf nicht.
+
+## Web-Apps beim Coding prüfen
+
+Starte den Entwicklungsserver im richtigen Arbeitsordner und gib dem Agenten seine URL. Er kann die App mit Playwright bedienen, Fehler nachstellen und Änderungen anhand von Seitenzustand und Screenshots prüfen. Über dieselbe Browseransicht kannst du selbst eingreifen. Dauerhafte Playwright-Tests im Projekt bleiben davon unabhängig.
+
+Die URL muss vom ausgewählten Computer aus erreichbar sein. `localhost` bezeichnet diesen Computer, bei Docker-Agents den Agent-Container. Ein Server auf deinem Entwicklungsrechner ist dadurch nicht automatisch erreichbar.
 
 ## Rechte und Risiken
 

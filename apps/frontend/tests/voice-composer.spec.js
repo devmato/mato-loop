@@ -189,6 +189,11 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('focuses the message input when pressing the card padding', () => {
+    root.querySelector('.chat-composer__card').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    expect(document.activeElement).toBe(root.querySelector('.chat-composer__input'))
+  })
+
   it('shows the message hint only in an entirely empty composer', async () => {
     const initial = root.querySelector('.chat-composer__input').getAttribute('placeholder')
     await composer.value.insertQuote({ text: 'Selected answer', comment: '' })

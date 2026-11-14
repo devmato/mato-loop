@@ -10,11 +10,11 @@ Windows shell commands inherit only an allowlisted environment, including
 `ProgramFiles` and `ProgramFiles(x86)` for tools such as NuGet. Other host variables,
 including Agent credentials, are not inherited automatically.
 
-Standalone agent with a portable connection and dispatch core. Linux provides bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, browser, credential-storage, and session-cache operations. The Windows adapter advertises its native filesystem, PowerShell, search, transfer, and cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
+Standalone agent with a portable connection and dispatch core. Linux provides bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, browser, credential-storage, and session-cache operations. The Windows adapter advertises its native filesystem, PowerShell, search, transfer, browser, and cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
 
 Platform adapters compose host operations behind the common core. Linux uses normalized absolute POSIX paths; Windows uses forward-slash drive-letter paths such as `C:/Users/Ada/workspace` on the wire. Native Windows paths are converted at the Windows adapter boundary. Unsupported capabilities are not advertised.
 
-The [Linux browser runtime](BROWSER.md) provides disposable per-chat Chromium profiles,
+The [browser runtime](BROWSER.md) provides disposable per-chat Chromium profiles,
 isolated per-chat headless automation and graphical viewing on native/container agents, interactive prerequisite setup, and bounded browser actions.
 
 ## Configuration
@@ -124,8 +124,11 @@ both tasks run under the installing account without elevation. Task Scheduler
 stores the account password, while the Agent's own pairing state uses DPAPI.
 Setup and updates follow the running backend's exact commit, including backward transitions. Deinstallation
 removes the private tools, including MinGit, and never removes the workspace.
-Browser, OpenSCAD, and interactive terminals are not advertised by the
-Windows adapter.
+Browser support is optional: use **Browser einrichten** in the browser integration
+to install Playwright, Pillow, and matching Chromium in the private Agent directories.
+Setup is non-interactive and needs no administrator privileges. Updates retain the
+browser packages and probe matching Chromium before activation.
+OpenSCAD and interactive terminals are not advertised by the Windows adapter.
 
 ## Container updates and development checks
 

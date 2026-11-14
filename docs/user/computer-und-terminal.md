@@ -50,7 +50,7 @@ Die Installation verwaltet private Werkzeuge unter `~/.local/share/matoloop-agen
 
 Die Installation liegt unter `%LOCALAPPDATA%\matoloop-agent`, der Standardworkspace unter `%USERPROFILE%\mato-loop-agent\workspace`. Nur das Starterverzeichnis wird dem Benutzer-`PATH` hinzugefügt. Der Starttask läuft unter dem Installationskonto ohne Anmeldung und ohne Administratorrechte.
 
-PowerShell-Shellzugriff ist verfügbar; Browser, OpenSCAD und interaktive Terminals werden unter Windows nicht angeboten. Eine fehlgeschlagene Kopplung lässt die Installation bestehen und kann mit `matoloop-agent pair` wiederholt werden. `matoloop-agent uninstall` beziehungsweise `uninstall -Purge` erhalten den Workspace. Zugangsdaten sind an den Windows-Benutzerkontext gebunden; beachte die [Datensicherung](betrieb-und-datensicherung.md#zu-sichernde-daten).
+PowerShell-Shellzugriff ist verfügbar. Die optionale [Browserfunktion](browser.md) richtest du anschließend über die Browser-Integration ein; OpenSCAD und interaktive Terminals werden unter Windows nicht angeboten. Eine fehlgeschlagene Kopplung lässt die Installation bestehen und kann mit `matoloop-agent pair` wiederholt werden. `matoloop-agent uninstall` beziehungsweise `uninstall -Purge` erhalten den Workspace. Zugangsdaten sind an den Windows-Benutzerkontext gebunden; beachte die [Datensicherung](betrieb-und-datensicherung.md#zu-sichernde-daten).
 
 ## Dateizugriff begrenzen
 

@@ -11,6 +11,7 @@
     <q-card
       flat
       class="app-surface chat-composer__card"
+      @mousedown="focusInputFromBackground"
       @dragenter="handleDragEnter"
       @dragover="handleDragOver"
       @dragleave="handleDragLeave"
@@ -404,6 +405,14 @@ function removeQuote(index) {
 
 function focusInput() {
   input.value?.focus()
+}
+
+function focusInputFromBackground(event) {
+  if (event.button !== 0 || voice.active) return
+  if (event.target !== event.currentTarget
+    && (!input.value?.$el.contains(event.target) || event.target.tagName === 'TEXTAREA')) return
+  event.preventDefault()
+  focusInput()
 }
 
 async function insertQuote(quote) {

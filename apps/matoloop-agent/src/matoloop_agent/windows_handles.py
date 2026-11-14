@@ -306,7 +306,9 @@ def stream(handle: int, mode: str = "rb") -> Iterator[BinaryIO]:
         raise AgentError("path.unavailable", "Could not duplicate file handle")
     try:
         fd = msvcrt.open_osfhandle(
-            duplicate.value, os.O_BINARY | (os.O_RDONLY if mode == "rb" else os.O_WRONLY)
+            duplicate.value,
+            os.O_BINARY
+            | (os.O_RDONLY if mode == "rb" else os.O_RDWR if "+" in mode else os.O_WRONLY),
         )
     except BaseException:
         _close(duplicate)
