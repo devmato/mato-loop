@@ -70,6 +70,7 @@ it.each(['text', 'executable', 'navigation'])('keeps %s edits made during a pend
   api.put.mockImplementation(() => new Promise((resolve) => { finishSave = resolve }))
   await vi.waitFor(() => expect(root.querySelector('[aria-label="example bearbeiten"]')).not.toBeNull())
   root.querySelector('[aria-label="example bearbeiten"]').click()
+  await vi.dynamicImportSettled()
   await vi.waitFor(() => expect(document.querySelector('.cm-editor')).not.toBeNull())
   await selectFile('script.py')
   await vi.waitFor(() => expect(document.querySelector('.cm-content').textContent).toContain('print(1)'))
