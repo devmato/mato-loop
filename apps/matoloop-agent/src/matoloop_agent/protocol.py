@@ -267,6 +267,7 @@ class GitWorktreeArguments(PathArguments):
     project_id: str = Field(alias="projectId", pattern=UUID_PATTERN)
     session_id: str = Field(alias="sessionId", pattern=UUID_PATTERN)
     target_branch: str = Field(alias="targetBranch", min_length=1, max_length=300)
+    remote: str | None = Field(default=None, min_length=1, max_length=300)
     destinations: list[Annotated[str, Field(min_length=1, max_length=4096)]] = Field(
         min_length=1, max_length=10
     )

@@ -26,9 +26,11 @@ Worktrees stehen für Projekt-Sessions mit konfiguriertem Computer, Repository u
 
 1. Wähle vor dem Sessionstart unter **Arbeitsbereich** **Neuer Worktree**.
 2. Prüfe den lokalen Zielbranch. Er muss einen Commit besitzen.
-3. Starte die Session. MatoLoop erstellt daraus eine getrennte Arbeitskopie am letzten Commit des lokalen Zielbranches, zunächst ohne eigenen Branch (**Losgelöster Stand**, technisch Detached HEAD).
+3. Starte die Session. Existiert der gleichnamige Zielbranch auf dem ausgewählten Remote, ruft MatoLoop ihn zuerst ab und aktualisiert den lokalen Zielbranch per Fast-forward. Danach entsteht eine getrennte Arbeitskopie, zunächst ohne eigenen Branch (**Losgelöster Stand**, technisch Detached HEAD).
 
-Es findet kein Fetch statt und ein Remote ist nicht nötig. Du und der Agent können in diesem Worktree normal arbeiten und committen. Für eine Veröffentlichung wählt der Agent einen passenden Remote-Branch; ein lokaler Branch ist auch für Pull Requests und lokale Merges nicht nötig. Uncommittete Änderungen bleiben im ursprünglichen Verzeichnis. Laufende Sessions desselben Projekts verhindern das Anlegen nicht. Bestehende Worktrees behalten ihre Branches. **Lokal** und die Auswahl eines bestehenden Worktrees erstellen keinen Branch.
+Bei Abruffehlern, uncommitteten Änderungen im Ziel-Checkout, auseinanderlaufenden Branches oder einem Zielbranch in einem anderen Worktree bricht die Erstellung ab. Es gibt keinen automatischen Stash oder Reset. Lokale Commits, die den Remote-Stand bereits enthalten, bleiben erhalten. Ohne ausgewählten Remote oder ohne gleichnamigen Branch dort verwendet MatoLoop den lokalen Stand. Bereits erstellte Worktrees werden nicht erneut aktualisiert.
+
+Du und der Agent können in diesem Worktree normal arbeiten und committen. Für eine Veröffentlichung wählt der Agent einen passenden Remote-Branch; ein lokaler Branch ist auch für Pull Requests und lokale Merges nicht nötig. Uncommittete Änderungen bleiben im ursprünglichen Verzeichnis. Laufende Sessions desselben Projekts verhindern das Anlegen nicht. Bestehende Worktrees behalten ihre Branches. **Lokal** und die Auswahl eines bestehenden Worktrees erstellen keinen Branch.
 
 !!! warning "Worktrees isolieren nicht die ganze Umgebung"
     Mehrere Sessions können denselben Worktree und damit Dateien und Änderungen teilen. Worktrees teilen Git-Metadaten; das ursprüngliche Repository muss erreichbar bleiben. `.env`-Dateien, Abhängigkeiten, Prozesse, Ports und Datenbanken werden nicht automatisch kopiert oder getrennt.

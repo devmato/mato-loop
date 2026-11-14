@@ -60,8 +60,13 @@ An occupied destination selects another short ID, with at most ten candidates.
 Candidates derive from the independent creation UUID so repeated requests authorize
 the same paths; the Agent records its choice before preparation. It never adopts or
 overwrites an occupied destination. Existing worktrees retain their paths and branches.
-Preparation uses the committed local target branch without fetching,
-regardless of remote setup. A missing or unborn local target is rejected.
+Preparation requires a committed local target branch. When a remote is selected and
+contains the same-named target branch, preparation fetches it and fast-forwards the
+local target before freezing the base. Local commits already containing the remote
+tip are retained. Fetch failures, local changes in the target checkout, divergent
+history, or a target checked out in another worktree stop creation without resetting
+or stashing local work. No remote or an absent remote branch uses the local target.
+Already prepared worktrees and frozen preparation bases are not refreshed on retry.
 It freezes that base commit and checks it out under
 `<agent-data>/worktrees/<project-id8>/<eight-hex-id>`. The project folder uses the first eight hex digits of the project UUID;
 collisions or unrelated existing directories select `-2`, `-3`, and so on. A private
@@ -74,7 +79,7 @@ their recorded paths and branches, including flat short paths and the original
 `<project-id>/<session-id>` layout. No migration or renaming is performed. The backend
 checks each exact candidate's filesystem policy before preparation. New creation uses
 only the short-project/short-worktree layout and requires explicit permitted destinations.
-Update the Backend and Agent together: historical creation layouts, remote-based
+Update the Backend and Agent together: historical creation layouts, remote-only
 preparation and receipt-based removal protocols are no longer supported. Existing
 worktrees remain selectable and removable through Git inventory without preparation.
 Creation and switching use the normal working-directory selection and navigation grant.

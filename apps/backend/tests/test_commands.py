@@ -272,12 +272,13 @@ async def test_worktree_checks_destination_policy_before_creating_files(monkeypa
 
 @pytest.mark.parametrize("outside", [False, True])
 @pytest.mark.parametrize("attached", [False, True])
-async def test_worktree_creation_binds_an_independent_identity_without_a_remote(monkeypatch, outside, attached):
+@pytest.mark.parametrize("remote", [None, "upstream"])
+async def test_worktree_creation_binds_an_independent_identity(monkeypatch, outside, attached, remote):
     from mato_loop_backend.sessions.coding import select_session_workspace
 
     agent_id = uuid4()
     session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id, session_profile={"worktrees_enabled": True})
-    project = Project(id=uuid4(), user_id=session.user_id, default_execution_agent_id=agent_id, default_current_directory="/project", git_target_branch="develop")
+    project = Project(id=uuid4(), user_id=session.user_id, default_execution_agent_id=agent_id, default_current_directory="/project", git_target_branch="develop", git_remote=remote)
     identity = uuid4()
     name = uuid5(identity, "1").hex[:8]
     destination = f"/data/worktrees/{str(project.id)[:8]}/{name}"
@@ -304,7 +305,8 @@ async def test_worktree_creation_binds_an_independent_identity_without_a_remote(
         return
     monkeypatch.setattr("mato_loop_backend.sessions.service.validate_execution_preferences", AsyncMock(return_value=(destination, "auto")))
     await select_session_workspace(db, session, project, create=True, worktree_id=identity)
-    assert (session.current_directory, client.request.await_args.args[1]["sessionId"]) == (destination, str(identity))
+    assert (session.current_directory, client.request.await_args.args[1]["sessionId"],
+            client.request.await_args.args[1]["remote"]) == (destination, str(identity), remote)
 
 
 @pytest.mark.parametrize("registered", [True, False])

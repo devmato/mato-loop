@@ -117,6 +117,85 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
             (arguments.destinations[0], None, None, ["develop"]),
         )
 
+    async def test_worktree_refreshes_the_selected_remote_before_freezing_its_base(self):
+        source, args = await self.managed_source()
+        remote = self.root / "remote.git"
+        self.git("clone", "--bare", str(source), str(remote))
+        self.git("remote", "add", "selected", str(remote), cwd=source)
+        publisher = self.root / "publisher"
+        self.git("clone", str(remote), str(publisher))
+        (publisher / "file.txt").write_text("remote update\n")
+        self.git("commit", "-am", "Remote update", cwd=publisher)
+        self.git("push", "origin", "develop", cwd=publisher)
+        latest = self.git("rev-parse", "HEAD", cwd=publisher).decode().strip()
+        original = git_module._git
+
+        async def local_remote(directory, *arguments, **kwargs):
+            if kwargs.get("protocols"):
+                kwargs["protocols"] = "file"
+            return await original(directory, *arguments, **kwargs)
+
+        with patch.object(git_module, "_git", side_effect=local_remote):
+            result = await prepare_worktree(
+                self.config, self.fs, args.model_copy(update={"remote": "selected"})
+            )
+        self.assertEqual(
+            (
+                result["baseCommit"],
+                self.git("rev-parse", "HEAD", cwd=source).decode().strip(),
+                (source / "file.txt").read_text(),
+                (Path(result["path"]) / "file.txt").read_text(),
+            ),
+            (latest, latest, "remote update\n", "remote update\n"),
+        )
+
+    async def test_worktree_remote_refresh_preserves_local_work_on_failure(self):
+        source, args = await self.managed_source()
+        remote = self.root / "remote.git"
+        self.git("clone", "--bare", str(source), str(remote))
+        self.git("remote", "add", "origin", str(remote), cwd=source)
+        args = args.model_copy(update={"remote": "origin"})
+        original = git_module._git
+
+        async def local_remote(directory, *arguments, **kwargs):
+            if kwargs.get("protocols"):
+                kwargs["protocols"] = "file"
+            return await original(directory, *arguments, **kwargs)
+
+        with patch.object(git_module, "_git", side_effect=local_remote):
+            (source / "file.txt").write_text("uncommitted work\n")
+            with self.assertRaises(AgentError) as dirty:
+                await prepare_worktree(self.config, self.fs, args)
+            self.git("commit", "-am", "Local work", cwd=source)
+            local = self.git("rev-parse", "HEAD", cwd=source).decode().strip()
+            self.git("checkout", "--detach", "HEAD~1", cwd=source)
+            self.git("commit", "--allow-empty", "-m", "Divergent remote", cwd=source)
+            self.git("push", "origin", "HEAD:develop", cwd=source)
+            self.git("checkout", "develop", cwd=source)
+            with self.assertRaises(AgentError) as divergent:
+                await prepare_worktree(self.config, self.fs, args)
+            self.git("remote", "set-url", "origin", str(self.root / "missing.git"), cwd=source)
+            with self.assertRaises(AgentError) as unavailable:
+                await prepare_worktree(self.config, self.fs, args)
+        self.assertEqual(
+            (
+                dirty.exception.code,
+                divergent.exception.code,
+                unavailable.exception.code,
+                self.git("rev-parse", "HEAD", cwd=source).decode().strip(),
+                (source / "file.txt").read_text(),
+                Path(args.destinations[0]).exists(),
+            ),
+            (
+                "git.dirty",
+                "git.actionFailed",
+                "git.fetchFailed",
+                local,
+                "uncommitted work\n",
+                False,
+            ),
+        )
+
     async def test_project_folders_reuse_short_ids_and_disambiguate_collisions(self):
         source = self.local_source()
         args = self.arguments(source)

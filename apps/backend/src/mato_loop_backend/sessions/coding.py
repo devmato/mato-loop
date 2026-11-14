@@ -251,7 +251,7 @@ async def select_session_workspace(db, session, project, directory=None, *, crea
             created = await client.request("git.worktree", {
                 "path": root, "commonDirectory": original.common_directory,
                 "ownerId": str(session.user_id), "projectId": str(project.id), "sessionId": identity,
-                "targetBranch": target, "destinations": paths,
+                "targetBranch": target, "remote": remote, "destinations": paths,
             }, WorktreeResult, timeout=300)
         except ExecutionClientError as exc:
             raise SessionServiceError(409, exc.code) from exc

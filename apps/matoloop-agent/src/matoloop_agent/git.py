@@ -50,6 +50,7 @@ async def _git(
     limit: int = MAX_OUTPUT_BYTES,
     config: dict[str, str] | None = None,
     timeout_seconds: float = 15,
+    protocols: str = "",
 ) -> tuple[int, bytes, bytes]:
     executable = shutil.which("git")
     if not executable:
@@ -59,7 +60,7 @@ async def _git(
         GIT_OPTIONAL_LOCKS="0",
         GIT_TERMINAL_PROMPT="0",
         LC_ALL="C",
-        GIT_ALLOW_PROTOCOL="",
+        GIT_ALLOW_PROTOCOL=protocols,
         GIT_NO_LAZY_FETCH="1",
     )
     if config:
@@ -780,6 +781,84 @@ async def remove_worktree(config, filesystem, arguments: GitWorktreeRemoveArgume
         return {"removed": True}
 
 
+async def _refresh_worktree_target(root: str, target: str, remote: str) -> None:
+    tracking = f"refs/remotes/{remote}/{target.removeprefix('refs/heads/')}"
+    if (await _git(root, "check-ref-format", tracking))[0]:
+        raise AgentError("git.invalidRemote", "Invalid remote tracking reference")
+    try:
+        code, _, _ = await _git(
+            root,
+            "ls-remote",
+            "--exit-code",
+            "--refs",
+            "--",
+            remote,
+            target,
+            protocols="https:http:ssh:git",
+            timeout_seconds=120,
+        )
+        if code == 2:
+            return
+        if not code:
+            code, _, _ = await _git(
+                root,
+                "fetch",
+                "--no-tags",
+                "--no-prune",
+                "--no-prune-tags",
+                "--no-recurse-submodules",
+                "--no-auto-maintenance",
+                "--no-write-fetch-head",
+                "--",
+                remote,
+                f"+{target}:{tracking}",
+                protocols="https:http:ssh:git",
+                timeout_seconds=120,
+            )
+    except AgentError as exc:
+        if exc.code != "path.unavailable":
+            raise
+        raise AgentError("git.fetchFailed", "The target branch could not be fetched") from exc
+    if code:
+        raise AgentError("git.fetchFailed", "The target branch could not be fetched")
+    occupied = _text(
+        await _checked(root, "branch", "--list", "--format=%(worktreepath)", "--", target[11:])
+    ).strip()
+    if occupied and occupied != root:
+        raise AgentError("git.branchInUse", "The target branch is checked out in another worktree")
+    filters = await _disabled_filters(root)
+    if occupied and await _checked(
+        root, "status", "--porcelain=v1", "--untracked-files=all", config=filters
+    ):
+        raise AgentError("git.dirty", "Commit the working changes before updating the target")
+    before = _text(await _checked(root, "rev-parse", "--verify", target)).strip()
+    after = _text(await _checked(root, "rev-parse", "--verify", tracking)).strip()
+    if (await _git(root, "merge-base", "--is-ancestor", after, before))[0] == 0:
+        return
+    if (await _git(root, "merge-base", "--is-ancestor", before, after))[0]:
+        raise AgentError("git.actionFailed", "The target branch cannot be fast-forwarded")
+    if occupied:
+        code, _, _ = await _git(
+            root,
+            "-c",
+            "merge.autostash=false",
+            "-c",
+            "submodule.recurse=false",
+            "merge",
+            "--ff-only",
+            "--no-autostash",
+            "--no-edit",
+            "--no-overwrite-ignore",
+            after,
+            config=filters,
+            timeout_seconds=120,
+        )
+    else:
+        code, _, _ = await _git(root, "update-ref", target, after, before)
+    if code:
+        raise AgentError("git.actionFailed", "The target branch could not be fast-forwarded")
+
+
 async def _prepare_worktree(config, filesystem, arguments, state_directory) -> dict:
     loop = asyncio.get_running_loop()
     info = await repository(filesystem, arguments.path, executor=_preparation_executor)
@@ -891,6 +970,11 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
             raise AgentError(
                 "git.localBranchRequired", "The local target branch must contain a commit"
             )
+        if arguments.remote is not None:
+            if arguments.remote not in info["remotes"]:
+                raise AgentError("git.remoteRequired", "The selected remote is unavailable")
+            await _refresh_worktree_target(root, target, arguments.remote)
+            commit = await _checked(root, "rev-parse", "--verify", f"{target}^{{commit}}")
         await _checked(root, "update-ref", base_ref, commit.decode().strip())
     base = (
         (await _checked(root, "rev-parse", "--verify", f"{base_ref}^{{commit}}")).decode().strip()
