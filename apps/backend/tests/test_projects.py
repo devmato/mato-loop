@@ -247,7 +247,8 @@ async def test_create_and_update_project_commit_owner_scoped_changes(fetch_befor
     db.add.side_effect = persist
     created = await create_project(
         ProjectCreateRequest(
-            name=" New ", instructions=" Use Python. ", gitFetchBeforeActions=fetch_before_actions
+            name=" New ", instructions=" Use Python. ", gitFetchBeforeActions=fetch_before_actions,
+            iconInitials=" Ä2 ", iconColor="teal",
         ), user, db
     )
 
@@ -256,7 +257,8 @@ async def test_create_and_update_project_commit_owner_scoped_changes(fetch_befor
     updated = await update_project(
         project.id,
         ProjectRequest(
-            name=" Renamed ", instructions=" Be concise. ", git_fetch_before_actions=fetch_before_actions
+            name=" Renamed ", instructions=" Be concise. ", git_fetch_before_actions=fetch_before_actions,
+            iconInitials="  ", iconColor=None,
         ),
         user,
         db,
@@ -264,11 +266,13 @@ async def test_create_and_update_project_commit_owner_scoped_changes(fetch_befor
 
     assert created.name == "New"
     assert created.instructions == "Use Python."
+    assert (created.icon_initials, created.icon_color) == ("Ä2", "teal")
     assert created.coding_service is None
     assert created.model_dump(by_alias=True)["gitFetchBeforeActions"] is fetch_before_actions
     assert db.add.call_args.args[0].git_fetch_before_actions is fetch_before_actions
     assert updated.name == "Renamed"
     assert updated.instructions == "Be concise."
+    assert updated.icon_initials is updated.icon_color is None
     assert updated.session_count == 2
     assert updated.model_dump(by_alias=True)["gitFetchBeforeActions"] is fetch_before_actions
     assert project.git_fetch_before_actions is fetch_before_actions
@@ -281,6 +285,8 @@ async def test_update_project_preserves_omitted_instructions() -> None:
     user = _user()
     project = _project(user.id)
     project.instructions = "Keep this."
+    project.icon_initials = "AB"
+    project.icon_color = "violet"
     project.git_fetch_before_actions = False
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [project, 0, False]
@@ -290,7 +296,14 @@ async def test_update_project_preserves_omitted_instructions() -> None:
     )
 
     assert updated.instructions == "Keep this."
+    assert (updated.icon_initials, updated.icon_color) == ("AB", "violet")
     assert updated.git_fetch_before_actions is False
+
+
+@pytest.mark.parametrize("fields", [{"iconInitials": "ABC"}, {"iconInitials": "A!"}, {"iconColor": "#ffffff"}])
+def test_project_icon_rejects_invalid_values(fields) -> None:
+    with pytest.raises(ValidationError):
+        ProjectRequest(name="Work", **fields)
 
 
 async def test_update_project_validates_changed_session_defaults(monkeypatch) -> None:

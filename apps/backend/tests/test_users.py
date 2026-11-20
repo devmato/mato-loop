@@ -43,7 +43,7 @@ async def test_language_preference_is_owner_bound_and_preserves_other_preference
     db = AsyncMock(spec=AsyncSession)
     result = await user_routes.update_user_preferences(user_routes.UserPreferencesRequest(preferredLanguage="de-DE"), user, db)
     assert (result, settings.dark_mode, load.await_args.kwargs, save.await_args.kwargs) == (
-        {"preferredLanguage": "de-DE", "sessionsPosition": "belowProjects", "sessionsPageSize": 8, "sessionTabsEnabled": True, "sessionTabsPosition": "bottom", "sessionTabsLimit": 10, "trashEnabled": False, "trashRetentionDays": 30}, True,
+        {"preferredLanguage": "de-DE", "sessionsPosition": "belowProjects", "sessionsPageSize": 8, "sessionTabsEnabled": True, "sessionTabsPosition": "bottom", "sessionTabsOrder": "project", "sessionTabsLimit": 10, "trashEnabled": False, "trashRetentionDays": 30}, True,
         {"user_id": user.id, "for_update": True}, {"user_id": user.id},
     )
 
@@ -62,30 +62,33 @@ async def test_sessions_position_round_trip_preserves_language(monkeypatch, posi
         "sessionsPageSize": 8,
         "sessionTabsEnabled": False,
         "sessionTabsPosition": "bottom",
+        "sessionTabsOrder": "project",
         "sessionTabsLimit": 10,
         "trashEnabled": False, "trashRetentionDays": 30,
     }
 
 
-@pytest.mark.parametrize("enabled,position,limit", [(True, "top", 8), (False, "bottom", 10)])
-async def test_session_tabs_preference_round_trip(monkeypatch, enabled, position, limit):
+@pytest.mark.parametrize("enabled,position,limit,order", [(True, "top", 8, "added"), (False, "bottom", 10, "project")])
+async def test_session_tabs_preference_round_trip(monkeypatch, enabled, position, limit, order):
     settings = UserPreferences(session_tabs_enabled=not enabled, session_tabs_limit=3)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     user, db = _user(), AsyncMock(spec=AsyncSession)
     updated = await user_routes.update_user_preferences(
-        user_routes.UserPreferencesRequest(sessionTabsEnabled=enabled, sessionTabsPosition=position, sessionTabsLimit=limit), user, db,
+        user_routes.UserPreferencesRequest(sessionTabsEnabled=enabled, sessionTabsPosition=position, sessionTabsLimit=limit, sessionTabsOrder=order), user, db,
     )
     loaded = await user_routes.get_user_preferences(user, db)
     assert (updated["sessionTabsEnabled"], loaded["sessionTabsEnabled"], loaded["sessionTabsPosition"]) == (enabled, enabled, position)
     assert updated["sessionTabsLimit"] == loaded["sessionTabsLimit"] == limit
+    assert updated["sessionTabsOrder"] == loaded["sessionTabsOrder"] == order
 
 
-def test_legacy_disabled_tab_limit_loads_as_default():
-    assert UserPreferences.model_validate({"session_tabs_limit": None}).session_tabs_limit == 10
+@pytest.mark.parametrize("saved,expected", [(None, 10), (100, 20)])
+def test_legacy_tab_limit_loads_within_current_bounds(saved, expected):
+    assert UserPreferences.model_validate({"session_tabs_limit": saved}).session_tabs_limit == expected
 
 
-@pytest.mark.parametrize("value", [None, 0, 101, 1.5, True, "8"])
+@pytest.mark.parametrize("value", [None, 0, 21, 1.5, True, "8"])
 def test_session_tabs_limit_rejects_invalid_values(value):
     with pytest.raises(ValidationError):
         user_routes.UserPreferencesRequest(sessionTabsLimit=value)
@@ -116,8 +119,8 @@ async def test_workspace_state_persists_order_preview_and_partial_fields():
     db.scalar.return_value = record
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=[session]))
     tabs = [
-        {"sessionId": None, "projectId": None, "title": "New draft", "preview": False, "lastUsedAt": 0},
-        {"sessionId": str(session.id), "projectId": None, "title": "Stale title", "preview": True, "lastUsedAt": 123},
+        {"sessionId": None, "projectId": None, "title": "New draft", "preview": False, "addedAt": 0, "lastUsedAt": 0},
+        {"sessionId": str(session.id), "projectId": None, "title": "Stale title", "preview": True, "addedAt": 100, "lastUsedAt": 123},
     ]
     await user_routes.update_workspace_state(user_routes.WorkspaceStateRequest(sessionTabs=tabs), user, db)
     updated = await user_routes.update_workspace_state(user_routes.WorkspaceStateRequest(controlCenterOpen=True), user, db)
@@ -138,7 +141,7 @@ async def test_workspace_usage_only_updates_saved_tabs_and_preserves_recency():
     record = SettingRecord(key=UserPreferences.settings_key, user_id=user.id, data={})
     db.scalar.return_value = record
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=[session]))
-    saved = {"sessionId": str(session.id), "projectId": None, "title": session.title, "preview": False, "lastUsedAt": 10}
+    saved = {"sessionId": str(session.id), "projectId": None, "title": session.title, "preview": False, "addedAt": 5, "lastUsedAt": 10}
     await user_routes.update_workspace_state(user_routes.WorkspaceStateRequest(sessionTabs=[saved]), user, db)
     updated = await user_routes.update_workspace_state(user_routes.WorkspaceStateRequest(sessionTabUsage=[
         {"sessionId": session.id, "lastUsedAt": 20}, {"sessionId": uuid4(), "lastUsedAt": 30},
@@ -165,7 +168,7 @@ async def test_workspace_state_prunes_invalid_references_and_filters_stale_tabs(
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
     assert await user_routes.get_workspace_state(user, db) == {"sessionTabs": [], "controlCenterOpen": False}
     result = await user_routes.update_workspace_state(user_routes.WorkspaceStateRequest(sessionTabs=[tab, {}]), user, db)
-    assert result["sessionTabs"] == [{"sessionId": None, "projectId": None, "title": "", "preview": False, "lastUsedAt": 0}]
+    assert result["sessionTabs"] == [{"sessionId": None, "projectId": None, "title": "", "preview": False, "addedAt": 0, "lastUsedAt": 0}]
     save.assert_awaited_once_with(db, settings, user_id=user.id)
     load.assert_awaited_with(db, UserPreferences, user_id=user.id, for_update=True)
     sql = str(db.scalars.await_args.args[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
@@ -188,7 +191,7 @@ async def test_workspace_state_canonicalizes_mismatched_session_project(monkeypa
         {"sessionId": session.id, "projectId": uuid4()},
     ]), user, db)
     assert result["sessionTabs"] == [
-        {"sessionId": str(session.id), "projectId": None, "title": "Owned", "preview": False, "lastUsedAt": 0},
+        {"sessionId": str(session.id), "projectId": None, "title": "Owned", "preview": False, "addedAt": 0, "lastUsedAt": 0},
     ]
 
 

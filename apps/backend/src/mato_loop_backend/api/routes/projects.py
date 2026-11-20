@@ -49,12 +49,15 @@ from mato_loop_backend.settings import SettingsStore, UserPreferences
 
 router = APIRouter(prefix="/projects", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
+ProjectIconColor = Literal["blue", "teal", "green", "lime", "ochre", "orange", "red", "pink", "violet", "slate"]
 
 
 class ProjectRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     name: str = Field(min_length=1, max_length=240)
+    icon_initials: str | None = Field(default=None, alias="iconInitials", pattern=r"^[\p{L}\p{N}]{1,2}$")
+    icon_color: ProjectIconColor | None = Field(default=None, alias="iconColor")
     instructions: str = Field(default="", max_length=4000)
     default_session_template_id: UUID | None = Field(
         default=None, strict=False,
@@ -83,6 +86,11 @@ class ProjectRequest(BaseModel):
     _remote = field_validator("git_remote")(validate_git_remote)
     _branch = field_validator("git_target_branch")(validate_git_branch)
 
+    @field_validator("icon_initials", mode="before")
+    @classmethod
+    def normalize_icon_initials(cls, value: object) -> object:
+        return (value.strip() or None) if isinstance(value, str) else value
+
     @field_validator("name", mode="before")
     @classmethod
     def normalize_name(cls, value: object) -> object:
@@ -103,6 +111,8 @@ class ProjectResponse(BaseModel):
 
     id: UUID
     name: str
+    icon_initials: str | None = Field(default=None, alias="iconInitials")
+    icon_color: str | None = Field(default=None, alias="iconColor")
     archived_at: datetime | None = Field(default=None, alias="archivedAt")
     instructions: str
     default_session_template_id: UUID | None = Field(default=None, alias="defaultSessionTemplateId")
@@ -142,6 +152,8 @@ def _payload(project: Project, session_count: int, has_unread_messages: bool = F
     return ProjectResponse(
         id=project.id,
         name=project.name,
+        iconInitials=project.icon_initials,
+        iconColor=project.icon_color,
         archivedAt=project.archived_at,
         instructions=project.instructions,
         defaultSessionTemplateId=project.default_session_template_id,
@@ -375,6 +387,8 @@ async def create_project(
     project = Project(
         user_id=user.id,
         name=payload.name,
+        icon_initials=payload.icon_initials,
+        icon_color=payload.icon_color,
         instructions=payload.instructions,
         default_session_template_id=payload.default_session_template_id,
         default_execution_agent_id=payload.default_execution_agent_id,
@@ -406,6 +420,10 @@ async def update_project(
                 raise ApiError(exc.status_code, exc.code, field="defaultSessionTemplateId") from exc
         project.default_session_template_id = payload.default_session_template_id
     project.name = payload.name
+    if "icon_initials" in payload.model_fields_set:
+        project.icon_initials = payload.icon_initials
+    if "icon_color" in payload.model_fields_set:
+        project.icon_color = payload.icon_color
     if "instructions" in payload.model_fields_set:
         project.instructions = payload.instructions
     if "git_remote" in payload.model_fields_set:

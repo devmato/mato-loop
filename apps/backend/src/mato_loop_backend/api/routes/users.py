@@ -38,7 +38,11 @@ from mato_loop_backend.security import (
 )
 from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.settings import SettingsStore, UserPreferences
-from mato_loop_backend.settings.models import DEFAULT_SESSION_TABS_LIMIT, SessionTabs
+from mato_loop_backend.settings.models import (
+    DEFAULT_SESSION_TABS_LIMIT,
+    MAX_SESSION_TABS_LIMIT,
+    SessionTabs,
+)
 
 router = APIRouter(prefix="/users")
 logger = logging.getLogger(__name__)
@@ -88,7 +92,8 @@ class UserPreferencesRequest(BaseModel):
     session_tabs_enabled: bool = Field(default=False, alias="sessionTabsEnabled")
     sessions_page_size: int = Field(default=8, alias="sessionsPageSize", ge=1, le=100, strict=True)
     session_tabs_position: Literal["top", "bottom"] = Field(default="bottom", alias="sessionTabsPosition")
-    session_tabs_limit: int = Field(default=DEFAULT_SESSION_TABS_LIMIT, alias="sessionTabsLimit", ge=1, le=100, strict=True)
+    session_tabs_order: Literal["project", "added"] = Field(default="project", alias="sessionTabsOrder")
+    session_tabs_limit: int = Field(default=DEFAULT_SESSION_TABS_LIMIT, alias="sessionTabsLimit", ge=1, le=MAX_SESSION_TABS_LIMIT, strict=True)
     trash_enabled: bool = Field(default=False, alias="trashEnabled")
     trash_retention_days: int = Field(default=30, alias="trashRetentionDays", ge=1, le=3650)
     preferred_language: str | None = Field(
@@ -109,6 +114,7 @@ async def get_user_preferences(
         "sessionsPageSize": settings.sessions_page_size,
         "sessionTabsEnabled": settings.session_tabs_enabled,
         "sessionTabsPosition": settings.session_tabs_position,
+        "sessionTabsOrder": settings.session_tabs_order,
         "sessionTabsLimit": settings.session_tabs_limit,
         "trashEnabled": settings.trash_enabled,
         "trashRetentionDays": settings.trash_retention_days,
@@ -132,6 +138,7 @@ async def update_user_preferences(
         "sessionsPageSize": settings.sessions_page_size,
         "sessionTabsEnabled": settings.session_tabs_enabled,
         "sessionTabsPosition": settings.session_tabs_position,
+        "sessionTabsOrder": settings.session_tabs_order,
         "sessionTabsLimit": settings.session_tabs_limit,
         "trashEnabled": settings.trash_enabled,
         "trashRetentionDays": settings.trash_retention_days,
@@ -183,13 +190,20 @@ async def _workspace_tabs(
     return result
 
 
+def _limit_workspace_tabs(tabs: SessionTabs) -> SessionTabs:
+    if len(tabs) <= MAX_SESSION_TABS_LIMIT:
+        return tabs
+    recent = sorted(range(len(tabs)), key=lambda index: tabs[index].last_used_at, reverse=True)[:MAX_SESSION_TABS_LIMIT]
+    return [tabs[index] for index in sorted(recent)]
+
+
 @router.get("/me/workspace-state")
 async def get_workspace_state(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
     settings = await SettingsStore.load(db, UserPreferences, user_id=user.id)
-    tabs = await _workspace_tabs(db, user.id, settings.session_tabs)
+    tabs = _limit_workspace_tabs(await _workspace_tabs(db, user.id, settings.session_tabs))
     return {
         "sessionTabs": [tab.model_dump(mode="json", by_alias=True) for tab in tabs],
         "controlCenterOpen": settings.control_center_open,
@@ -215,13 +229,15 @@ async def update_workspace_state(
     replaces_tabs = "session_tabs" in payload.model_fields_set
     tabs = await _workspace_tabs(db, user.id, payload.session_tabs if replaces_tabs else settings.session_tabs)
     if replaces_tabs or payload.session_tab_usage:
-        settings.session_tabs = [
+        tabs = [
             tab.model_copy(update={"last_used_at": max(tab.last_used_at, usage.get(
                 ("session", tab.session_id) if tab.session_id else ("draft", tab.project_id), 0,
             ))})
             for tab in tabs
         ]
-        tabs = settings.session_tabs
+    tabs = _limit_workspace_tabs(tabs)
+    if replaces_tabs or payload.session_tab_usage:
+        settings.session_tabs = tabs
     if "control_center_open" in payload.model_fields_set:
         settings.control_center_open = payload.control_center_open
     await SettingsStore.save(db, settings, user_id=user.id)

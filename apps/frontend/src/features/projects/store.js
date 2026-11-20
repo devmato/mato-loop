@@ -13,6 +13,11 @@ export const useProjectStore = defineStore('projects', {
     reordering: false,
     revision: 0
   }),
+  getters: {
+    iconOrder: ({ items }) => new Map([...items]
+      .sort((a, b) => (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0) || a.id.localeCompare(b.id))
+      .map(({ id }, index) => [id, index]))
+  },
   actions: {
     async reorder(projectIds) {
       if (this.reordering) return

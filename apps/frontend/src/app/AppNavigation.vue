@@ -105,6 +105,7 @@
                 :duration="0"
                 dense
                 hide-expand-icon
+                :toggle-aria-label="project.hasUnreadMessages ? `${project.name}, ungelesene Nachrichten` : project.name"
                 class="project-list-item rounded-borders"
                 :class="{
                   'app-surface-tonal': sessionDropTarget === project.id,
@@ -121,11 +122,11 @@
               >
                 <template #header>
                   <q-item-section side class="q-pr-sm">
-                    <q-icon :name="expandedProjects[project.id] ? mdiFolderOpenOutline : mdiFolderOutline" :color="$q.dark.isActive ? 'white' : 'dark'" size="var(--sidebar-icon-size, 22px)" />
+                    <ProjectIcon :project-id="project.id" :name="project.name" :icon-initials="project.iconInitials" :icon-color="project.iconColor" :expanded="Boolean(expandedProjects[project.id])" />
                   </q-item-section>
                   <q-item-section>
                     <q-item-label lines="1" class="text-body2" :class="{ 'text-weight-medium': project.hasUnreadMessages }">
-                      {{ project.name }}<span v-if="project.hasUnreadMessages" class="app-sr-only">, ungelesene Nachrichten</span>
+                      {{ project.name }}
                     </q-item-label>
                   </q-item-section>
                   <q-item-section side class="project-list-item__actions row no-wrap items-center" :class="{ invisible: draggedProject }">
@@ -257,7 +258,7 @@
       :style="{ left: `clamp(8px, ${dragPosition.x + 12}px, calc(100vw - 272px))`, top: `min(${dragPosition.y + 12}px, calc(100vh - 48px))` }"
       aria-hidden="true"
     >
-      <q-icon :name="mdiFolderOutline" size="22px" />
+      <ProjectIcon :project-id="draggedProject.id" :name="draggedProject.name" :icon-initials="draggedProject.iconInitials" :icon-color="draggedProject.iconColor" />
       <span class="ellipsis">{{ draggedProject.name }}</span>
     </div>
   </Teleport>
@@ -297,13 +298,14 @@ import { useUserPreferencesStore } from 'src/features/settings/user-preferences-
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { mdiFolderOpenOutline, mdiFolderOutline } from '@quasar/extras/mdi-v7'
+import { mdiFolderOutline } from '@quasar/extras/mdi-v7'
 import { isNavigationFailure, NavigationFailureType, useRoute, useRouter } from 'vue-router'
 import AccountDialog from 'src/features/auth/AccountDialog.vue'
 import AppLogo from 'src/shared/ui/AppLogo.vue'
 import SidebarIconButton from 'src/shared/ui/SidebarIconButton.vue'
 import SidebarNavItem from 'src/shared/ui/SidebarNavItem.vue'
 import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
+import ProjectIcon from 'src/features/projects/ProjectIcon.vue'
 import SearchDialog from 'src/features/search/SearchDialog.vue'
 import SidebarActionMenu from 'src/features/chat/components/SidebarActionMenu.vue'
 import AutomationMenuItems from 'src/features/automations/AutomationMenuItems.vue'

@@ -43,6 +43,8 @@ class Project(Base):
         ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
+    icon_initials: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    icon_color: Mapped[str | None] = mapped_column(String(12), nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     delete_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     instructions: Mapped[str] = mapped_column(

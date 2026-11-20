@@ -97,14 +97,41 @@ it('makes room for a newly opened tab by dropping the least recently visited tab
   expect(chat.drafts.sessionMessages.a).toBe('Keep this draft')
 })
 
-it('labels project sessions with their full project suffix', async () => {
+it('follows sidebar project order while preserving standalone tabs and order within a project', async () => {
   const { tabs, settings } = await mount()
-  useProjectStore().items = [{ id: 'project', name: 'MatoLoop' }]
+  const projects = useProjectStore()
+  projects.items = [
+    { id: 'project', name: 'MatoLoop', createdAt: '2026-01-01T00:00:00Z' },
+    { id: 'another', name: 'Alpha-Projekt', createdAt: '2026-01-02T00:00:00Z' }
+  ]
   settings.sessionTabsEnabled = true
   tabs.visit(b, { keep: true })
+  tabs.visit({ id: 'c', title: 'Zweiter Tab', projectId: 'another' }, { keep: true })
+  tabs.visit({ id: 'd', title: 'Erster im Alphabet', projectId: 'another' }, { keep: true })
   await nextTick()
-  expect([...root.querySelectorAll('[role="tab"]')].map(tab => tab.getAttribute('aria-label')))
-    .toEqual(['Beta · MatoLoop', 'Alpha, Vorschau'])
+  const labels = () => [...root.querySelectorAll('[role="tab"]')].map(tab => tab.getAttribute('aria-label'))
+  const before = labels()
+  projects.items.reverse()
+  await nextTick()
+  expect([before, labels()]).toEqual([
+    ['Alpha, Vorschau', 'Beta · MatoLoop', 'Zweiter Tab · Alpha-Projekt', 'Erster im Alphabet · Alpha-Projekt'],
+    ['Alpha, Vorschau', 'Zweiter Tab · Alpha-Projekt', 'Erster im Alphabet · Alpha-Projekt', 'Beta · MatoLoop']
+  ])
+  expect([...root.querySelectorAll('.session-tabs__project-badge')].map(icon => icon.style.getPropertyValue('--project-icon-light')))
+    .toEqual(['#0e667e', '#0e667e', '#1d4ed8'])
+})
+
+it('orders tabs by when they were added, not by manual order or latest use', async () => {
+  const { tabs, settings } = await mount()
+  settings.sessionTabsEnabled = true
+  tabs.visit(b, { keep: true })
+  tabs.visit({ id: 'c', title: 'Gamma', projectId: 'project' }, { keep: true })
+  tabs.reorder('c', 'b')
+  tabs.visit(b)
+  settings.sessionTabsOrder = 'added'
+  await nextTick()
+  const projectTabs = [...root.querySelectorAll('[role="tab"]')].filter(tab => /^(Beta|Gamma)/.test(tab.getAttribute('aria-label')))
+  expect(projectTabs.map(tab => [tab.getAttribute('aria-label'), tab.draggable])).toEqual([['Beta', false], ['Gamma', false]])
 })
 
 it('limits tabs to ten by default and applies a lower limit only on the next new tab', async () => {
@@ -132,11 +159,14 @@ it('shows active-run status from summaries instead of session details', async ()
 
 it('shows pending questions even before a restored session summary is loaded', async () => {
   const { tabs, settings } = await mount()
+  useProjectStore().items = [{ id: 'project', name: 'MatoLoop' }]
   useQuestionStore().pending = [{ id: 'question', sessionId: 'b', status: 'pending' }]
   tabs.visit(b, { keep: true })
   settings.sessionTabsEnabled = true
   await nextTick()
-  expect(root.querySelector('[aria-label="1 offene Anfrage"]')).not.toBeNull()
+  const badge = root.querySelector('[role="tab"][aria-label="Beta · MatoLoop"] .session-tabs__project-badge')
+  expect([badge?.querySelector('[aria-hidden="true"]')?.textContent, badge?.querySelector('[role="status"]')?.getAttribute('aria-label')])
+    .toEqual(['ML', '1 offene Anfrage'])
 })
 
 it('loads summaries for restored project sessions without loading sidebar scopes', async () => {
@@ -212,13 +242,13 @@ it('keeps a remotely closed tab closed when a stale client switches tabs', async
   await first.saving
   second.visit(a)
   await second.saving
-  expect(saved.sessionTabs).toEqual([{ sessionId: a.id, title: a.title, projectId: null, preview: false, lastUsedAt: expect.any(Number) }])
+  expect(saved.sessionTabs).toEqual([{ sessionId: a.id, title: a.title, projectId: null, preview: false, addedAt: expect.any(Number), lastUsedAt: expect.any(Number) }])
 })
 
 it('reorders without navigating and keeps the moved preview', async () => {
   const { tabs, settings, router } = await mount()
   settings.sessionTabsEnabled = true
-  tabs.visit(b, { keep: true })
+  tabs.visit({ ...b, projectId: null }, { keep: true })
   await nextTick()
   const preview = root.querySelector('[aria-label="Alpha, Vorschau"]')
   preview.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', altKey: true, bubbles: true }))

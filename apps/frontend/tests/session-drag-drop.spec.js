@@ -59,7 +59,7 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
       markSessionRead: vi.fn().mockResolvedValue(),
       flushDraftWrite: vi.fn()
     },
-    projects: { loaded: true, items: [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }], fetchAll: vi.fn().mockResolvedValue(), refreshSummaries: vi.fn().mockResolvedValue() },
+    projects: { loaded: true, items: [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }], iconOrder: new Map(), fetchAll: vi.fn().mockResolvedValue(), refreshSummaries: vi.fn().mockResolvedValue() },
     pending: { pending: [], forSession: () => [], fetchPending: vi.fn().mockResolvedValue(), fetchGrants: vi.fn().mockResolvedValue() },
     quasar: { dark: { isActive: false }, screen: { lt: { sm: false, md: false, lg: false } }, platform: { is: {} }, notify: vi.fn() }
   }
@@ -236,6 +236,15 @@ it('moves the sessions section before projects in DOM order', async () => {
   await nextTick()
   expect([...root.querySelectorAll('section[aria-labelledby]')].map(section => section.getAttribute('aria-labelledby')))
     .toEqual(['automations-heading', 'sessions-heading', 'projects-heading'])
+})
+
+it('changes the folder outline but keeps the project initials when collapsing the project', async () => {
+  const header = root.querySelector('[data-project-id="a"] > button')
+  const icon = header.querySelector('.project-icon')
+  const openPath = icon.querySelector('path').getAttribute('d')
+  header.click()
+  await nextTick()
+  expect([icon.textContent.trim(), icon.querySelector('path').getAttribute('d') === openPath]).toEqual(['AL', false])
 })
 
 it('badges unread notifications received in the background until read', async () => {

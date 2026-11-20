@@ -15,6 +15,29 @@
             lazy-rules
             :rules="[requiredRule]"
           />
+          <div class="row q-col-gutter-sm q-mb-md">
+            <div class="col-12 col-sm-6">
+              <q-input v-model="iconInitials" dense outlined label="Projektkürzel" hint="Leer: aus dem Namen ableiten." :rules="[initialsRule]" />
+            </div>
+            <div class="col-12 col-sm-6">
+              <AppSelect v-model="iconColor" outlined emit-value map-options label="Projektfarbe" :options="iconColorOptions">
+                <template #prepend>
+                  <ProjectIcon :project-id="project?.id || ''" :name="name" :icon-initials="previewInitials" :icon-color="iconColor" />
+                </template>
+                <template #option="scope">
+                  <q-item v-bind="scope.itemProps" class="rounded-borders">
+                    <q-item-section side>
+                      <ProjectIcon :project-id="project?.id || ''" :name="name" :icon-initials="previewInitials" :icon-color="scope.opt.value" />
+                    </q-item-section>
+                    <q-item-section>{{ scope.opt.label }}</q-item-section>
+                    <q-item-section side>
+                      <q-icon v-if="scope.selected" name="check" size="18px" color="primary" aria-hidden="true" />
+                    </q-item-section>
+                  </q-item>
+                </template>
+              </AppSelect>
+            </div>
+          </div>
           <q-input dense
             v-model="instructions"
             outlined
@@ -130,6 +153,8 @@ import ExecutionAgentDirectoryPickerDialog from 'src/features/computers/Executio
 import { agentDisplayName } from 'src/features/computers/display'
 import { useRepositoryProbe } from 'src/features/coding/repository'
 import { apiErrorMessage } from 'src/utils/api-errors'
+import ProjectIcon from './ProjectIcon.vue'
+import { projectIconPalette } from './project-icon-palette'
 
 const props = defineProps({ project: { type: Object, default: null } })
 const emit = defineEmits(['created'])
@@ -150,6 +175,11 @@ const templateOptions = computed(() => {
   return options
 })
 const name = ref('')
+const iconInitials = ref('')
+const iconColor = ref('auto')
+const iconColorOptions = [{ value: 'auto', label: 'Automatisch' }, ...projectIconPalette]
+const initialsRule = value => !value.trim() || /^[\p{L}\p{N}]{1,2}$/u.test(value.trim()) || 'Bitte höchstens zwei Buchstaben oder Ziffern eingeben.'
+const previewInitials = computed(() => initialsRule(iconInitials.value) === true ? iconInitials.value.trim() || null : null)
 const instructions = ref('')
 const executionAgentId = ref(null)
 const currentDirectory = ref(null)
@@ -193,6 +223,8 @@ const requiredRule = value => Boolean(String(value || '').trim()) || 'Pflichtfel
 watch(open, (shown) => {
   if (!shown) return
   name.value = props.project?.name || ''
+  iconInitials.value = props.project?.iconInitials || ''
+  iconColor.value = props.project?.iconColor || 'auto'
   instructions.value = props.project?.instructions || ''
   sessionTemplateId.value = props.project?.defaultSessionTemplateId || null
   executionAgentId.value = props.project?.defaultExecutionAgentId || null
@@ -215,6 +247,8 @@ async function save() {
   const title = name.value.trim()
   if (!title || saving.value) return
   const defaults = {
+    iconInitials: previewInitials.value,
+    iconColor: iconColor.value === 'auto' ? null : iconColor.value,
     defaultSessionTemplateId: sessionTemplateId.value,
     defaultExecutionAgentId: executionAgentId.value,
     defaultCurrentDirectory: executionAgentId.value ? currentDirectory.value?.trim() || null : null,

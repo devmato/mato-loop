@@ -45,9 +45,10 @@ export const useSessionTabsStore = defineStore('session-tabs', {
     },
     applyWorkspace(data) {
       const localUsage = new Map(this.items.map(tab => [tab.key, tab.lastUsedAt ?? 0]))
-      this.items = (data.sessionTabs || []).map(tab => {
+      this.items = (data.sessionTabs || []).map((tab, index) => {
         const key = sessionTabKey(tab.sessionId, tab.projectId)
-        return { ...tab, key, lastUsedAt: Math.max(tab.lastUsedAt ?? 0, localUsage.get(key) ?? 0) }
+        // Older workspaces only have their saved list order.
+        return { ...tab, key, addedAt: tab.addedAt || index + 1, lastUsedAt: Math.max(tab.lastUsedAt ?? 0, localUsage.get(key) ?? 0) }
       })
       this.controlCenterOpen = data.controlCenterOpen === true
     },
@@ -113,7 +114,7 @@ export const useSessionTabsStore = defineStore('session-tabs', {
       return request
     },
     persistTabs() {
-      const sessionTabs = this.items.map(({ sessionId, projectId, title, preview, lastUsedAt }) => ({ sessionId, projectId, title, preview, lastUsedAt }))
+      const sessionTabs = this.items.map(({ sessionId, projectId, title, preview, addedAt, lastUsedAt }) => ({ sessionId, projectId, title, preview, addedAt, lastUsedAt }))
       void this.saveWorkspace({ sessionTabs }).catch(() => {})
     },
     async setControlCenterOpen(open) {
@@ -148,7 +149,7 @@ export const useSessionTabsStore = defineStore('session-tabs', {
       }
       const tab = {
         key, sessionId: context.id || null, projectId: context.projectId || null,
-        title: context.title || 'Neue Session', preview: !keep, lastUsedAt: this.visitClock
+        title: context.title || 'Neue Session', preview: !keep, addedAt: this.visitClock, lastUsedAt: this.visitClock
       }
       const preview = this.items.findIndex(item => item.preview)
       if (preview >= 0 && !keep) {
