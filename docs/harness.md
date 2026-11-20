@@ -329,6 +329,8 @@ Preserve the longest **unchanged, still-authorized** provider prefix, not a perm
 
 The implementation owners are `agent/prompts.py` (system parts/reminders), `agent/projection.py` and `agent/context.py` (turns, checkpoints, fitting), `agent/turn_context.py` (optional context/preparation), and `agent/run_support.py` (ephemeral images).
 
+The selected-computer context identifies an assigned worktree as the default for repository work, separately from the active directory and the scratch directory. It uses the existing session binding on the connected computer and does not grant access or move the shell. Adding this hint intentionally changes older system prefixes only for sessions that receive it; unchanged context retains the same prefix across tool rounds and follow-ups.
+
 Inactive capability hints retain installed tool names with compact settings/profile locations or workflow prerequisites, not callable schemas. Adding names or changing hint wording intentionally invalidates that system-context suffix; unchanged inventories retain their deterministic order.
 
 Integration-scoped discovery adds stable connection IDs to the catalog and an optional ID filter to `search_tools`. Readable MCP model names and source descriptions intentionally invalidate the former tool/schema and catalog prefixes once. Discovery replay resolves current eligible bindings without rewriting historical exchanges; subsequent unchanged offers retain deterministic ordering. See [tool loading](integrations.md#tool-loading).

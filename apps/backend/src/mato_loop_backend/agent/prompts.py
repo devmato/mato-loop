@@ -242,6 +242,7 @@ def general_system_prompt(
     execution_agent_system_info: SystemInfo | None = None,
     temporary_files_enabled: bool = False,
     current_directory: str | None = None,
+    assigned_worktree: str | None = None,
     session_environment: dict[str, dict[str, str]] | None = None,
     delegated: bool = False,
     model_trust_level: TrustLevel = TrustLevel.PRIVATE,
@@ -701,6 +702,7 @@ def general_system_prompt(
         )
     parts.extend(tool_instructions)
     if execution_agent_name is not None:
+        worktree = assigned_worktree if execution_agent_connected else None
         dynamic_parts.append(
             "Selected computer context:\n"
             + json.dumps(
@@ -722,6 +724,7 @@ def general_system_prompt(
                         if execution_agent_connected and execution_agent_system_info is not None
                         else {}
                     ),
+                    **({"assignedWorktree": worktree} if worktree else {}),
                 },
                 ensure_ascii=False,
             )
@@ -736,6 +739,10 @@ def general_system_prompt(
             "writing requires temporaryDirectoryWritable or a separate file permission. Other session paths have no "
             "implicit access. Shell calls may already have created it. Reuse it when present; call create_directory "
             "only after confirming it is missing and creation is authorized. File access does not authorize shell effects."
+            + (" Use assignedWorktree for repository work by default, even if currentDirectory points elsewhere. "
+               "Relative computer paths still resolve against currentDirectory. "
+               "Use temporaryDirectory for scratch files, not a second checkout unless the task requires one."
+               if worktree else "")
             + ("\nNo live computer operations are available." if not execution_agent_connected else "")
         )
     elif execution_agent_id is not None:

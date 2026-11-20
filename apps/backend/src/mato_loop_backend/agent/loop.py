@@ -521,6 +521,19 @@ async def execute_loop_body(
                 checked_entries=repository_entries,
                 discovery_scope=(chat_session.user_id, chat_session.id),
             )
+        workspace = chat_session.coding_workspace or {}
+        assigned_worktree = None
+        if (
+            not delegated
+            and selected_execution_agent is not None
+            and workspace.get("mode") == "worktree"
+            and workspace.get("executionAgentId") == str(selected_execution_agent.id)
+        ):
+            from mato_loop_backend.sessions.service import execution_filesystem_policy
+
+            path = workspace.get("path")
+            if isinstance(path, str) and path and execution_filesystem_policy(selected_execution_agent, path) != "deny":
+                assigned_worktree = path
         render_system_prompt = partial(
             general_system_prompt,
             chat_session,
@@ -582,6 +595,7 @@ async def execute_loop_body(
             ),
             temporary_files_enabled=tool_settings._temporary_files_enabled,
             current_directory=run.current_directory_snapshot,
+            assigned_worktree=assigned_worktree,
             session_environment={
                 **{name: {"valueRef": ref} for name, ref in run_secret_refs.items()},
                 **session_secrets.prompt_entries(chat_session.id),

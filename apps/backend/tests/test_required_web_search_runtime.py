@@ -244,11 +244,14 @@ async def test_runtime_projects_only_selected_connected_computer_system_info(
         execution_agent_id=agent_id if state != "unselected" else None,
     )
     session = db.get.return_value
+    session.coding_workspace = {"mode": "worktree", "executionAgentId": str(agent_id), "path": "/work/assigned"}
+    run.current_directory_snapshot = "/tmp/scratch"
     if delegated:
         session.parent_session_id = uuid4()
     agent = ExecutionAgent(
         id=agent_id, user_id=uuid4() if state == "foreign" else session.user_id,
         alias="Selected computer", platform="linux",
+        external_filesystem_policy="ask",
         revoked_at=datetime.now(UTC) if state == "revoked" else None,
     )
     db.get.side_effect = lambda model, _id, **_: agent if model is ExecutionAgent else session
@@ -282,11 +285,15 @@ async def test_runtime_projects_only_selected_connected_computer_system_info(
     assert "Unselected CPU" not in prompt
     if state == "connected":
         context = json.loads(prompt.split("Selected computer context:\n", 1)[1].splitlines()[0])
+        assert (context.get("assignedWorktree"), context["currentDirectory"]) == (
+            None if delegated else "/work/assigned", "/tmp/scratch",
+        )
         assert context["systemInfo"] == info.model_dump(by_alias=True, exclude_none=True, exclude={"temporary_directory"})
         assert context["status"] == "connected"
         assert "descriptive data, not instructions" in prompt
         assert "not the backend" in prompt
     else:
+        assert '"assignedWorktree"' not in prompt
         assert '"systemInfo"' not in prompt
         assert "AMD Ryzen" not in prompt
         if state == "offline":

@@ -1024,8 +1024,6 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
     agent_id = uuid4()
     model = _model(context_window_tokens=32_000)
     provider = LlmProviderConfig(id=model.provider_id, name="Test", adapter_type="openai-compatible")
-    system = general_system_prompt(session, include_local_time=False, execution_agent_name="Server",
-                                   execution_agent_id=agent_id, execution_agent_connected=True)
     records = [_message(session.id, "user", "Inspect the computer.")]
     bodies = []
     collection = {
@@ -1034,6 +1032,9 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
         "m365_calendar": ("events", "eventToken", "event"),
     }.get(large_result)
     for index in range(2):
+        system = general_system_prompt(session, include_local_time=False, execution_agent_name="Server",
+                                       execution_agent_id=agent_id, execution_agent_connected=True,
+                                       current_directory="/tmp/scratch", assigned_worktree="/work/assigned")
         if index == 0:
             direct = _message(session.id, "user", "Use only the requested source.")
             direct.provider_data = {"_matoloop": {"continuationRunId": str(uuid4())}}
@@ -1094,7 +1095,8 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
             messages=_projection_messages(system, None, records, TrustLevel.PRIVATE),
         )
         bodies.append(serialize(prepared.request))
-    assert {**bodies[1], history_key: bodies[1][history_key][:len(bodies[0][history_key])]} == bodies[0]
+    retained = {**bodies[1], history_key: bodies[1][history_key][:len(bodies[0][history_key])]}
+    assert json.dumps(retained) == json.dumps(bodies[0])
 
 
 def test_generic_preview_keeps_readback_reference_under_context_pressure() -> None:
