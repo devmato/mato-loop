@@ -1455,10 +1455,17 @@ class AgentRuntime:
         assistant = records[batch]
         _, results = tool_batches(records)
         missing = [
-            str(call["id"])
+            (str(call["id"]), {})
             for call in assistant.tool_calls
             if call.get("id") and (batch, call["id"]) not in results
         ]
+        script_calls = (assistant.provider_data or {}).get("_matoloop", {}).get("scriptToolCalls", {})
+        if script_calls:
+            finished = {item.tool_call_id for item in records[batch + 1:] if item.role == "tool"}
+            missing.extend(
+                (call_id, {"scriptParent": child["scriptParent"], "toolName": child["name"]})
+                for call_id, child in script_calls.items() if call_id not in finished
+            )
         if not missing:
             return
         content = json.dumps(
@@ -1472,9 +1479,9 @@ class AgentRuntime:
                     content=content,
                     tool_call_id=tool_call_id,
                     trust_level=assistant.trust_level,
-                    provider_data={"_matoloop": {"runId": str(run_id), "fileOutputsPending": True}},
+                    provider_data={"_matoloop": {"runId": str(run_id), "fileOutputsPending": True, **binding}},
                 )
-                for tool_call_id in missing
+                for tool_call_id, binding in missing
             ]
         )
         await db.flush()

@@ -237,6 +237,9 @@ class ProviderResult:
     usage: dict[str, int] = field(default_factory=dict)
     finish_reason: str | None = None
     reasoning: PublicReasoning | None = None
+    restore_script_arguments: Callable[[dict[str, Any]], dict[str, Any]] | None = field(
+        default=None, repr=False, compare=False,
+    )
 
 
 class ProviderError(RuntimeError):

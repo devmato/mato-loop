@@ -632,7 +632,10 @@ async def session_message_page(
     )
     call_ids = {
         call["id"] for message in messages if message.role == "assistant"
-        for call in (message.tool_calls or [])
+        for call in (
+            *(message.tool_calls or []),
+            *(message.provider_data or {}).get("_matoloop", {}).get("scriptToolCalls", {}).values(),
+        )
         if isinstance(call, dict) and isinstance(call.get("id"), str)
     }
     if call_ids:
@@ -644,9 +647,12 @@ async def session_message_page(
         result_carrier = select(carrier.id).where(
             carrier.session_id == Message.session_id,
             carrier.role == "assistant",
-            carrier.tool_calls.contains(func.jsonb_build_array(
-                func.jsonb_build_object("id", Message.tool_call_id),
-            )),
+            or_(
+                carrier.tool_calls.contains(func.jsonb_build_array(
+                    func.jsonb_build_object("id", Message.tool_call_id),
+                )),
+                carrier.provider_data["_matoloop"]["scriptToolCalls"].op("?")(Message.tool_call_id),
+            ),
             tuple_(carrier.created_at, carrier.id) < tuple_(Message.created_at, Message.id),
             or_(carrier_run.is_(None), result_run.is_(None), carrier_run == result_run),
         ).order_by(carrier.created_at.desc(), carrier.id.desc()).limit(1).correlate(Message).scalar_subquery()

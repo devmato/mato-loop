@@ -922,7 +922,10 @@ class ProviderService:
                         on_unknown_marker=note_unknown_marker,
                     )
                     for call in result.tool_calls:
-                        call.arguments = pseudonymizer.restore_value(call.arguments)
+                        if call.name == "run_tool_script":
+                            result.restore_script_arguments = pseudonymizer.restore_value
+                        else:
+                            call.arguments = pseudonymizer.restore_value(call.arguments)
                     if result.reasoning is not None:
                         result.reasoning.text = pseudonymizer.restore_text(
                             result.reasoning.text,

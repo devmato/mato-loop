@@ -76,7 +76,8 @@ describe('model runtime configuration', () => {
       pseudonymizationEnabled: false,
       memoryPolicy: 'deny',
       reasoningSummary: false,
-      reasoningEffort: 'low'
+      reasoningEffort: 'low',
+      scriptedToolsEnabled: false
     })
   })
 
@@ -106,6 +107,7 @@ describe('model runtime configuration', () => {
       characters_per_token: 4.2,
       supports_tools: false,
       supports_parallel_tool_calls: false,
+      scripted_tools_enabled: false,
       supports_streaming: true,
       supports_image_input: true,
       trust_level: 'private',

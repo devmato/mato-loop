@@ -8,6 +8,7 @@ from mato_loop_backend.agent.audio_analysis import audio_analysis_available
 from mato_loop_backend.agent.media_prompt_profiles import with_media_prompt_profiles
 from mato_loop_backend.agent.projection import estimate_tokens
 from mato_loop_backend.agent.run_contracts import AgentRunError
+from mato_loop_backend.agent.script_tools import SCRIPT_CAPABILITY, SCRIPT_TOOL, tool_call_offer
 from mato_loop_backend.agent.video_analysis import video_analysis_available
 from mato_loop_backend.execution import ExecutionClient
 from mato_loop_backend.integrations.registry import (
@@ -43,6 +44,7 @@ class TurnTools:
     inactive_groups: tuple[str, ...]
     search_pending: bool
     available_names: frozenset[str]
+    script_names: frozenset[str]
 
 
 def select_turn_tools(
@@ -83,6 +85,8 @@ def select_turn_tools(
     )
     if project is not None and project.coding_integration_id is not None:
         capabilities.add("project.coding")
+    if model.scripted_tools_enabled and not delegated:
+        capabilities.add(SCRIPT_CAPABILITY)
     execution_client = (
         ExecutionClient(
             run.execution_agent_id,
@@ -139,6 +143,7 @@ def select_turn_tools(
         toolset = toolset.without("load_skill", "edit_skill")
     if (project is None or project.coding_integration_id is None) and toolset is not None:
         toolset = toolset.without(*PROJECT_CODING_TOOL_NAMES)
+    wrapper = toolset.tools.get(SCRIPT_TOOL) if toolset is not None else None
     available_names = frozenset(toolset.tools if toolset else ())
     if toolset is not None:
         toolset = offer_integration_tools(toolset, integration_settings, active_profile, discovery_records or [],
@@ -169,7 +174,13 @@ def select_turn_tools(
         toolset = toolset.only(*previous_tool_names)
     elif remaining_tool_calls == 1 and toolset is not None:
         toolset = toolset.without("secret_input")
-    schemas = toolset.schemas() if toolset else []
+    scripted = model.scripted_tools_enabled and not delegated
+    if scripted and toolset is not None and wrapper is not None and SCRIPT_TOOL not in toolset.tools:
+        toolset = EffectiveToolSet(toolset.registry, {**toolset.tools, SCRIPT_TOOL: wrapper}, toolset.prompt_fragments)
+    schemas, script_names = tool_call_offer(toolset.schemas() if toolset else [], scripted)
+    logical_names = {schema["name"] for schema in schemas} | script_names
+    if toolset is not None and logical_names != toolset.tools.keys():
+        toolset = toolset.without(*(toolset.tools.keys() - logical_names))
     if delegated:
         for schema in schemas:
             pending = [schema["parameters"]]
@@ -183,16 +194,16 @@ def select_turn_tools(
                 elif isinstance(value, list):
                     pending.extend(value)
     schema_tokens = estimate_tokens(schemas, model.characters_per_token) if schemas else 0
-    if search_pending and not any(schema["name"] == "web_search" for schema in schemas):
+    if search_pending and "web_search" not in logical_names:
         raise AgentRunError("agent.requiredWebSearchUnsupported")
-    if memory_write_pending and not any(schema["name"] == "memory_write" for schema in schemas):
+    if memory_write_pending and "memory_write" not in logical_names:
         raise AgentRunError("agent.requiredMemoryWriteMissing")
-    if render_pending and not any(schema["name"] == "render_openscad" for schema in schemas):
+    if render_pending and "render_openscad" not in logical_names:
         raise AgentRunError("agent.requiredOpenScadRenderMissing")
-    if source_review_pending is not None and not any(schema["name"] == "read" for schema in schemas):
+    if source_review_pending is not None and "read" not in logical_names:
         raise AgentRunError("agent.requiredOpenScadSourceReviewMissing")
     return TurnTools(
         integration_settings, execution_client, toolset, schemas,
         {schema["name"] for schema in schemas}, effective_count,
-        schema_tokens, inactive_groups, search_pending, available_names,
+        schema_tokens, inactive_groups, search_pending, available_names, script_names,
     )

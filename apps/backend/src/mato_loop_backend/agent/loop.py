@@ -37,6 +37,7 @@ from mato_loop_backend.agent.run_support import (
     logger,
 )
 from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
+from mato_loop_backend.agent.script_tools import SCRIPT_TOOL
 from mato_loop_backend.agent.session_context import prepare_session_contexts
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.session_settings import apply_run_session_settings
@@ -494,7 +495,7 @@ async def execute_loop_body(
         execution_client = turn_tools.execution_client
         effective_toolset = turn_tools.toolset
         schemas = turn_tools.schemas
-        previous_tool_names = tuple(schema["name"] for schema in schemas)
+        previous_tool_names = tuple(effective_toolset.tools) if effective_toolset else ()
         offered_tool_names = turn_tools.offered_names
         effective_tool_count = turn_tools.effective_count
         tool_schema_tokens = turn_tools.schema_tokens
@@ -826,7 +827,7 @@ async def execute_loop_body(
         if memory_write_pending and not rejected_batch_code and (
             not normalized_calls
             or any(
-                call.name not in {"context_search", "memory_browse", "memory_write"}
+                call.name not in offered_tool_names
                 for call in normalized_calls
             )
         ):
@@ -836,11 +837,13 @@ async def execute_loop_body(
             continue
         if openscad_source_review_pending is not None and not rejected_batch_code:
             review_root, review_path = openscad_source_review_pending
+            review_call = normalized_calls[0] if len(normalized_calls) == 1 else None
             if (
-                len(normalized_calls) != 1
-                or normalized_calls[0].name != "read"
-                or normalized_calls[0].arguments.get("root") != review_root
-                or normalized_calls[0].arguments.get("path") != review_path
+                review_call is None or not (
+                    review_call.name == SCRIPT_TOOL and review_call.name in offered_tool_names
+                    or review_call.name == "read" and review_call.arguments.get("root") == review_root
+                    and review_call.arguments.get("path") == review_path
+                )
             ):
                 openscad_source_review_retries += 1
                 if (
@@ -939,6 +942,8 @@ async def execute_loop_body(
             batch = await execute_tool_batch(
                 cls, db, run, chat_session, assistant, normalized_calls, serialized_calls,
                 toolset=effective_toolset, offered_names=offered_tool_names,
+                script_names=turn_tools.script_names,
+                restore_script_arguments=result.restore_script_arguments,
                 delegation_tool_names=turn_tools.available_names,
                 root_files=root_files, memory_state=memory_state,
                 model=model, provider=provider, ai_settings=ai_settings,
@@ -985,10 +990,12 @@ async def execute_loop_body(
             cls._tool_active_runs.discard(run.id)
         if run.id in cls._redirected_runs and run.id in cls._user_cancelled_runs:
             raise asyncio.CancelledError
+        tool_calls_used += batch.script_tool_calls_used
         research_tool_calls_used = batch.research_tool_calls_used
         research_used = batch.research_used
         openscad_render_pending = batch.openscad_render_pending
         openscad_render_retries = batch.openscad_render_retries
+        review_source_was_pending = openscad_source_review_pending is not None
         openscad_source_review_pending = batch.openscad_source_review_pending
         openscad_source_review_retries = batch.openscad_source_review_retries
         repeated_tool_call_seen = batch.repeated_tool_call_seen
@@ -1018,6 +1025,10 @@ async def execute_loop_body(
             continue
         if repeated_tool_call_limit_reached and not budget_finalization:
             raise AgentRunError("agent.repeatedToolCall")
+        if turn_tools.script_names and review_source_was_pending and openscad_source_review_pending is not None:
+            openscad_source_review_retries += 1
+            if openscad_source_review_retries > REQUIRED_OPENSCAD_SOURCE_REVIEW_RETRIES and not budget_finalization:
+                raise AgentRunError("agent.requiredOpenScadSourceReviewMissing")
         if memory_workflow_resolved:
             memory_write_pending = False
             memory_write_retries = 0
@@ -1047,7 +1058,7 @@ async def execute_loop_body(
                     ):
                         raise AgentRunError(required_search_error)
                     raise AgentRunError("agent.requiredWebSearchFailed")
-            elif skill_load_called and not skill_load_succeeded:
+            elif (skill_load_called or turn_tools.script_names) and not skill_load_succeeded:
                 required_search_retries += 1
                 if required_search_retries > REQUIRED_WEB_SEARCH_RETRIES and not budget_finalization:
                     raise AgentRunError("agent.requiredWebSearchMissing")

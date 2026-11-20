@@ -415,6 +415,10 @@ def _model_tool_calls(
     projected = []
     for call in tool_calls:
         item = dict(call)
+        if item.get("name") == "run_tool_script" and isinstance(item.get("arguments"), dict):
+            from mato_loop_backend.agent.run_support import _safe_tool_arguments
+
+            item["arguments"] = _safe_tool_arguments("run_tool_script", item["arguments"])
         arguments = item.get("arguments")
         if isinstance(arguments, dict):
             projected_arguments = model_tool_reference_arguments(
@@ -839,6 +843,8 @@ def _projection_messages(
     previous_memory_context = None
     previous_project_worktrees = None
     for record_index, item in enumerate(records):
+        if item.role == "tool" and (item.provider_data or {}).get("_matoloop", {}).get("scriptParent"):
+            continue
         turn_memory = memory_context if item.id == latest_user_id else (memory_contexts or {}).get(item.id)
         projected = message_dict(
             item,
@@ -1543,7 +1549,12 @@ def _tool_calls_by_message_id(records: list[Message]) -> dict[UUID, dict[str, An
 
 
 def _tool_names_by_message_id(records: list[Message]) -> dict[UUID, str]:
-    return {key: str(call.get("name") or "") for key, call in _tool_calls_by_message_id(records).items()}
+    names = {key: str(call.get("name") or "") for key, call in _tool_calls_by_message_id(records).items()}
+    for item in records:
+        host = (item.provider_data or {}).get("_matoloop", {})
+        if item.role == "tool" and host.get("scriptParent") and isinstance(host.get("toolName"), str):
+            names[item.id] = host["toolName"]
+    return names
 
 
 def _tool_result_read_metadata(
@@ -1597,6 +1608,9 @@ def _tool_result_page(
         available_secret_references=available_secret_references,
     )
     content = _sanitize_tool_result_reference_fields(_model_file_tool_result(content))
+    if (readable_by == TrustLevel.PUBLIC and message.trust_level != TrustLevel.PUBLIC.value
+            and (message.provider_data or {}).get("_matoloop", {}).get("scriptParent")):
+        content = '{"redactedPrivateContext":true}'
     content = model_tool_references(tool_name, content, message.id)
     end = min(len(content), offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS)
     return {
@@ -1658,6 +1672,8 @@ def _target_tool_result(
 ) -> str:
     if tool_name is None:
         tool_name = _inferred_tool_name(content)
+    if tool_name == "run_tool_script" and readable_by == TrustLevel.PUBLIC and source_trust_level != "public":
+        return '{"redactedPrivateContext":true}'
     if tool_name == "secret_input" and available_secret_references is not None:
         return model_secret_references(content, available_secret_references)
     if tool_name in {"session_state", "message_metadata"} and readable_by == TrustLevel.PUBLIC and not authorized_live:

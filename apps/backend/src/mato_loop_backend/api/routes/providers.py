@@ -178,6 +178,7 @@ class ModelRuntimeRequest(ApiRequest):
     characters_per_token: float = Field(default=4.0, gt=0, le=100)
     supports_tools: bool = True
     supports_parallel_tool_calls: bool = True
+    scripted_tools_enabled: bool = False
     supports_streaming: bool = True
     input_modalities: set[ModelInputModality] = Field(
         default_factory=lambda: {ModelInputModality.TEXT}
@@ -217,6 +218,7 @@ class ModelRuntimeRequest(ApiRequest):
     def validate_limits(self) -> Self:
         if not self.supports_tools:
             self.supports_parallel_tool_calls = False
+            self.scripted_tools_enabled = False
         self.supports_image_input = (
             ModelInputModality.IMAGE in self.input_modalities
         )
@@ -425,6 +427,7 @@ def _settings_payload(
                 "charactersPerToken": model.characters_per_token,
                 "supportsTools": model.supports_tools,
                 "supportsParallelToolCalls": model.supports_parallel_tool_calls,
+                "scriptedToolsEnabled": model.scripted_tools_enabled,
                 "supportsStreaming": model.supports_streaming,
                 "inputModalities": sorted(item.value for item in model.input_modalities),
                 "supportsImageInput": model.supports_image_input,

@@ -439,7 +439,8 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
                     id="call-1",
                     name="send_mail",
                     arguments={"address": pseudonym, "nested": [pseudonym]},
-                )
+                ),
+                ToolCall("script", "run_tool_script", {"code": f'return "{pseudonym}";'}),
             ],
             provider_data={
                 "responses_output_items": [{"id": "opaque"}],
@@ -486,6 +487,13 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
     }
     assert result.reasoning is not None
     assert result.reasoning.text == "Gedanke zu anna@example.com"
+    source = result.tool_calls[1].arguments["code"]
+    marker, = re.findall(r"\[\[MLP_[A-F0-9]{32}\]\]", source)
+    assert source == f'return "{marker}";'
+    assert result.restore_script_arguments is not None
+    assert result.restore_script_arguments({"address": marker}) == {
+        "address": result.tool_calls[0].arguments["address"],
+    }
     assert set(result.provider_data) == {"output_budget"}
     assert messages == original
     assert result.provider_data["output_budget"]["finalEstimatedInputTokens"] == prepared.estimated_input_tokens

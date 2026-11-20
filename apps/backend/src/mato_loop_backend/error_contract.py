@@ -460,6 +460,8 @@ _MESSAGES = {
     "skill.notEditable": "This skill cannot be edited personally.",
     "skill.personalDisabled": "Personal skills are disabled for this instance.",
     "tool.executionFailed": "The tool execution failed.",
+    "tool.scriptFailed": "The script failed or exceeded its resource limits. Earlier tool effects may remain; inspect the results before retrying.",
+    "tool.scriptTimedOut": "The script timed out. Earlier tool effects may remain; inspect the results before retrying.",
     "tool.executionInterrupted": (
         "The tool execution was interrupted and its outcome is unknown. Do not infer success or "
         "failure without verification."

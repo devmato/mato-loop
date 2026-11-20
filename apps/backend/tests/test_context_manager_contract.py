@@ -67,6 +67,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.permissions.policy import PermissionDecision, execution_directory_permission
 from mato_loop_backend.providers import service as service_module
 from mato_loop_backend.providers.base import ProviderError, ProviderImageInput, ProviderResult
+from mato_loop_backend.providers.openai_compatible import _chat_messages, _responses_input
 from mato_loop_backend.providers.output_budget import (
     IMAGE_INPUT_RESERVE_TOKENS,
     allocate_output_tokens,
@@ -75,6 +76,7 @@ from mato_loop_backend.providers.output_budget import (
     raw_input_budget,
 )
 from mato_loop_backend.providers.service import ProviderService
+from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AgentProfile,
@@ -921,6 +923,31 @@ def test_projection_discards_orphaned_tool_results() -> None:
 
     assert [item["role"] for item in projected] == ["system", "assistant", "user"]
     assert all("verwaistes Ergebnis" not in item["content"] for item in projected)
+
+
+def test_script_steps_visible_in_chat_but_not_replayed_to_provider() -> None:
+    session = _session()
+    run_id = str(uuid4())
+    user = _message(session.id, "user", "Combine the results")
+    assistant = _message(session.id, "assistant", "")
+    parent = {"id": "script", "name": "run_tool_script", "arguments": {"code": "/* Script source not retained. */"}}
+    child = {"id": "child", "name": "read", "arguments": {"path": "source.txt"}, "scriptParent": "script"}
+    assistant.tool_calls = [parent]
+    assistant.provider_data = {"_matoloop": {"runId": run_id, "scriptToolCalls": {"child": child}}}
+    intermediate = _message(session.id, "tool", "Not sent to the provider")
+    intermediate.tool_call_id = "child"
+    intermediate.provider_data = {"_matoloop": {"runId": run_id, "scriptParent": "script", "toolName": "read"}}
+    result = _message(session.id, "tool", '{"result":42}')
+    result.tool_call_id = "script"
+    result.provider_data = {"_matoloop": {"runId": run_id, "toolName": "run_tool_script"}}
+
+    assert [call["id"] for call in message_payload(assistant)["toolCalls"]] == ["script", "child"]
+    baseline = _projection_messages("System", None, [user, assistant, result], TrustLevel.PRIVATE)
+    live = {**parent, "arguments": {"code": "return 42;"}}
+    projected = _projection_messages("System", None, [user, assistant, intermediate, result], TrustLevel.PRIVATE,
+                                     live_tool_calls={assistant.id: [live]})
+    for serialize in (_chat_messages, _responses_input):
+        assert json.dumps(serialize(projected)) == json.dumps(serialize(baseline))
 
 
 async def test_historical_reader_reference_targets_original_page_and_keeps_computer_binding(monkeypatch) -> None:

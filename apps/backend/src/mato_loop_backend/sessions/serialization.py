@@ -481,6 +481,9 @@ def message_payload(
     )
     compact_fields = {}
     tool_calls = enrich_tool_calls(item.tool_calls)
+    if item.role == "assistant" and (script_calls := runtime_data.get("scriptToolCalls")):
+        steps = sorted(script_calls.values(), key=lambda call: call.get("scriptIndex", 0))
+        tool_calls = [*(tool_calls or []), *enrich_tool_calls(steps)]
     if compact and isinstance(tool_calls, list):
         encoder = json.JSONEncoder(ensure_ascii=False)
         for call in tool_calls:

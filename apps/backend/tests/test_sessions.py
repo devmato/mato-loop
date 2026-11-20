@@ -1428,10 +1428,11 @@ async def test_session_payload_marks_latest_restart_error_retryable(input_outsid
     )
 
 
-@pytest.mark.parametrize(("page_size", "older_bytes", "continuation"), [
-    (1, 2_000, False), (2, 192_000, False), (1, 2_000, True),
+@pytest.mark.parametrize(("page_size", "older_bytes", "continuation", "scripted"), [
+    (1, 2_000, False, False), (2, 192_000, False, False), (1, 2_000, True, False),
+    (1, 2_000, False, True),
 ])
-async def test_session_message_page_keeps_non_tool_anchor_with_results_and_cursor(page_size, older_bytes, continuation) -> None:
+async def test_session_message_page_keeps_non_tool_anchor_with_results_and_cursor(page_size, older_bytes, continuation, scripted) -> None:
     session_id = uuid4()
     created_at = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
     newest = Message(
@@ -1445,6 +1446,11 @@ async def test_session_message_page_keeps_non_tool_anchor_with_results_and_curso
     )
     assistant.tool_calls = [{"id": "call-1", "name": "read", "arguments": {}}]
     tool_result.tool_call_id = "call-1"
+    if scripted:
+        assistant.provider_data = {"_matoloop": {"scriptToolCalls": {
+            "step-1": {"id": "step-1", "name": "read", "arguments": {}, "scriptParent": "call-1"},
+        }}}
+        tool_result.tool_call_id = "step-1"
     for message in (newest, assistant, tool_result):
         message.attachments = []
     anchors = MagicMock()
@@ -1498,7 +1504,10 @@ async def test_session_message_page_keeps_non_tool_anchor_with_results_and_curso
     assert "messages_1.created_at DESC, messages_1.id DESC" in result_sql
     assert "messages_1.session_id = messages.session_id" in result_sql
     assert "runId" in result_query.compile().params.values()
-    assert ["call-1"] in result_query.compile().params.values()
+    assert set(next(value for value in result_query.compile().params.values()
+                    if isinstance(value, list) and "call-1" in value)) == (
+        {"call-1", "step-1"} if scripted else {"call-1"}
+    )
     assert continuation_id not in result_query.compile().params.values()
 
 

@@ -22,6 +22,7 @@ usage() {
         "  session-summary      Compare native retrieval with source-linked session summaries" \
         "  session-cache        Evaluate cache reuse across real sessions" \
         "  file-tools           Accept file mutations, repair presentation, and cache reuse in a real session" \
+        "  scripted-tools       Compare direct and scripted tool calls in live sessions" \
         "  coding-comparison    Compare persisted coding-run artifacts" \
         "  browser-performance  Compare synthetic browser tool contracts (requires a running backend)" \
         "  shell-decider        Evaluate shell classification models, including Qwen and teacher experiments" \
@@ -40,6 +41,7 @@ case "${1:-}" in
     memory-extraction) shift; compose run --rm --no-deps backend uv run python /workspace/scripts/memory-extraction-eval.py "$@" ;;
     session-cache) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.session_cache_eval "$@" ;;
     file-tools) shift; compose run --rm --no-deps backend uv run python /workspace/scripts/file-tools-eval.py "$@" ;;
+    scripted-tools) shift; compose exec -T backend uv run --no-sync python /workspace/scripts/scripted-tools-eval.py "$@" ;;
     coding-comparison) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.coding_eval "$@" ;;
     browser-performance) shift; compose exec -T backend /opt/mato-loop/backend/venv/bin/python -B -m mato_loop_backend.browser_perf_eval "$@" ;;
     shell-decider) shift; compose -f docker-compose.eval.yaml run --build --rm --no-deps shell-decider-eval "$@" ;;

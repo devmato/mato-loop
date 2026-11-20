@@ -34,6 +34,7 @@ _MODEL_RUNTIME_KEYS = {
     "characters_per_token": "charactersPerToken",
     "supports_tools": "supportsTools",
     "supports_parallel_tool_calls": "supportsParallelToolCalls",
+    "scripted_tools_enabled": "scriptedToolsEnabled",
     "supports_streaming": "supportsStreaming",
     "input_modalities": "inputModalities",
     "supports_image_input": "supportsImageInput",
@@ -841,6 +842,10 @@ class ModelConfig(BaseModel):
         default=True,
         validation_alias=AliasChoices("supports_streaming", "supportsStreaming"),
     )
+    scripted_tools_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("scripted_tools_enabled", "scriptedToolsEnabled"),
+    )
     input_modalities: set[ModelInputModality] = Field(
         default_factory=lambda: {ModelInputModality.TEXT},
         validation_alias=AliasChoices("input_modalities", "inputModalities"),
@@ -889,6 +894,7 @@ class ModelConfig(BaseModel):
             self.context_window_tokens = self.discovered_context_window_tokens
         if not self.supports_tools:
             self.supports_parallel_tool_calls = False
+            self.scripted_tools_enabled = False
         return self
 
     @computed_field(return_type=bool)

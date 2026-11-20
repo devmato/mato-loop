@@ -181,6 +181,7 @@ def test_every_builtin_tool_is_expected_by_a_live_case() -> None:
     # todo_write is covered by dedicated deterministic tests and a separate model evaluation.
     separately_evaluated = {
         "search_tools",  # Dedicated discovery-contract tests and live evaluation.
+        "run_tool_script",  # Dedicated end-to-end A/B in scripts/scripted-tools-eval.py.
         "todo_write", "variable_read", "variable_write",
         "update_agent_identity", "update_user_profile",  # Legacy direct calls, no longer offered.
         "memory_retrieve", "session_search",  # Historical contracts; models use context_search.

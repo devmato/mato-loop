@@ -170,6 +170,11 @@ async def execute_definition(
     if definition.required_capability == "project.coding":
         if context.session.project_id is None:
             return ToolResult.error("tool.unavailable")
+    elif definition.required_capability == "agent.scripted_tools":
+        ai_settings = await load_effective_ai(context.db, context.session.user_id)
+        if not any(model.id == context.model_id and model.enabled and model.supports_tools
+                   and model.scripted_tools_enabled for model in ai_settings.models):
+            return ToolResult.error("tool.unavailable")
     elif definition.required_capability is not None:
         try:
             current_settings, _profile = await load_agent_profile_tools(

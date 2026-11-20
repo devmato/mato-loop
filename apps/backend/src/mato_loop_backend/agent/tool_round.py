@@ -4,10 +4,11 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import aclosing
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +17,8 @@ from mato_loop_backend.agent.media_model_helpers import media_model_handlers
 from mato_loop_backend.agent.openscad_preview import verify_preview
 from mato_loop_backend.agent.projection import (
     ContextProjection,
+    _model_file_tool_result,
+    _target_tool_result,
     _tool_result_reference,
 )
 from mato_loop_backend.agent.repository_instructions import (
@@ -27,6 +30,7 @@ from mato_loop_backend.agent.run_support import (
     _RESEARCH_TOOL_NAMES,
     MEMORY_WRITE_OUTCOME_PRIORITY,
 )
+from mato_loop_backend.agent.script_tools import SCRIPT_TOOL, StopScript, run_script
 from mato_loop_backend.agent.session_settings import apply_run_session_settings
 from mato_loop_backend.agent.subagents import run_tasks
 from mato_loop_backend.agent.tool_repairs import repairable_tool_error, tool_repair_key
@@ -39,6 +43,7 @@ from mato_loop_backend.media.attachments import AttachmentError, AttachmentServi
 from mato_loop_backend.memory import policy as memory_policy
 from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
 from mato_loop_backend.permissions.policy import PermissionDecision, PermissionRequest
+from mato_loop_backend.privacy import PseudonymizationError
 from mato_loop_backend.providers.base import (
     MAX_PROVIDER_IMAGE_BYTES,
     MAX_PROVIDER_IMAGES,
@@ -70,6 +75,8 @@ from mato_loop_backend.tools.contracts import (
     ToolFileAction,
     ToolResult,
 )
+from mato_loop_backend.tools.display import tool_display
+from mato_loop_backend.tools.references import model_tool_references
 from mato_loop_backend.tools.registry import EffectiveToolSet
 from mato_loop_backend.tools.secrets import effective_sudo_reference
 
@@ -232,6 +239,7 @@ async def persist_tool_result(
 
 @dataclass
 class ToolBatchResult:
+    script_tool_calls_used: int = 0
     research_tool_calls_used: int = 0
     research_used: bool = False
     openscad_render_pending: bool = False
@@ -263,6 +271,8 @@ async def execute_tool_batch(
     *,
     toolset: EffectiveToolSet | None,
     offered_names: set[str],
+    script_names: frozenset[str] = frozenset(),
+    restore_script_arguments: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     root_files: RootFileService,
     memory_state: memory_policy.EffectiveMemory,
     model: ModelConfig,
@@ -365,13 +375,30 @@ async def execute_tool_batch(
     active_reads: set[asyncio.Task[ToolResult]] = set()
 
     async def execute_one(
-        index: int, call: ToolCall, *, parallel: bool,
+        index: int, call: ToolCall, *, parallel: bool, script_parent: str | None = None,
+        child_result: list[tuple[Message, str, dict[str, Any]]] | None = None,
     ) -> AsyncGenerator[asyncio.Task[ToolResult], None]:
         nonlocal superseded, repository_deferred
         read_started = False
         bound_tool = toolset.tools.get(call.name) if toolset is not None else None
         tool_label = bound_tool.definition.label if bound_tool else None
-        display = serialized_calls[index]["toolDisplay"]
+        async def record_script_call(arguments):
+            safe = run_support._safe_tool_arguments(call.name, arguments)
+            item = {"id": call.id, "name": call.name, "arguments": safe,
+                    "toolDisplay": tool_display(call.name, safe, bound_tool.definition if bound_tool else None),
+                    "scriptParent": script_parent}
+            provider_data = dict(assistant.provider_data or {})
+            host = dict(provider_data.get("_matoloop", {}))
+            entries = dict(host.get("scriptToolCalls", {}))
+            item["scriptIndex"] = entries.get(call.id, {}).get("scriptIndex", len(entries))
+            entries[call.id] = item
+            assistant.provider_data = {**provider_data, "_matoloop": {**host, "scriptToolCalls": entries}}
+            await db.commit()
+            await run_events.publish(run.id, {"type": "message.updated", "messageId": str(assistant.id)})
+            return item["toolDisplay"]
+
+        display = (await record_script_call(call.arguments) if script_parent is not None
+                   else serialized_calls[index]["toolDisplay"])
         await run_support._publish_run_phase(
             run.id, "processing_tool", tool=call.name, toolLabel=tool_label,
             toolDisplay=display, toolCallId=call.id, index=index, total=len(calls),
@@ -475,7 +502,7 @@ async def execute_tool_batch(
             if (repeated_tool_call_repair_available
                     and failed_tool_call_signatures.get(validation_signature) == "tool.invalidArguments:notStarted"):
                 metadata["argumentsRejected"] = True
-        elif call.name not in offered_names or (not memory_available_now and call.name != "context_search") or (
+        elif call.name not in (offered_names if script_parent is None else script_names) or (not memory_available_now and call.name != "context_search") or (
             call.name == "memory_write" and not memory_write_available_now
         ):
             content = json.dumps(error_payload("tool.unavailable"), ensure_ascii=False)
@@ -537,7 +564,7 @@ async def execute_tool_batch(
                     run_support._persist_edited_tool_arguments,
                     db, run.id, assistant, serialized_calls, live_tool_calls[assistant.id],
                     index, call, bound_tool.definition if bound_tool else None,
-                ),
+                ) if script_parent is None else record_script_call,
             )
             tool_context.ask_handler = partial(ask, tool_context, authorize)
             assert toolset is not None
@@ -555,7 +582,66 @@ async def execute_tool_batch(
                     },
                 )
             try:
-                if parallel:
+                if call.name == SCRIPT_TOOL:
+                    assert bound_tool is not None
+                    first_child = True
+
+                    async def dispatch(name, arguments):
+                        nonlocal tool_trust, first_child
+                        if (not first_child and max_tool_calls is not None
+                                and tool_calls_used + state.script_tool_calls_used >= max_tool_calls):
+                            raise StopScript(ToolResult.error("agent.toolCallLimitReached"))
+                        if not first_child:
+                            state.script_tool_calls_used += 1
+                        first_child = False
+                        if name not in script_names:
+                            raise StopScript(ToolResult.error("tool.unavailable"))
+                        if restore_script_arguments is not None:
+                            try:
+                                arguments = restore_script_arguments(arguments)
+                            except PseudonymizationError as exc:
+                                raise StopScript(ToolResult.error("privacy.pseudonymizationFailed")) from exc
+                        if openscad_source_review_pending is not None and (
+                            name != "read"
+                            or (arguments.get("root"), arguments.get("path")) != openscad_source_review_pending
+                        ):
+                            raise StopScript(ToolResult.error("tool.invalidArguments", field="code"))
+                        result = []
+                        async with aclosing(execute_one(
+                            index, ToolCall(f"call-{uuid4()}", name, arguments), parallel=False,
+                            script_parent=call.id, child_result=result,
+                        )) as execution:
+                            await anext(execution, None)
+                        message, child_content, child_metadata = result[0]
+                        if message.trust_level == TrustLevel.PRIVATE.value:
+                            tool_trust = TrustLevel.PRIVATE
+                        if state.user_denied_batch or superseded or repository_deferred:
+                            raise StopScript(ToolResult(child_content, child_metadata))
+                        if state.repeated_tool_call_limit_reached:
+                            raise StopScript(ToolResult.error("agent.repeatedToolCall"))
+                        if child_metadata.get("errorCode") == "permission.denied":
+                            raise StopScript(ToolResult.error("permission.denied"))
+                        if message.trust_level == TrustLevel.PRIVATE.value and trust_level == TrustLevel.PUBLIC:
+                            # A script must not turn protected tool data into an untyped result.
+                            raise StopScript(ToolResult.error("permission.denied"))
+                        output = _target_tool_result(name, child_content, trust_level,
+                                                     source_trust_level=message.trust_level)
+                        output = model_tool_references(name, _model_file_tool_result(output), message.id)
+                        if len(output) > 96_000:
+                            return {"outputTooLarge": True, "messageId": str(message.id)}
+                        try:
+                            return json.loads(output)
+                        except ValueError:
+                            return output
+
+                    async def execute_script(arguments):
+                        result = await run_script(arguments, dispatch)
+                        result.trust_level = tool_trust
+                        return result
+
+                    tool_context.script_handler = execute_script
+                    tool_result = await toolset.execute(call, tool_context)
+                elif parallel:
                     handler_started = asyncio.get_running_loop().create_future()
                     tool_context.handler_started = lambda: handler_started.set_result(None)
                     task = asyncio.create_task(toolset.execute(call, tool_context))
@@ -705,7 +791,8 @@ async def execute_tool_batch(
             attachments=attachments, file_actions=file_actions,
             trust_level=tool_trust, ephemeral_output=ephemeral_output,
             limits=limits, attachment_service=attachment_service,
-            execution_binding=execution_binding,
+            execution_binding=(execution_binding if script_parent is None else
+                               {**execution_binding, "scriptParent": script_parent}),
         )
         if previous_repair is not None:
             previous_repair.provider_data = {
@@ -728,6 +815,8 @@ async def execute_tool_batch(
             "toolDisplay": display, "toolCallId": call.id,
             "output": content[:500], "metadata": metadata,
         })
+        if child_result is not None:
+            child_result.append((tool_message, content, metadata))
         if error_code == "tool.superseded":
             return
         if metadata.get("repositoryInstructionsDeferred") is True:

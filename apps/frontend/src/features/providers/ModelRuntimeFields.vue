@@ -117,6 +117,15 @@
           label="Parallele Tool-Aufrufe"
           :disable="!form.supportsTools"
         />
+        <AppSelect dense
+          v-model="form.scriptedToolsEnabled"
+          outlined
+          emit-value
+          map-options
+          label="Tool-Aufrufart"
+          :options="[{ label: 'Direkt (Standard)', value: false }, { label: 'Per Skript (experimentell)', value: true }]"
+          :disable="!form.supportsTools"
+        />
         <q-toggle dense
           v-model="form.supportsStreaming"
           color="primary"

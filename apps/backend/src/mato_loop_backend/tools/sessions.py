@@ -84,6 +84,9 @@ def _message_item(
             available_secret_references=available_secret_references or set(),
         )
         content = _model_file_tool_result(content)
+        if (target_trust_level == TrustLevel.PUBLIC and message.trust_level != TrustLevel.PUBLIC.value
+                and (message.provider_data or {}).get("_matoloop", {}).get("scriptParent")):
+            content = '{"redactedPrivateContext":true}'
     if message.role == "tool":
         content = _sanitize_tool_result_reference_fields(content)
         content = model_tool_references(tool_names.get(message.id), content, message.id)

@@ -79,8 +79,8 @@ def prepared_execution(monkeypatch):
     monkeypatch.setattr(AgentRuntime, "_prepare_run", AsyncMock())
 
 
-@pytest.mark.parametrize("foreign_run", [False, True])
-async def test_terminalization_pairs_reused_ids_with_latest_own_batch(foreign_run) -> None:
+@pytest.mark.parametrize(("foreign_run", "scripted"), [(False, False), (True, False), (False, True)])
+async def test_terminalization_pairs_reused_ids_with_latest_own_batch(foreign_run, scripted) -> None:
     session_id, run_id = uuid4(), uuid4()
     earlier_run_id = uuid4() if foreign_run else run_id
     records = [
@@ -94,6 +94,13 @@ async def test_terminalization_pairs_reused_ids_with_latest_own_batch(foreign_ru
         Message(id=uuid4(), session_id=session_id, role="tool", tool_call_id="done",
                 provider_data={"_matoloop": {"runId": str(run_id)}}),
     ]
+    if scripted:
+        records[2].provider_data["_matoloop"]["scriptToolCalls"] = {
+            "started": {"scriptParent": "reused", "name": "write_file"},
+            "child-done": {"scriptParent": "reused", "name": "read"},
+        }
+        records.append(Message(session_id=session_id, role="tool", tool_call_id="child-done",
+                               provider_data={"_matoloop": {"runId": str(run_id), "scriptParent": "reused"}}))
     db = AsyncMock(spec=AsyncSession)
     db.scalars.return_value = Mock(all=lambda: [
         item for item in records if item.provider_data["_matoloop"]["runId"] == str(run_id)
@@ -101,8 +108,13 @@ async def test_terminalization_pairs_reused_ids_with_latest_own_batch(foreign_ru
 
     await AgentRuntime._terminalize_incomplete_tool_calls(db, session_id, run_id=run_id)
 
+    inserted = db.add_all.call_args.args[0]
     assert [(item.tool_call_id, json.loads(item.content)["error"]["code"])
-            for item in db.add_all.call_args.args[0]] == [("reused", "tool.executionInterrupted")]
+            for item in inserted] == [("reused", "tool.executionInterrupted")] + (
+                [("started", "tool.executionInterrupted")] if scripted else []
+            )
+    if scripted:
+        assert inserted[-1].provider_data["_matoloop"]["scriptParent"] == "reused"
 
 
 def test_run_timing_sums_active_segments_and_excludes_user_waits() -> None:

@@ -457,7 +457,7 @@ class ToolRegistry:
                 definition.required_capability is not None
                 and definition.required_capability not in tool_capabilities
             ):
-                if definition.required_capability == "project.coding":
+                if definition.required_capability in {"project.coding", "agent.scripted_tools"}:
                     continue
                 reason = (
                     "media"

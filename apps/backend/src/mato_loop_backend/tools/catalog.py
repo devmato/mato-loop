@@ -19,6 +19,7 @@ import mato_loop_backend.tools.session_state as tools_session_state
 import mato_loop_backend.tools.sessions as tools_sessions
 import mato_loop_backend.tools.skills as tools_skills
 import mato_loop_backend.tools.web as tools_web
+from mato_loop_backend.agent.script_tools import DEFINITION as SCRIPT_DEFINITION
 from mato_loop_backend.integrations.registry import (
     effective_integration_contributions as effective_integration_contributions,
 )
@@ -192,6 +193,7 @@ tool_registry = ToolRegistry(
         tools_identity.UPDATE_AGENT_IDENTITY,
         tools_identity.UPDATE_USER_PROFILE,
         tools_personal_settings.CUSTOMIZE_MATOLOOP,
+        SCRIPT_DEFINITION,
     ],
     operation_definitions=[
         tools_files.APPLY_PATCH,
