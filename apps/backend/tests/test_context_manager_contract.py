@@ -2009,14 +2009,13 @@ def test_inactive_capability_catalog_is_informational_only() -> None:
         _session(),
         offered_tool_names=frozenset({"read"}),
         inactive_capability_groups=(
-            "Optional tools [write_file]: configure under Tools or the agent profile.",
+            'Web: enable access in the session or under "Einstellungen > Tools".',
         ),
     )
 
-    assert "Inactive installed capabilities are informational only" in prompt
-    assert "have no callable schema" in prompt
-    assert "Never emit their names as tool calls" in prompt
-    assert "write_file" in prompt
+    assert "Inactive capability hints are informational, not callable tools" in prompt
+    assert "do not infer a specific tool's status from a group hint" in prompt
+    assert "Web: enable access in the session" in prompt
 
 
 def test_general_system_prompt_exposes_mermaid_rendering() -> None:
@@ -2055,10 +2054,11 @@ def test_builtin_plan_instructions_are_not_duplicated_by_host_prompt() -> None:
 
     assert offered.count(plan.instructions) == 1
     assert unavailable.count(plan.instructions) == 1
-    assert "materially helps track complex or multi-part work" in offered
-    assert "not a fixed step or tool-call count" in offered
-    assert "Update only when scope changes" in offered
-    assert "only completed or cancelled items stays visible until the next run" in offered
+    assert "when it helps track complex work" in offered
+    assert "not for simple tasks or a fixed call count" in offered
+    assert "Update on scope changes" in offered
+    assert "Mark items complete only after the work and required checks" in offered
+    assert "UI hides it automatically" not in offered
     assert "Do not ask to clear a finished checklist just to tidy the UI" in offered
     assert "tidy the UI" not in unavailable
 
@@ -2102,7 +2102,9 @@ def test_computer_identity_changes_prompt_only_when_binding_changes() -> None:
         "execution_agent_name": "Workstation",
         "execution_agent_platform": "linux",
         "execution_agent_connected": True,
-        "execution_agent_system_info": SystemInfo(temporary_directory="/tmp/mato-loop"),
+        "execution_agent_system_info": SystemInfo(
+            temporary_directory="/tmp/mato-loop", operating_system="Linux", cpu_model="Fixture CPU",
+        ),
         "temporary_files_enabled": True,
         "current_directory": "/work",
         "include_local_time": False,
@@ -2114,6 +2116,7 @@ def test_computer_identity_changes_prompt_only_when_binding_changes() -> None:
     without_temporary = general_system_prompt(session, **{**options, "temporary_files_enabled": False})
     assert first.split("Selected computer context:")[0] == without_temporary.split("Selected computer context:")[0]
     assert '"temporaryDirectory": "/tmp/mato-loop/' in first
+    assert '"operatingSystem": "Linux"' in first and "Fixture CPU" not in first
     assert (
         "Use temporaryDirectory for temporary scripts, logs, and intermediate files, including explicit program "
         "output paths, unless the user explicitly requests another location. Normal permissions still apply."
@@ -2366,9 +2369,10 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "reformulate failed, empty, or irrelevant searches" in prompt
     assert "Emit chosen tool calls now" in prompt
     assert "never only announce future use" in prompt
-    assert "Before multi-step investigation or substantial tool work, give one short sentence" in prompt
+    assert "Before substantial work, briefly say what you will do and why in the user's language" in prompt
     assert "Never invent dates" in prompt
-    assert "preserve supplied dates" in prompt
+    assert "Preserve supplied dates" in prompt
+    assert "do not add the current year to an undated freshness query" in prompt
     assert "derive freshness from prior knowledge" in prompt
     assert "exact names, models" in prompt
     assert "Fetch originals for material gaps/conflicts" in prompt
@@ -2381,7 +2385,7 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "invent numbers" in prompt
     assert "Current-turn research requires" in prompt
     assert "Cite fetched sources only when citationEligible=true" in prompt
-    assert "never use sourceId" in prompt
+    assert "Never use sourceId" in prompt
     assert "after each claim" in prompt
     assert "Use at most two links per claim" in prompt
     assert "Research budget limit:" not in prompt
@@ -2466,7 +2470,7 @@ def test_general_system_prompt_requires_verified_external_images() -> None:
     assert "requested research, exact or official fidelity" in prompt
     assert "reported mismatch" in prompt
     assert "snippets are not visual evidence" in prompt
-    assert "[returned title](returned URL)" in prompt
+    assert "use the exact returned title as the label" in prompt
 
 
 def test_general_system_prompt_contains_bounded_agent_identity() -> None:
@@ -2549,11 +2553,11 @@ def test_system_prompt_describes_managed_file_roots() -> None:
     assert "file.accessDenied is not permission.userDenied" not in prompt
     assert "revisioned" not in prompt
     assert "No computer directory selected. Use root=files." in prompt
-    assert (
-        "Use provide_file only for user-requested files or ZIPs not already attached with downloads "
-        "in this response"
-    ) in prompt
-    assert "Pass source paths; do not create an archive first" in prompt
+    from mato_loop_backend.tools.files import PROVIDE_FILE
+
+    assert "new archive" not in prompt
+    assert "Pass source paths, not a new archive" in PROVIDE_FILE.description
+    assert "Skip attachments already shown with downloads" in PROVIDE_FILE.description
 
 
 def test_system_prompt_enforces_managed_writing_contract() -> None:

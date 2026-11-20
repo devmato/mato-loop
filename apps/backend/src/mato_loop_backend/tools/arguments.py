@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
@@ -135,7 +134,7 @@ class QuestionBase(ToolArguments):
     default_answers: list[str] = Field(
         default_factory=list,
         max_length=13,
-        description="Answers to use when the user submits no answer.",
+        description="Fallback answers if unanswered.",
     )
 
     @field_validator("header", "question")
@@ -160,7 +159,7 @@ class QuestionItem(QuestionBase):
     )
     allow_custom: bool = Field(
         default=True,
-        description="Allow one custom text answer; do not add an Other option.",
+        description="Allow custom text; do not add an Other option.",
     )
     placeholder: str | None = Field(
         default=None,
@@ -191,7 +190,9 @@ class QuestionItem(QuestionBase):
 
 
 class QuestionArguments(ToolArguments):
-    questions: list[QuestionItem] = Field(min_length=1, max_length=5)
+    questions: list[QuestionItem] = Field(
+        min_length=1, max_length=5, description="Send a JSON array of question objects, not a string."
+    )
 
     @classmethod
     def model_json_schema(cls, **kwargs: Any) -> dict[str, Any]:
@@ -199,31 +200,30 @@ class QuestionArguments(ToolArguments):
         schema = super().model_json_schema(**kwargs)
         definitions = schema["$defs"]
         question = definitions.pop("QuestionItem")
-        variants = []
-        for kind, name, description in (
-            ("free_text", "FreeTextQuestion", "The user enters text."),
-            ("single_choice", "SingleChoiceQuestion", "Provide 2-12 options. The user selects one."),
-            ("multiple_choice", "MultipleChoiceQuestion", "Provide 2-12 options. The user selects one or more."),
-        ):
-            branch = deepcopy(question)
-            properties = branch["properties"]
-            properties["type"] = {"const": kind, "type": "string", "description": description}
-            if kind == "free_text":
-                del properties["options"]
-                del properties["allow_custom"]
-                properties["placeholder"]["description"] = (
-                    "Optional input hint for free_text only; omit for selection questions."
-                )
-            else:
-                del properties["placeholder"]
-                properties["options"].update(
-                    minItems=2,
-                    description="Required for selection questions: provide 2-12 options. Omit for free_text.",
-                )
-                branch["required"].append("options")
-            definitions[name] = branch
-            variants.append({"$ref": f"#/$defs/{name}"})
-        schema["properties"]["questions"]["items"] = {"anyOf": variants}
+        properties = question["properties"]
+        definitions["FreeTextQuestion"] = {
+            **question,
+            "properties": {
+                **{key: value for key, value in properties.items() if key not in {"options", "allow_custom"}},
+                "type": {"const": "free_text", "type": "string"},
+                "placeholder": properties["placeholder"] | {"description": "Free-text input hint; omit for choice questions."},
+            },
+        }
+        definitions["ChoiceQuestion"] = {
+            **question,
+            "properties": {
+                **{key: value for key, value in properties.items() if key != "placeholder"},
+                "type": properties["type"] | {
+                    "enum": ["single_choice", "multiple_choice"],
+                    "description": "single_choice: select one; multiple_choice: select one or more.",
+                },
+                "options": properties["options"] | {"minItems": 2, "description": "2–12 options."},
+            },
+            "required": [*question["required"], "options"],
+        }
+        schema["properties"]["questions"]["items"] = {
+            "anyOf": [{"$ref": f"#/$defs/{name}"} for name in ("FreeTextQuestion", "ChoiceQuestion")],
+        }
         return schema
 
     @model_validator(mode="after")
@@ -410,7 +410,7 @@ class ReadArguments(SessionFileReadArguments, ElevatedArguments):
     limit: int = Field(default=1_000, ge=1, le=1_000)
     pdf_pages: list[Annotated[int, Field(ge=1, strict=True)]] = Field(
         default_factory=list, max_length=8,
-        description="PDF visual pages (1-based).",
+        description="1-based visual PDF pages.",
     )
 
     @model_validator(mode="after")
@@ -471,7 +471,7 @@ class WriteFileArguments(ElevatedArguments):
     path: str = Field(min_length=1, max_length=1_000)
     content: str | None = Field(
         default=None, max_length=1_000_000,
-        description="Text, including serialized JSON.",
+        description="Text or serialized JSON.",
     )
     protected_content: ProtectedText | None = None
 
@@ -919,15 +919,15 @@ class AnalyzeAudioArguments(FileReference):
 class SessionReadArguments(ToolArguments):
     session_id: UUID | None = Field(
         default=None,
-        description="Target session UUID. Omit only to read the current session.",
+        description="Session UUID; omit only for the current session.",
     )
     after_message_id: UUID | None = Field(
         default=None,
-        description="Latest nextAfterMessageId for this session; never use a message ID.",
+        description="Latest nextAfterMessageId for this session, not a message ID.",
     )
     around_message_id: UUID | None = Field(
         default=None,
-        description="Use an ID from session discovery or compacted history; never invent it.",
+        description="ID from session discovery or compacted history; never invent it.",
     )
     limit: int = Field(default=30, ge=1, le=50)
 
@@ -939,7 +939,7 @@ class SessionReadArguments(ToolArguments):
 
 
 class SessionToolResultReadArguments(ToolArguments):
-    message_id: UUID = Field(description="Copy the current-session tool-message UUID from toolResultReference.arguments.message_id or session_read's tool message id. Never use a toolCallId or resource ID.")
+    message_id: UUID = Field(description="Current-session tool message UUID from toolResultReference.arguments.message_id or session_read, not a toolCallId or resource ID.")
     offset: int = Field(default=0, ge=0)
 
 
@@ -997,7 +997,6 @@ class MemoryWriteArguments(ToolArguments):
     category: MemoryCategory | None = Field(
         default=None,
         description=(
-            "Use exactly one of context, fact, goal, identity, or preference. "
             "Names and personal identity use identity; occupations use fact."
         )
     )

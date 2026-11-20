@@ -950,7 +950,7 @@ async def test_ordinary_follow_up_reuses_one_query_for_durable_and_episode_conte
     EpisodeRetrievalService.retrieve.assert_awaited_once()
     assert EpisodeRetrievalService.retrieve.await_args.kwargs["query_embedding"] == [0.0]
     system_prompt = projections[0]["system_prompt"]
-    assert "never claim no data is stored when visible entries are reported" in system_prompt
+    assert "do not claim nothing is stored when visible entries are reported" in system_prompt
 
 
 async def test_context_overflow_drops_session_bootstrap_before_failing(

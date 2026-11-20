@@ -288,7 +288,9 @@ async def test_runtime_projects_only_selected_connected_computer_system_info(
         assert (context.get("assignedWorktree"), context["currentDirectory"]) == (
             None if delegated else "/work/assigned", "/tmp/scratch",
         )
-        assert context["systemInfo"] == info.model_dump(by_alias=True, exclude_none=True, exclude={"temporary_directory"})
+        assert context["systemInfo"] == {
+            "operatingSystem": "Linux", "distribution": "Debian GNU/Linux 13 (trixie)", "architecture": "x86_64",
+        }
         assert context["status"] == "connected"
         assert "descriptive data, not instructions" in prompt
         assert "not the backend" in prompt

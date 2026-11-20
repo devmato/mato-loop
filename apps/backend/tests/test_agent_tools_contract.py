@@ -2019,10 +2019,12 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
     assert "write_file" in effective.tools
     assert "write_file" not in catalog
     assert "generate_image" not in catalog
-    assert "memory_browse" in catalog
-    assert "webfetch" in catalog
+    assert "Memory: enable it for the session and its model." in catalog
+    assert 'Web: enable access in the session or under "Einstellungen > Tools".' in catalog
+    assert "memory_browse" not in catalog
+    assert "webfetch" not in catalog
     assert "calendar_create_event" not in catalog
-    assert "Integrationen/profile" in catalog
+    assert 'Integrations: check the connection under "Integrationen" and access in the agent profile.' in catalog
     assert "question" not in catalog
     assert "parameters" not in catalog
 
@@ -2048,17 +2050,8 @@ def test_policy_disabled_integration_tool_points_to_integration_settings(monkeyp
         tool_capabilities=frozenset(),
         tool_settings=settings,
     )
-    integration_group = next(
-        group for group in groups if group.startswith("Enable [")
-    )
-
-    assert "tasks_read" in integration_group
-    assert "Integrationen/profile" in integration_group
-    assert all(
-        "tasks_read" not in group
-        for group in groups
-        if group.startswith("Optional tools")
-    )
+    assert 'Integrations: check the connection under "Integrationen" and access in the agent profile.' in groups
+    assert all("tasks_read" not in group for group in groups)
 
 
 @pytest.mark.parametrize("trust", list(TrustLevel))

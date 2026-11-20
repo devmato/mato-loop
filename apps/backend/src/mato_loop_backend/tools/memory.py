@@ -234,9 +234,7 @@ MEMORY_WRITE = ToolDefinition(
             "memory_write",
             "Create, update, or forget one durable memory only when the latest user message explicitly "
             "requests that action. Create without memory_id or expected_revision; update or forget only "
-            "with a retrieved exact visible ID and revision. Set pin=true for an explicit request to "
-            "always consider the memory in future answers, including for a stated topic; plain remember "
-            "wording stays false, and false never unpins.",
+            "with a retrieved exact visible ID and revision.",
             MemoryWriteArguments,
             _memory_write,
             requires_memory=True,

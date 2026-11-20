@@ -6622,7 +6622,7 @@ def slimming_system_prompt(
         paragraphs = []
         for paragraph in prompt.split("\n\n"):
             if prompt_variant in {"prompt-no-inactive", "prompt-atoms"} and paragraph.startswith(
-                "Inactive installed capabilities"
+                "Inactive capability hints"
             ):
                 continue
             if (
@@ -6665,7 +6665,7 @@ def slimming_system_prompt(
     safe = variant in {"prompt-safe", "combined-safe"}
     paragraphs = []
     for paragraph in prompt.split("\n\n"):
-        if paragraph.startswith("Inactive installed capabilities"):
+        if paragraph.startswith("Inactive capability hints"):
             continue
         if paragraph.startswith("A default task list is configured"):
             continue

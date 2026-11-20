@@ -562,15 +562,13 @@ CREATE_AUTOMATION = ToolDefinition(
             icon="add_task",
              actions=(_AUTOMATION_CREATE,),
              prompt_fragments=(
-                 "By default, offer an automation when unfinished work requires a later check or "
-                 "continuation, or when a task would benefit from recurring execution. Follow the user's "
-                 "stated preferences on whether and when to make these offers. Keep the offer brief and "
-                 "specific about timing and scope, and use only supported scheduling or trigger capabilities.",
+                 "Offer supported automation for later checks, continuation or recurring work, subject to "
+                 "the user's preferences. State timing and scope briefly.",
                  "Automations run in their session with its environment and permission grants. "
                  "Triggers agent_response and agent_error observe the owner's ordinary agent runs; "
                  "automation-origin work never emits these triggers. Put optional event conditions in task. "
-                 "The triggered agent checks those conditions and may take no action. Use "
-                 "skill names in the task and load them through load_skill as in any conversation. Use "
+                 "The triggered agent checks those conditions and may take no action. Name skills in task; "
+                 "load them with load_skill. Use "
                  "request_session_permissions for known required or recommended access before enabling work; "
                  "never execute a mutation just to obtain permission. Wait for the result. Correct invalid target names "
                  "or arguments. If preparation is unavailable, keep the automation disabled until question confirms "

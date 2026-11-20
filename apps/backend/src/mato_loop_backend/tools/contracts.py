@@ -200,10 +200,7 @@ class ToolDefinition:
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 500,
-                "description": (
-                    "Optional purpose in the user's language, shown for approval."
-                    + (" " + self.permission_reason_instruction if self.permission_reason_instruction else "")
-                ),
+                **({"description": self.permission_reason_instruction} if self.permission_reason_instruction else {}),
             }
         schema = parameters
         _remove_schema_titles(schema)

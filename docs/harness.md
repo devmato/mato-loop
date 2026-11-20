@@ -333,7 +333,11 @@ The implementation owners are `agent/prompts.py` (system parts/reminders), `agen
 
 The selected-computer context identifies an assigned worktree as the default for repository work, separately from the active directory and the scratch directory. It uses the existing session binding on the connected computer and does not grant access or move the shell. Adding this hint intentionally changes older system prefixes only for sessions that receive it; unchanged context retains the same prefix across tool rounds and follow-ups.
 
-Inactive capability hints retain installed tool names with compact settings/profile locations or workflow prerequisites, not callable schemas. Adding names or changing hint wording intentionally invalidates that system-context suffix; unchanged inventories retain their deterministic order.
+The question schema shares one branch for single and multiple choice while retaining a separate free-text branch. Tool names, accepted question shapes, and runtime validation stay the same. The new schema and shorter shell-progress guidance change the affected cache prefix once; their order remains stable in later requests.
+
+Inactive capability hints summarize settings/profile locations or workflow prerequisites by category, without listing tool names. Selected-computer context includes platform and workspace paths; use `get_system_info` for hardware details. Shorter host text and field descriptions change the affected provider prefix once; tool order and history serialization stay unchanged.
+
+The shared prompt explains optional `_reason` fields once; tools retain any action-specific guidance and the same argument limits. File-reference instructions live on `provide_file`. These text changes affect the provider prefix once, not tool eligibility, approval behavior, or history serialization.
 
 Integration-scoped discovery adds stable connection IDs to the catalog and an optional ID filter to `search_tools`. Readable MCP model names and source descriptions intentionally invalidate the former tool/schema and catalog prefixes once. Discovery replay resolves current eligible bindings without rewriting historical exchanges; subsequent unchanged offers retain deterministic ordering. See [tool loading](integrations.md#tool-loading).
 

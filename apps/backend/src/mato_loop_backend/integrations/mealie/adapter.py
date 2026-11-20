@@ -1289,7 +1289,7 @@ MEALIE_SHARED_TOOLS = (
     ),
     ToolContribution(
         name="recipe_import_url",
-        description="Import and save a recipe from an HTTP or HTTPS URL using Mealie's scraper. Mealie fetches the source URL. Return the saved recipe and recipeToken. Do not retry an unknown outcome; search for the recipe first.",
+        description="Mealie fetches and saves a recipe from an HTTP(S) URL. Returns the saved recipe and recipeToken. Check by search before retrying an unknown outcome.",
         arguments_model=RecipeImportArguments,
         handler=recipe_import_url,
         label="Rezept aus URL importieren",
@@ -1301,7 +1301,7 @@ MEALIE_SHARED_TOOLS = (
     ),
     ToolContribution(
         name="recipe_update",
-        description="Update a recipe using the latest recipeToken from recipe_get or a recipe write. Omitted fields remain unchanged; supplied ingredient and instruction lists replace those lists completely. Reuse matching foods and units; create missing ones. A changed recipe requires a fresh read. Do not retry an unknown outcome without reading the recipe.",
+        description="Update with the latest recipeToken from recipe_get or a recipe write. Omit unchanged fields; supplied lists replace whole lists. Reuse foods/units or create missing ones. Read again if changed or the outcome is unknown.",
         arguments_model=RecipeUpdateArguments,
         handler=recipe_update,
         label="Rezept ändern",

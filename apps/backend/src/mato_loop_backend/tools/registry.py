@@ -428,14 +428,7 @@ class ToolRegistry:
                 contribution.name, self._contributed_definition(contribution)
             )
 
-        grouped: dict[str, list[str]] = {
-            "integrations": [],
-            "media": [],
-            "web": [],
-            "memory": [],
-            "settings": [],
-            "temporary": [],
-        }
+        reasons: set[str] = set()
         for name, definition in installed_definitions.items():
             if name in {"memory_retrieve", "session_search", "search_tools"}:
                 continue
@@ -477,34 +470,17 @@ class ToolRegistry:
                 )
             else:
                 reason = "temporary"
-            grouped[reason].append(name)
+            reasons.add(reason)
 
-        templates = {
-            "integrations": (
-                "Enable [{names}]: Integrationen/profile."
-            ),
-            "media": (
-                "Enable [{names}]: Tools; capable model: Standardmodelle."
-            ),
-            "web": (
-                'Web tools [{names}]: enable web access for the session or under '
-                '"Einstellungen > Tools".'
-            ),
-            "memory": (
-                'Memory tools [{names}]: enable Memory for the session and its model.'
-            ),
-            "settings": (
-                "Optional tools [{names}]: Tools/integrations."
-            ),
-            "temporary": (
-                "Unavailable [{names}]: finish required workflow."
-            ),
+        hints = {
+            "integrations": 'Integrations: check the connection under "Integrationen" and access in the agent profile.',
+            "media": 'Media: enable the tool and choose a capable model under "Standardmodelle".',
+            "web": 'Web: enable access in the session or under "Einstellungen > Tools".',
+            "memory": 'Memory: enable it for the session and its model.',
+            "settings": 'Optional capabilities: check "Einstellungen > Tools", integrations, or the agent profile.',
+            "temporary": 'Workflow-gated capabilities: complete the required workflow first.',
         }
-        return tuple(
-            templates[reason].format(names=",".join(names))
-            for reason, names in grouped.items()
-            if names
-        )
+        return tuple(hint for reason, hint in hints.items() if reason in reasons)
 
     def available(
         self,

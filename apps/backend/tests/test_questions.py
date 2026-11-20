@@ -109,17 +109,23 @@ def test_question_schema_explains_answer_mode_discriminators() -> None:
     definitions = schema["$defs"]
     assert schema["properties"]["questions"]["items"] == {"anyOf": [
         {"$ref": f"#/$defs/{name}"}
-        for name in ("FreeTextQuestion", "SingleChoiceQuestion", "MultipleChoiceQuestion")
+        for name in ("FreeTextQuestion", "ChoiceQuestion")
     ]}
     free_text = definitions["FreeTextQuestion"]["properties"]
     assert "options" not in free_text and "allow_custom" not in free_text
-    assert "placeholder" in free_text
-    for name, kind in (("SingleChoiceQuestion", "single_choice"), ("MultipleChoiceQuestion", "multiple_choice")):
-        branch = definitions[name]
-        assert branch["properties"]["type"]["const"] == kind
-        assert "options" in branch["required"]
-        assert branch["properties"]["options"]["minItems"] == 2
-        assert "placeholder" not in branch["properties"]
+    assert free_text["placeholder"]["description"] == "Free-text input hint; omit for choice questions."
+    assert free_text["type"]["const"] == "free_text"
+    choices = definitions["ChoiceQuestion"]
+    assert choices["properties"]["type"]["enum"] == ["single_choice", "multiple_choice"]
+    assert "options" in choices["required"]
+    assert choices["properties"]["options"]["minItems"] == 2
+    assert "placeholder" not in choices["properties"]
+    payload = _arguments().model_dump(mode="json", exclude_defaults=True, exclude_none=True)
+    del payload["questions"][2]["allow_custom"]  # Runtime normalization is not a model input.
+    validator = Draft202012Validator(schema)
+    assert validator.is_valid(payload)
+    payload["questions"][2]["options"] = [{"label": "One"}, {"label": "Two"}]
+    assert not validator.is_valid(payload)
 
 
 def test_question_schema_rejects_selection_without_options() -> None:
