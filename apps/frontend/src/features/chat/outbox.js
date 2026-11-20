@@ -5,14 +5,14 @@ import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildAttachmentFormData, releaseAttachmentDrafts } from 'src/features/chat/attachments'
 import { newSessionQueueKey, queueKeyForEntry, sanitizedSessionOptions, sessionCreatePayload, sessionScopeKey, sortSessions } from 'src/features/chat/state'
 import { errorDescriptor } from 'src/utils/api-errors'
-import { compareChatOutboxEntries, deleteChatOutboxEntry, deleteChatOutboxEntries, saveChatOutboxEntry } from 'src/features/chat/outbox-storage'
+import { compareChatOutboxEntries, deleteChatOutboxEntry, deleteChatOutboxEntries, pauseChatOutboxEntries, saveChatOutboxEntry } from 'src/features/chat/outbox-storage'
 import { notifyError } from 'src/utils/notifications'
 import { randomUuid } from 'src/utils/random-id'
 import { OUTBOX_RETRY_MS } from 'src/features/chat/model'
 
 export const outboxActions = {
     async send(content, { preserveDraft = false, interrupt = false, activeFile } = {}) {
-      if (this.loading || this.outboxSaving || this.historyActionPending) return null
+      if (this.loading || this.outboxSaving || this.historyActionPending || this.queueUndoId) return null
       const sessionId = this.current?.id
       const ownerUserId = this.draftOwnerUserId
       const draft = this.drafts.newSession
@@ -109,13 +109,16 @@ export const outboxActions = {
         this.persistDrafts()
       }
       this.pendingOutboxEntry = { ...entry, preserveDraft }
+      const save = markRaw(saveChatOutboxEntry(toRaw(entry)))
+      this.pendingOutboxSave = save
       try {
-        await saveChatOutboxEntry(toRaw(entry))
+        await save
       } catch (error) {
         notifyError({}, 'Die Nachricht konnte nicht auf diesem Gerät vorgemerkt werden.')
         return null
       } finally {
         if (this.pendingOutboxEntry?.id === entry.id) this.pendingOutboxEntry = null
+        if (this.pendingOutboxSave === save) this.pendingOutboxSave = null
       }
       if (ownerUserId !== this.draftOwnerUserId || loadVersion !== this.outboxLoadVersion) {
         await deleteChatOutboxEntry(entry.id).catch(() => {})
@@ -134,30 +137,37 @@ export const outboxActions = {
       }
       return entry
     },
-    async removeQueuedMessage(id, key = this.activeQueueKey) {
+    async removeQueuedMessage(id, key = this.activeQueueKey, { undoEntry, stillOwned = () => true } = {}) {
       if (id === this.queueSendingEntryId) return null
-      const queue = key ? this.queuedMessages[key] : null
-      const index = queue ? queue.findIndex((entry) => entry.id === id) : -1
-      if (index < 0) return null
-      const entry = queue[index]
+      const queue = this.queuedMessages[key] || []
+      const entry = queue.find((item) => item.id === id) || undoEntry
+      if (!entry) return null
       const paused = entry.paused
-      // Block background delivery before waiting for local deletion.
+      const checkServer = entry.serverQueued || entry.deliveryUnconfirmed
+      const ids = [...new Set([id, ...queue.filter((item) => item.afterRunId === id).map((item) => item.id)])]
+      // Keep the local copy, but prevent a reload from retrying it during removal.
       entry.paused = true
       try {
-        await deleteChatOutboxEntries((this.queuedMessages[key] || queue)
-          .filter((item) => item.id === id || item.afterRunId === id).map((item) => item.id))
-        if (entry.serverQueued) {
-          await api.delete(`/sessions/${entry.sessionId}/queue/${entry.id}`, { suppressErrorToast: true })
-          this.serverQueueVersion += 1
+        if (checkServer) {
+          await pauseChatOutboxEntries([id])
+          if (!stillOwned()) return null
+          await api.delete(`/sessions/${entry.sessionId}/queue/${entry.id}`, {
+            suppressErrorToast: true,
+            ...(entry.deliveryUnconfirmed && !entry.serverQueued ? { params: { require_present: true } } : {})
+          })
+          if (stillOwned()) this.serverQueueVersion += 1
         }
+        if (!stillOwned()) return null
+        await deleteChatOutboxEntries(ids)
       } catch (error) {
-        if (error?.response?.status !== 404) {
-          entry.paused = paused
-          if (!paused) this.scheduleQueueDrain(0)
-          notifyError(error)
-          return null
-        }
+        if (!stillOwned()) return null
+        entry.paused = Boolean(entry.deliveryUnconfirmed || paused)
+        if (entry.paused && this.queuedMessages[key]?.[0]?.id === id) this.queuedSendPausedSessions[key] = true
+        if (undoEntry) throw error
+        notifyError(error)
+        return null
       }
+      if (!stillOwned()) return null
       entry.paused = paused
       this.queuedMessages[key] = (this.queuedMessages[key] || queue).filter((item) => item.id !== id && item.afterRunId !== id)
       const remaining = this.queuedMessages[key]
@@ -173,27 +183,107 @@ export const outboxActions = {
       }
       return entry
     },
-    async restoreQueuedMessage(id, key = this.activeQueueKey) {
-      const queued = this.queuedMessages[key]?.find((entry) => entry.id === id)
-      if (queued?.serverQueued) {
-        queued.attachments = await Promise.all(queued.attachments.map(async (attachment, index) => {
-          if (attachment.file instanceof Blob) return attachment
-          const { data } = await api.get(`/sessions/${queued.sessionId}/queue/${id}/attachments/${index}`, { responseType: 'blob' })
-          return { ...attachment, file: markRaw(new File([data], attachment.name, { type: attachment.mimeType })) }
-        }))
+    async restoreQueuedMessage(id, key = this.activeQueueKey, { confirmDraftUndo, confirmSentUndo } = {}) {
+      if (this.queueUndoId || this.historyActionPending) return null
+      const owner = this.draftOwnerUserId
+      const version = this.outboxLoadVersion
+      const stillOwned = () => owner === this.draftOwnerUserId && version === this.outboxLoadVersion
+      const sending = id === this.queueSendingEntryId
+      const saving = id === this.pendingOutboxEntry?.id ? this.pendingOutboxSave : null
+      let entry = this.queuedMessages[key]?.find((item) => item.id === id)
+      if (!entry && !saving) return null
+      this.queueUndoId = id
+      try {
+        if (saving) {
+          await saving.catch(() => {})
+          if (!stillOwned()) return null
+          entry = this.queuedMessages[key]?.find((item) => item.id === id)
+        }
+        // An aborted HTTP request may already have committed on the server.
+        if (sending) await this.queueDrainPromise
+        if (!entry || !stillOwned()) return null
+        const sessionId = entry.sessionId || null
+        const restoreSent = async (messageId, sentSessionId = sessionId) => {
+          if (!stillOwned()) return null
+          const session = this.current?.id === sentSessionId && this.current.messages.some((message) => message.id === messageId)
+            ? this.current : await this.fetchSession(sentSessionId)
+          const message = session.messages.find((item) => item.id === messageId)
+            || (await api.get(`/sessions/${sentSessionId}/messages/${messageId}`, { suppressErrorToast: true })).data
+          if (!stillOwned()) return null
+          if (confirmSentUndo && !await confirmSentUndo(session)) return null
+          if (!stillOwned()) return null
+          const files = entry.attachments.length === (message.attachments || []).length
+            && entry.attachments.every((item) => item.file instanceof Blob)
+            ? entry.attachments.map((item) => item.file) : undefined
+          const history = session.messages.includes(message) ? session : { ...session, messages: [message] }
+          const result = await this.undoUserMessage(message, { session: history, files, outboxId: id }).catch(() => null)
+          if (result && stillOwned()) {
+            this.serverQueueVersion += 1
+            await deleteChatOutboxEntry(id)
+            if (!stillOwned()) return null
+            const entryKey = queueKeyForEntry(entry)
+            const queue = this.queuedMessages[entryKey]?.filter((item) => item.id !== id)
+            if (queue?.length) this.queuedMessages[entryKey] = queue
+            else delete this.queuedMessages[entryKey]
+            if (!sessionId && !this.current && this.activeQueueKey === key) {
+              this.createdSessionResult = { created: true, sessionId: sentSessionId, projectId: session.projectId }
+            }
+            void this.refreshServerQueue().catch(() => {})
+          }
+          return result
+        }
+        if (entry.sentMessageId) return await restoreSent(entry.sentMessageId)
+        if (entry.deliveryUnconfirmed && (!sessionId || entry.continuationRunId)) {
+          if (sessionId) return await restoreSent(id)
+          const { data } = await api.get(`/sessions/message-submissions/${id}`, { suppressErrorToast: true })
+          return await restoreSent(data.messageId, data.sessionId)
+        }
+        if (confirmDraftUndo && !await confirmDraftUndo()) return null
+        if (!stillOwned()) return null
+        let attachments = entry.attachments
+        try {
+          if (entry.serverQueued) {
+            attachments = await Promise.all(attachments.map(async (attachment, index) => {
+              if (attachment.file instanceof Blob) return attachment
+              const { data } = await api.get(`/sessions/${sessionId}/queue/${id}/attachments/${index}`, {
+                responseType: 'blob', suppressErrorToast: true
+              })
+              return { ...attachment, file: markRaw(new File([data], attachment.name, { type: attachment.mimeType })) }
+            }))
+          }
+          if (!stillOwned()) return null
+          if (!await this.removeQueuedMessage(id, sessionId || key, { undoEntry: entry, stillOwned })) return null
+        } catch (error) {
+          const descriptor = errorDescriptor(error)
+          if (descriptor?.code !== 'session.runAlreadyActive' || !descriptor.params?.messageId) throw error
+          return await restoreSent(descriptor.params.messageId)
+        }
+        if (!stillOwned()) return null
+        if (sessionId) this.drafts.sessionMessages[sessionId] = entry.content
+        else {
+          const draft = this.drafts.newSessions[sessionScopeKey(entry.projectId)]
+          if (draft) draft.message = entry.content
+        }
+        if (sessionId && entry.agentProfileId) {
+          this.profileSelectionVersions[sessionId] = (this.profileSelectionVersions[sessionId] || 0) + 1
+          this.drafts.sessionAgentProfiles[sessionId] = entry.agentProfileId
+        }
+        this.replaceAttachmentFiles(attachments.map((attachment) => attachment.file), sessionId, attachments, entry.projectId)
+        this.persistDrafts()
+        return entry
+      } catch (error) {
+        if (stillOwned()) {
+          if (entry?.deliveryUnconfirmed && errorDescriptor(error)?.code === 'session.messageNotFound') {
+            notifyError({}, 'Der Versand konnte noch nicht geklärt werden. Die Nachricht bleibt im Postausgang pausiert.')
+          } else notifyError(error)
+        }
+        return null
+      } finally {
+        if (this.queueUndoId === id) {
+          this.queueUndoId = null
+          this.scheduleQueueDrain(0)
+        }
       }
-      const entry = await this.removeQueuedMessage(id, key)
-      if (!entry) return null
-      const sessionId = entry.sessionId || null
-      if (sessionId) this.drafts.sessionMessages[sessionId] = entry.content
-      else this.drafts.newSession.message = entry.content
-      if (sessionId && entry.agentProfileId) {
-        this.profileSelectionVersions[sessionId] = (this.profileSelectionVersions[sessionId] || 0) + 1
-        this.drafts.sessionAgentProfiles[sessionId] = entry.agentProfileId
-      }
-      this.replaceAttachmentFiles(entry.attachments.map((attachment) => attachment.file), sessionId, entry.attachments)
-      this.persistDrafts()
-      return entry
     },
     async clearQueuedMessages(key = this.activeQueueKey) {
       const entries = this.queuedMessages[key] || []
@@ -207,7 +297,7 @@ export const outboxActions = {
       delete this.queuedSendPausedSessions[key]
     },
     async resumeQueuedSend(key = this.activeQueueKey) {
-      if (!key) return
+      if (!key || this.queueUndoId) return
       const entry = this.queuedMessages[key]?.[0]
       if (entry?.paused) {
         if (entry.serverQueued) {
@@ -252,12 +342,12 @@ export const outboxActions = {
             const entry = queue.find((item) => !item.serverQueued)
             return entry && !entry.paused && (entry.sessionId || key === this.activeQueueKey)
           })
-        ) this.scheduleQueueDrain(this.historyActionPending || this.sessionSettingsPending || this.stopping ? OUTBOX_RETRY_MS : 0)
+        ) this.scheduleQueueDrain(this.historyActionPending || this.queueUndoId || this.sessionSettingsPending || this.stopping ? OUTBOX_RETRY_MS : 0)
       }
     },
     async drainNextOutboxEntry() {
       this.cancelQueueDrain()
-      if (this.historyActionPending || this.sessionSettingsPending || this.stopping) return null
+      if (this.historyActionPending || this.queueUndoId || this.sessionSettingsPending || this.stopping) return null
       const entry = Object.entries(this.queuedMessages)
         .filter(([key]) => key === this.activeQueueKey || !key.startsWith('new:'))
         .map(([, queue]) => queue.find((item) => !item.serverQueued)).filter((item) => item && !item.paused)
@@ -388,6 +478,7 @@ export const outboxActions = {
           this.scheduleQueueDrain()
         } else {
           entry.paused = true
+          if (!error?.response || error.response.status >= 500) entry.deliveryUnconfirmed = true
           try {
             await saveChatOutboxEntry(toRaw(entry))
           } catch {

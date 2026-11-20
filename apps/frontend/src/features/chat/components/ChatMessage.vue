@@ -109,9 +109,9 @@
         dense
         size="sm"
         icon="undo"
-        class="chat-message__meta-action chat-message__meta-action--hover"
-        :loading="metadata.actionLoading"
-        :disable="metadata.actionDisabled || message.deliveryStatus === 'sending'"
+        class="chat-message__meta-action"
+        :class="{ 'chat-message__meta-action--hover': !message.deliveryStatus }"
+        :disable="metadata.actionDisabled || metadata.actionLoading"
         aria-label="Nachricht rückgängig machen"
         @click.stop="message.outboxId ? emit('undo-queued', message.outboxId) : emit('undo', message)"
       >
@@ -238,15 +238,17 @@ const metadata = computed(() => {
     visible: Boolean(message.deliveryStatus || message.queueRecoveryId || message.createdAt || labels.length),
     absoluteTime: formatAbsoluteDateTime(message.createdAt),
     relativeTime: formatRelativeDateTime(message.createdAt, props.timestampNow),
-    deliveryIcon: message.deliveryStatus === 'failed' ? 'error_outline' : 'schedule',
+    deliveryIcon: message.deliveryStatus === 'sending' ? 'send'
+      : message.deliveryStatus === 'failed' ? 'error_outline' : 'schedule',
     deliveryLabel: message.deliveryStatus === 'sending' ? 'Wird gesendet …'
-      : message.deliveryStatus === 'failed' ? 'Nicht gesendet' : 'Noch nicht gesendet',
+      : message.deliveryStatus === 'failed' ? (message.deliveryUnconfirmed ? 'Versand unbestätigt' : 'Nicht gesendet') : 'Geplant',
     canUndo: message.role === 'user' && !chat.current?.archived && !String(message.id).startsWith('local-'),
     canRetry: !chat.current?.archived && retryAvailableForMessage(message, chat.current?.messages, chat.running),
     canRecover: (message.deliveryStatus === 'failed' && message.outboxId === firstQueuedId)
       || Boolean(message.queueRecoveryId && message.queueRecoveryId === firstQueuedId),
     actionLoading: props.messageActionId === message.id,
-    actionDisabled: chat.loading || (props.messageActionId !== null && props.messageActionId !== message.id)
+    actionDisabled: chat.loading || chat.queueUndoId !== null
+      || (props.messageActionId !== null && props.messageActionId !== message.id)
   }
 })
 

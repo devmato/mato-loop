@@ -1005,6 +1005,7 @@ class AgentRuntime:
 
     @classmethod
     async def _run(cls, run_id: UUID) -> None:
+        session_id: UUID | None = None
         try:
             async with AsyncSessionFactory() as db:
                 run = await db.get(AgentRun, run_id)
@@ -1362,6 +1363,10 @@ class AgentRuntime:
             cls._instruction_waits.pop(run_id, None)
             cls._provider_active_runs.discard(run_id)
             cls._tool_active_runs.discard(run_id)
+            if session_id is not None:
+                from mato_loop_backend.sessions.message_queue import schedule_delivery
+
+                schedule_delivery(session_id)
 
     @classmethod
     async def _execute_loop(

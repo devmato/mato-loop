@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from contextlib import contextmanager
 from uuid import UUID
 
 from sqlalchemy import delete, or_, select
@@ -25,6 +26,21 @@ from mato_loop_backend.sessions.state import deleted_session_clause, session_wor
 logger = logging.getLogger(__name__)
 ACTIVE = ("queued", "running", "waiting_approval", "waiting_input")
 _deliveries: dict[UUID, asyncio.Task[None]] = {}
+_history_undos: set[UUID] = set()
+
+
+@contextmanager
+def hold_delivery_for_undo(session_id: UUID):
+    if session_id in _history_undos:
+        from mato_loop_backend.chat_history import ChatHistoryError
+
+        raise ChatHistoryError("session.runInactive", 409)
+    _history_undos.add(session_id)
+    try:
+        yield
+    finally:
+        _history_undos.discard(session_id)
+        schedule_delivery(session_id)
 
 
 def workspace_binding(session):
@@ -115,7 +131,7 @@ async def deliver_next(session_id):
             return
         session = await db.scalar(select(ChatSession).where(ChatSession.id == session_id).with_for_update(skip_locked=True)
                                   .execution_options(populate_existing=True))
-        if session is None or await db.scalar(select(AgentRun.id).where(
+        if session is None or session_id in _history_undos or await db.scalar(select(AgentRun.id).where(
             AgentRun.session_id == session_id, AgentRun.parent_run_id.is_(None), AgentRun.status.in_(ACTIVE),
         )):
             return
@@ -160,11 +176,18 @@ def _delivery_finished(session_id, task):
         logger.error("Message queue admission failed (%s)", type(error).__name__)
 
 
+def schedule_delivery(session_id: UUID) -> None:
+    if session_id in _deliveries or session_id in _history_undos:
+        return
+    task = asyncio.create_task(deliver_next(session_id))
+    _deliveries[session_id] = task
+    task.add_done_callback(
+        lambda completed, session_id=session_id: _delivery_finished(session_id, completed)
+    )
+
+
 async def process_pending() -> None:
     async with AsyncSessionFactory() as db:
         sessions = list(await db.scalars(select(QueuedMessage.session_id).distinct()))
     for session_id in sessions:
-        if session_id not in _deliveries:
-            task = asyncio.create_task(deliver_next(session_id))
-            _deliveries[session_id] = task
-            task.add_done_callback(lambda task, session_id=session_id: _delivery_finished(session_id, task))
+        schedule_delivery(session_id)

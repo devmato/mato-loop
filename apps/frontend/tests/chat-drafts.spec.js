@@ -786,7 +786,8 @@ describe('chat drafts', () => {
     const saving = chat.updateActive({ agent_profile_id: 'agent-b' })
     await vi.waitFor(() => expect(resolvePatch).toBeTypeOf('function'))
     if (restored) {
-      vi.spyOn(chat, 'removeQueuedMessage').mockResolvedValue({ sessionId: 'session-1', content: 'Restored', agentProfileId: 'agent-c', attachments: [] })
+      chat.queuedMessages['session-1'] = [{ id: 'queued', sessionId: 'session-1', content: 'Restored', agentProfileId: 'agent-c', attachments: [] }]
+      vi.spyOn(chat, 'removeQueuedMessage').mockResolvedValue(true)
       await chat.restoreQueuedMessage('queued')
     } else {
       await chat.updateActive({ agent_profile_id: 'agent-c' }, { draftOnly: true })

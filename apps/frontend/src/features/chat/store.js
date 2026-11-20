@@ -78,12 +78,14 @@ export const useChatStore = defineStore('chat', {
     outboxLoadFailed: false,
     outboxSaving: false,
     pendingOutboxEntry: null,
+    pendingOutboxSave: null,
     outboxLoadVersion: 0,
     outboxLoadPromise: null,
     serverQueueVersion: 0,
     queueDrainPromise: null,
     queueDrainTimer: null,
     queueSendingEntryId: null,
+    queueUndoId: null,
     emptySessionPromise: null,
     createdSessionResult: null
   }),
@@ -145,7 +147,7 @@ export const useChatStore = defineStore('chat', {
     queuedSendReady() {
       if (!this.outboxLoaded) return false
       if (this.loading || this.sessionRequestController || this.stopping) return false
-      if (this.historyActionPending || this.sessionSettingsPending > 0) return false
+      if (this.historyActionPending || this.queueUndoId || this.sessionSettingsPending > 0) return false
       const entry = this.activeQueuedMessages.find((item) => !item.serverQueued)
       if (!entry || entry.paused || entry.id === this.pendingOutboxEntry?.id) return false
       const sessionId = this.current?.id

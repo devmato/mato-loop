@@ -77,6 +77,17 @@ export function deleteChatOutboxEntry(id) {
   return runTransaction('readwrite', (store) => { store.delete(id) })
 }
 
+export function pauseChatOutboxEntries(ids) {
+  return runTransaction('readwrite', (store) => {
+    for (const id of ids) {
+      const request = store.get(id)
+      request.onsuccess = () => {
+        if (request.result) store.put({ ...request.result, paused: true })
+      }
+    }
+  })
+}
+
 export function deleteChatOutboxEntries(ids) {
   return runTransaction('readwrite', (store) => {
     for (const id of ids) store.delete(id)

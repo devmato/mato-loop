@@ -88,7 +88,11 @@ Die Nachricht wartet hinter dem laufenden Auftrag, statt ihn zu unterbrechen. Na
 gilt wieder die im Versandmenü gewählte Versandart. **Umschalt+Enter** bleibt ein Zeilenumbruch.
 Ohne laufenden Auftrag kann eine vorgemerkte Nachricht sofort starten.
 
-Fehlerhafte Sendungen bleiben für einen erneuten Versuch oder die Übernahme in den Entwurf erhalten. Entferne einen vorgemerkten Auftrag vor seinem Start, wenn er nicht mehr ausgeführt werden soll. Hat er bereits begonnen, verwende den Stoppknopf. Änderst du Computer oder Arbeitsordner, hält die Queue betroffene Nachrichten an; übernimm sie in den Entwurf, prüfe den neuen Kontext und sende erneut.
+Die Uhr mit **Geplant** kennzeichnet wartende Nachrichten. Der Papierflieger mit **Wird gesendet …** steht für die Übertragung. Bei **Nicht gesendet** kannst du es erneut versuchen oder die Nachricht in den Entwurf zurückholen.
+
+Mit **Nachricht rückgängig machen** holst du Text und Anhänge bereits während des Sendens zurück. Wartet die Nachricht noch, läuft der aktuelle Auftrag weiter. Ist sie schon im Chat angekommen, entfernt Rückgängig nach Bestätigung auch spätere Chatnachrichten und stoppt den laufenden Auftrag. Bereits ausgeführte Aktionen bleiben bestehen. Änderst du Computer oder Arbeitsordner, hält die Queue betroffene Nachrichten an; übernimm sie in den Entwurf, prüfe den neuen Kontext und sende erneut.
+
+**Versand unbestätigt** heißt, dass der Browser keine verlässliche Antwort erhalten hat. Die Nachricht bleibt lokal gespeichert und pausiert. Prüfe nach dem Wiederverbinden mit **Nachricht rückgängig machen** erneut, ob sie schon angekommen ist. Kopiere den Text nicht in eine neue Nachricht, solange unklar ist, ob der ursprüngliche Auftrag bereits läuft.
 
 Der Stoppknopf beendet den Agentenlauf. Ein Browserdisconnect beendet ihn nicht; beim Wiederverbinden lädt MatoLoop den gespeicherten Zustand nach.
 

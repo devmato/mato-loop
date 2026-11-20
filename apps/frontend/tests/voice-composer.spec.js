@@ -478,7 +478,7 @@ describe('voice attachment composer', () => {
       ])
     }
     expect(states).toEqual([
-      ['Erste Nachricht', 'Noch nicht gesendet', false],
+      ['Erste Nachricht', 'Geplant', false],
       ['Erste Nachricht', 'Wird gesendet …', true],
       ['Erste Nachricht', 'Nicht gesendet', false]
     ])
@@ -549,6 +549,29 @@ describe('voice attachment composer', () => {
     await click('Nachricht rückgängig machen')
     expect([Boolean(root.querySelector('[aria-label="Versand fortsetzen"]')), undo.mock.calls[0]?.[0]?.id])
       .toEqual([true, 'sent'])
+  })
+
+  it('shows distinct static delivery icons and allows undo while sending', async () => {
+    mocks.api.get.mockResolvedValue({ data: { items: [] } })
+    await router.push('/?project=draft')
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    chat.current = { id: 'session-1', messages: [] }
+    chat.queuedMessages['session-1'] = [
+      { id: 'sending', content: 'Sending', attachments: [] },
+      { id: 'planned', content: 'Planned', attachments: [] },
+      { id: 'failed', content: 'Failed', attachments: [], paused: true },
+      { id: 'unconfirmed', content: 'Unconfirmed', attachments: [], paused: true, deliveryUnconfirmed: true }
+    ]
+    chat.queueSendingEntryId = 'sending'
+    const undo = vi.spyOn(chat, 'restoreQueuedMessage').mockResolvedValue(null)
+    await nextTick()
+    const status = (id) => root.querySelector(`[data-message-id="${id}"] [role="status"]`)
+    await click('Nachricht rückgängig machen')
+    expect([['sending', 'planned', 'failed', 'unconfirmed'].map((id) => [status(id).textContent, status(id).querySelector('[name]')?.getAttribute('name')]),
+      undo.mock.calls[0]?.[0]]).toEqual([
+      [['Wird gesendet …', 'send'], ['Geplant', 'schedule'], ['Nicht gesendet', 'error_outline'], ['Versand unbestätigt', 'error_outline']], 'sending'
+    ])
   })
 
   it.each([false, true])('keeps the project draft composer through chat transitions (mobile=%s)', async (mobile) => {

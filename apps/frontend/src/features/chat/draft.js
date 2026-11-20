@@ -57,6 +57,8 @@ export const draftActions = {
       this.personalChatSessionId = null
       this.queuedMessages = {}
       this.pendingOutboxEntry = null
+      this.pendingOutboxSave = null
+      this.queueUndoId = null
       this.queuedSendPausedSessions = {}
       this.outboxLoaded = !ownerUserId
       this.outboxLoadFailed = false
@@ -289,18 +291,19 @@ export const draftActions = {
       const [attachment] = target.splice(index, 1)
       if (attachment.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
     },
-    clearAttachmentDraft(sessionId = this.current?.id || null) {
+    clearAttachmentDraft(sessionId = this.current?.id || null, projectId = this.sessionsProjectId) {
+      const scope = sessionScopeKey(projectId)
       const target = sessionId
         ? this.attachmentDrafts.sessionMessages[sessionId] || []
-        : this.attachmentDrafts.newSession
+        : this.attachmentDrafts.newSessions[scope] || []
       for (const attachment of target) {
         if (attachment.objectUrl) globalThis.URL?.revokeObjectURL?.(attachment.objectUrl)
       }
       if (sessionId) delete this.attachmentDrafts.sessionMessages[sessionId]
       else {
         const target = []
-        this.attachmentDrafts.newSession = target
-        this.attachmentDrafts.newSessions[sessionScopeKey(this.sessionsProjectId)] = target
+        if (scope === sessionScopeKey(this.sessionsProjectId)) this.attachmentDrafts.newSession = target
+        this.attachmentDrafts.newSessions[scope] = target
       }
     },
     clearAllAttachmentDrafts() {
@@ -344,7 +347,7 @@ export const draftActions = {
       if (typeof window !== 'undefined') clearPersistedDrafts()
       return ownerUserId ? clearChatOutbox(ownerUserId) : Promise.resolve()
     },
-    attachmentReplacementError(files, sessionId, sourceSessionId = sessionId) {
+    attachmentReplacementError(files, sessionId, sourceSessionId = sessionId, outboxId = null) {
       const limits = useInstanceLimitsStore()
       if (files.length > limits.maxAttachmentsPerMessage) {
         return `Du kannst höchstens ${limits.maxAttachmentsPerMessage} Dateien pro Nachricht anhängen.`
@@ -372,7 +375,8 @@ export const draftActions = {
       const currentBytes = [
         ...Object.values(this.attachmentDrafts.newSessions).flat(),
         ...Object.values(this.attachmentDrafts.sessionMessages).flat(),
-        ...Object.values(this.queuedMessages).flat().flatMap((entry) => entry.attachments)
+        ...Object.values(this.queuedMessages).flat().filter((entry) => entry.id !== outboxId)
+          .flatMap((entry) => entry.attachments)
       ].reduce((total, attachment) => total + (Number(attachment.file?.size) || 0), 0)
       const replacedBytes = replaced.reduce(
         (total, attachment) => total + (Number(attachment.file?.size) || 0),
@@ -382,8 +386,8 @@ export const draftActions = {
         ? 'Dateianhänge dürfen über alle Sessions zusammen höchstens 256 MiB belegen.'
         : null
     },
-    replaceAttachmentFiles(files, sessionId, attachments = []) {
-      this.clearAttachmentDraft(sessionId)
+    replaceAttachmentFiles(files, sessionId, attachments = [], projectId = this.sessionsProjectId) {
+      this.clearAttachmentDraft(sessionId, projectId)
       const target = files.map((file, index) => ({
         id: globalThis.crypto?.randomUUID?.() || `attachment-${Date.now()}-${index}`,
         file: markRaw(file),
@@ -395,8 +399,9 @@ export const draftActions = {
       }))
       if (sessionId) this.attachmentDrafts.sessionMessages[sessionId] = target
       else {
-        this.attachmentDrafts.newSession = target
-        this.attachmentDrafts.newSessions[sessionScopeKey(this.sessionsProjectId)] = target
+        const scope = sessionScopeKey(projectId)
+        if (scope === sessionScopeKey(this.sessionsProjectId)) this.attachmentDrafts.newSession = target
+        this.attachmentDrafts.newSessions[scope] = target
       }
     },
     getAudioDictation(sessionId = null, projectId = this.sessionsProjectId) {

@@ -268,7 +268,7 @@
           :draft="chat.loading || pendingDraft ? '' : chat.activeDraft"
           :disabled="chat.loading || changingDraftProject || !chat.outboxLoaded
             || chat.outboxSaving
-            || chat.historyActionPending
+            || chat.historyActionPending || Boolean(chat.queueUndoId)
             || (!chat.current && chat.activeQueuedMessages.length > 0)"
           :running="!chat.loading && chat.running"
           :stopping="chat.stopping"
@@ -631,23 +631,28 @@ async function addQuote(quote) {
   await composer.value?.insertQuote(quote)
 }
 
-async function undoMessage(message) {
-  if (composer.value?.hasAudioActivity?.()) {
-    $q.notify({
-      type: 'info',
-      message: 'Beende oder brich zuerst die laufende Aufnahme beziehungsweise Transkription ab.'
-    })
-    return
-  }
-  const runningHint = chat.running ? ' Die laufende Anfrage wird dabei abgebrochen.' : ''
-  const accepted = await confirm(
+function confirmHistoryUndo(running) {
+  const runningHint = running ? ' Die laufende Anfrage wird dabei abgebrochen.' : ''
+  return confirm(
     `Diese Nachricht und alle späteren Chatnachrichten werden entfernt.${runningHint} `
       + 'Der aktuelle Entwurf, seine Anhänge und ein vorhandenes Diktat werden ersetzt. '
       + 'Bereits ausgeführte Tool-, Datei-, Berechtigungs- und Memory-Aktionen bleiben bestehen.',
     'Nachricht rückgängig machen?',
     { okLabel: 'Rückgängig machen' }
   )
-  if (!accepted) return
+}
+
+function undoBlockedByAudio() {
+  if (!composer.value?.hasAudioActivity?.()) return false
+  $q.notify({
+    type: 'info',
+    message: 'Beende oder brich zuerst die laufende Aufnahme beziehungsweise Transkription ab.'
+  })
+  return true
+}
+
+async function undoMessage(message) {
+  if (undoBlockedByAudio() || !await confirmHistoryUndo(chat.running)) return
   messageActionId.value = message.id
   try {
     await chat.undoUserMessage(message)
@@ -659,24 +664,22 @@ async function undoMessage(message) {
 }
 
 async function undoQueuedMessage(id) {
-  if (composer.value?.hasAudioActivity?.()) {
-    $q.notify({
-      type: 'info',
-      message: 'Beende oder brich zuerst die laufende Aufnahme beziehungsweise Transkription ab.'
-    })
-    return
-  }
-  const hasDraft = Boolean(
+  if (undoBlockedByAudio()) return
+  const key = chat.activeQueueKey
+  const pending = chat.activePendingMessage
+  const hasDraft = (pending?.id !== id || pending.preserveDraft) && Boolean(
     chat.activeDraft.trim()
     || chat.activeAttachmentDraft.length
     || chat.getAudioDictation(chat.current?.id || null)
   )
-  if (hasDraft && !await confirm(
-    'Der aktuelle Entwurf, seine Anhänge und ein vorhandenes Diktat werden ersetzt.',
-    'Vorgemerkte Nachricht rückgängig machen?',
-    { okLabel: 'Rückgängig machen' }
-  )) return
-  const restored = await chat.restoreQueuedMessage(id)
+  const restored = await chat.restoreQueuedMessage(id, key, {
+    confirmDraftUndo: hasDraft ? () => confirm(
+      'Der aktuelle Entwurf, seine Anhänge und ein vorhandenes Diktat werden ersetzt.',
+      'Nachricht zurück in den Entwurf holen?',
+      { okLabel: 'Rückgängig machen' }
+    ) : null,
+    confirmSentUndo: (session) => confirmHistoryUndo(Boolean(session.activeRun || (chat.current?.id === session.id && chat.running)))
+  })
   if (!restored) return
   await nextTick()
   composer.value?.focus()

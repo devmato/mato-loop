@@ -13,8 +13,12 @@ export function withQueuedTranscriptMessages(messages, queuedMessages, sendingId
   const sentIds = new Set(messages.flatMap((message) => [message.id, message.requestId]))
   const pausedEntries = new Map(queuedMessages.filter((entry) => entry.paused)
     .map((entry) => [entry.sentMessageId || entry.id, entry.id]))
-  return [...messages.map((message) => pausedEntries.has(message.id)
-    ? { ...message, queueRecoveryId: pausedEntries.get(message.id) } : message), ...queuedMessages
+  const unconfirmedIds = new Set(queuedMessages.filter((entry) => entry.deliveryUnconfirmed).map((entry) => entry.id))
+  return [...messages.map((message) => {
+    const unconfirmedId = unconfirmedIds.has(message.id) ? message.id : message.requestId
+    if (unconfirmedIds.has(unconfirmedId)) return { ...message, outboxId: unconfirmedId }
+    return pausedEntries.has(message.id) ? { ...message, queueRecoveryId: pausedEntries.get(message.id) } : message
+  }), ...queuedMessages
     .filter((entry) => !sentIds.has(entry.sentMessageId || entry.id))
     .map((entry) => ({
       id: entry.id,
@@ -23,7 +27,9 @@ export function withQueuedTranscriptMessages(messages, queuedMessages, sendingId
       content: entry.content,
       sourceType: entry.sourceType,
       attachments: entry.attachments,
-      deliveryStatus: entry.id === sendingId || entry.id === pendingId ? 'sending' : entry.paused ? 'failed' : 'queued'
+      ...(entry.deliveryUnconfirmed ? { deliveryUnconfirmed: true } : {}),
+      deliveryStatus: entry.paused ? 'failed'
+        : !entry.serverQueued && (entry.id === sendingId || entry.id === pendingId) ? 'sending' : 'queued'
     }))]
 }
 
