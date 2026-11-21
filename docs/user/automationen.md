@@ -1,6 +1,6 @@
 # Automationen
 
-Eine Automation ist ein gespeicherter Agentenauftrag in einer gewöhnlichen sichtbaren Session. Ein Klick auf einen Eintrag unter **Automationen** in der Seitenleiste öffnet die zugehörige Unterhaltung und wählt die Automation in der Control-Center-App **Automationen** aus. Das Eintragsmenü bietet **Automation bearbeiten** und **Automation löschen**; Sessionaktionen findest du in der Projekt- oder Sessionliste.
+Eine Automation ist ein gespeicherter Agentenauftrag in einer gewöhnlichen sichtbaren Session. Klapp **Automationen** in der Seitenleiste auf und wähle einen Eintrag, um die zugehörige Unterhaltung und die Automation im Control Center zu öffnen. Beim Wechsel der Session bleibt die Liste so, wie du sie eingestellt hast. Das Eintragsmenü bietet **Automation bearbeiten** und **Automation löschen**; Sessionaktionen findest du in der Projekt- oder Sessionliste.
 
 ## Erstellen und bearbeiten
 

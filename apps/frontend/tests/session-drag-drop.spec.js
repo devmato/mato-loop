@@ -515,6 +515,10 @@ it.each([false, true])('opens the automation and respects blocked navigation whe
   useRoute().query = { session: 'standalone' }
   useAutomationStore().items = [{ id: 'automation', executionSessionId: 'standalone', name: 'Bericht', revision: 4, enabled: true }]
   await nextTick()
+  const toggle = root.querySelector('[aria-controls="automation-list"]')
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  toggle.click()
+  await nextTick()
   root.querySelector('#automation-list .session-list-item').click()
   await vi.waitFor(() => expect(useControlCenterStore().openApp).toHaveBeenCalledWith('automation'))
   expect(useRoute().query).toEqual({ session: 'standalone', automation: 'automation', controlCenter: 'automation' })

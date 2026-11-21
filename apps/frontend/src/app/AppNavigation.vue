@@ -479,10 +479,6 @@ async function logout() {
   await auth.logout()
 }
 
-watch(() => automations.items.some((item) => item.executionSessionId === routeSessionId.value), (selected) => {
-  if (selected) automationsSectionOpen.value = true
-}, { immediate: true })
-
 watch(selectedProjectId, (projectId, previousProjectId) => {
   if (projectId) {
     projectsSectionOpen.value = true
