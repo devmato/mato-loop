@@ -188,7 +188,7 @@ class WindowsRuntimeTests(unittest.TestCase):
             "Start-Process OdooPrototype.exe -WorkingDirectory logs "
             "-RedirectStandardOutput:process.log; "
             "Invoke-WebRequest -UseBasicParsing -Uri 'https://example.invalid' "
-            "-InF request.txt -OutFile response.txt",
+            "-InFile request.txt -OutF response.txt",
             self.wire,
         )
         self.assertEqual(
