@@ -4,6 +4,12 @@ import { queueRefresh } from 'src/utils/queued-refresh'
 import { notifyError } from 'src/utils/notifications'
 import { randomUuid } from 'src/utils/random-id'
 import { applicationServerKey } from 'src/features/notifications/push'
+import {
+  playNewNotificationSound,
+  readNotificationSoundSetting,
+  saveNotificationSoundSetting,
+  unlockNotificationSound
+} from './sound'
 
 const PAGE_SIZE = 20
 const DEVICE_ID_KEY = 'matoLoopPushDeviceId'
@@ -14,6 +20,25 @@ function pushSupported() {
   return typeof window !== 'undefined'
     && window.isSecureContext !== false
     && Boolean(window.navigator?.serviceWorker && window.PushManager && window.Notification)
+}
+
+function fractionalSeconds(timestamp) {
+  return (timestamp?.match(/\.(\d+)/)?.[1] || '').padEnd(6, '0')
+}
+
+function newUnreadIds(previous, items) {
+  if (!previous) return []
+  return items.filter((item) => {
+    if (item.readAt || previous.ids.has(item.id)) return false
+    if (!previous.boundary) return true
+    // The previous page was full: exclude older entries that may have moved up after deletions.
+    const delta = Date.parse(item.createdAt) - Date.parse(previous.boundary.createdAt)
+    if (delta !== 0) return delta > 0
+    // PostgreSQL keeps microseconds; only use the ID when the full timestamps tie.
+    const fraction = fractionalSeconds(item.createdAt)
+    const boundaryFraction = fractionalSeconds(previous.boundary.createdAt)
+    return fraction > boundaryFraction || (fraction === boundaryFraction && item.id > previous.boundary.id)
+  }).map((item) => item.id)
 }
 
 function deviceId(create = false) {
@@ -51,6 +76,8 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
     markingId: null,
     markingAll: false,
     deletingId: null,
+    soundEnabled: readNotificationSoundSetting(),
+    latestSoundPage: null,
     pushSupported: pushSupported(),
     pushLoaded: false,
     pushLoadFailed: false,
@@ -64,6 +91,11 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
     revision: 0
   }),
   actions: {
+    setSoundEnabled(enabled) {
+      this.soundEnabled = enabled
+      saveNotificationSoundSetting(enabled)
+      if (enabled) void unlockNotificationSound({ preview: true, enabled: () => this.soundEnabled })
+    },
     async markPresent(presence = null) {
       await api.put('/notifications/presence', presence, { suppressErrorToast: true })
     },
@@ -82,6 +114,15 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
           this.nextCursor = data.nextCursor || null
           this.unreadCount = Number(data.unreadCount) || 0
           this.loaded = true
+          const previous = this.latestSoundPage
+          this.latestSoundPage = {
+            ids: new Set(this.items.map((item) => item.id)),
+            boundary: this.nextCursor ? this.items.at(-1) : null
+          }
+          if (this.soundEnabled) {
+            void playNewNotificationSound(newUnreadIds(previous, this.items), () => this.soundEnabled,
+              () => !this.pushSubscribed || document.hasFocus())
+          }
         } catch (error) {
           if (revision === this.revision) this.loadFailed = true
           throw error

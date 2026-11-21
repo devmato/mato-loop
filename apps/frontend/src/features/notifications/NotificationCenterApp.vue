@@ -13,6 +13,17 @@
             flat
             round
             dense
+            :icon="notifications.soundEnabled ? 'volume_up' : 'volume_off'"
+            aria-label="Benachrichtigungston"
+            :aria-pressed="notifications.soundEnabled"
+            @click="notifications.setSoundEnabled(!notifications.soundEnabled)"
+          >
+            <q-tooltip>Ton bei neuen Benachrichtigungen {{ notifications.soundEnabled ? 'ausschalten' : 'einschalten' }}</q-tooltip>
+          </q-btn>
+          <q-btn
+            flat
+            round
+            dense
             icon="done_all"
             aria-label="Alle Benachrichtigungen als gelesen markieren"
             :disable="!notifications.unreadCount || Boolean(notifications.markingId || notifications.deletingId)"

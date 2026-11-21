@@ -1,4 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
+import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { api } = vi.hoisted(() => ({
@@ -16,6 +17,7 @@ describe('in-app notification store', () => {
   })
 
   afterEach(() => {
+    vi.unstubAllGlobals()
     delete global.window
   })
 
@@ -51,6 +53,41 @@ describe('in-app notification store', () => {
     expect(store.nextCursor).toBe('next')
     expect(store.unreadCount).toBe(3)
     expect(store.loaded).toBe(true)
+  })
+
+  it('sounds only for new unread IDs, even when the unread count stays the same', async () => {
+    const start = vi.fn()
+    const param = {
+      setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn()
+    }
+    vi.stubGlobal('indexedDB', new IDBFactory())
+    global.window = {
+      AudioContext: class {
+        state = 'running'
+        currentTime = 0
+        createGain() { return { gain: param, connect: vi.fn() } }
+        createOscillator() {
+          return { frequency: param, connect: (gain) => gain, start, stop: vi.fn() }
+        }
+      }
+    }
+    const store = useInAppNotificationStore()
+    store.setSoundEnabled(true)
+    expect(start).toHaveBeenCalledOnce() // Preview
+    start.mockClear()
+    const existing = { id: 'existing', title: 'Agent notice', createdAt: '2026-09-06T10:00:00.123456Z' }
+    api.get.mockResolvedValue({ data: { items: [existing], unreadCount: 1, nextCursor: 'next' } })
+    await store.fetchLatest()
+    api.get.mockResolvedValue({ data: { items: [{ ...existing, title: 'Correction' }], unreadCount: 1, nextCursor: 'next' } })
+    await store.fetchLatest()
+    expect(start).not.toHaveBeenCalled()
+    api.get.mockResolvedValue({ data: {
+      items: [{ ...existing, id: 'added', createdAt: '2026-09-06T10:00:00.123457Z' }], unreadCount: 1
+    } })
+    await store.fetchLatest()
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
+    await store.fetchLatest()
+    expect(start).toHaveBeenCalledOnce()
   })
 
   it('removes a notification only after successful deletion', async () => {

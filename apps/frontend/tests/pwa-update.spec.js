@@ -1,3 +1,4 @@
+import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('workbox-precaching', () => ({
@@ -140,6 +141,24 @@ describe('PWA updates', () => {
     const { reload } = updateEnvironment({ waiting: false })
     await expect(updates.requestPwaUpdate()).resolves.toBe(false)
     expect(reload).not.toHaveBeenCalled()
+  })
+
+  it('shows push without a second sound when a tab has already played the notice', async () => {
+    vi.stubGlobal('indexedDB', new IDBFactory())
+    const { claimNotificationSound } = await import('../src/features/notifications/sound-claim')
+    const id = '3e6e1d85-4c5e-4fb9-8b8b-77542d0e24ad'
+    const showNotification = vi.fn().mockResolvedValue()
+    const worker = { __WB_MANIFEST: [], addEventListener: vi.fn(),
+      registration: { showNotification }, clients: { matchAll: vi.fn().mockResolvedValue([]) } }
+    vi.stubGlobal('self', worker)
+    await import('../src-pwa/custom-service-worker')
+    const [, push] = worker.addEventListener.mock.calls.find(([type]) => type === 'push')
+    const play = vi.fn(() => true)
+    await Promise.all([claimNotificationSound([id], play), claimNotificationSound([id], play)])
+    expect(play).toHaveBeenCalledOnce()
+    const payload = { version: 1, notification: { title: 'Neue Antwort', notificationId: id } }
+    await new Promise((resolve) => push({ data: { json: () => payload }, waitUntil: resolve }))
+    expect(showNotification).toHaveBeenCalledExactlyOnceWith('Neue Antwort', expect.objectContaining({ silent: true }))
   })
 
   it('opens the session from Push without waiting for the read acknowledgement', async () => {

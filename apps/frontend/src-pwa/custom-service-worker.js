@@ -1,6 +1,7 @@
 /* eslint-env serviceworker */
 
 import { parsePushPayload, pushTargetPath } from '../src/features/notifications/push'
+import { claimNotificationSound } from '../src/features/notifications/sound-claim'
 import {
   cleanupOutdatedCaches,
   getCacheKeyForURL,
@@ -45,6 +46,15 @@ async function notifyClients() {
   for (const client of clients) client.postMessage({ type: 'matoloop:push', version: 1 })
 }
 
+async function showPushNotification({ title, options }) {
+  const id = options.data.notificationId
+  if (id && !options.silent) {
+    const claimed = await claimNotificationSound([id]).catch(() => true)
+    if (!claimed) options = { ...options, silent: true }
+  }
+  return self.registration.showNotification(title, options)
+}
+
 self.addEventListener('push', (event) => {
   let payload = null
   try {
@@ -55,7 +65,7 @@ self.addEventListener('push', (event) => {
   if (!payload) return
 
   event.waitUntil(Promise.allSettled([
-    self.registration.showNotification(payload.title, payload.options),
+    showPushNotification(payload),
     notifyClients()
   ]))
 })

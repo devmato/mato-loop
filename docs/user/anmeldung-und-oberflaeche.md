@@ -71,6 +71,8 @@ Reihenfolge, Dateiziele und Ansichten werden je Session gespeichert, Editorentw�
 
 Der globale Bereich **Benachrichtigungen** zeigt eine chronologische Liste. Sein Zähler zählt ausschließlich ungelesene Hinweise. Die schwebende Control-Center-Schaltfläche öffnet bei vorhandenem Zähler direkt diese Liste; sonst die zuletzt verwendete App.
 
+Schalte den **Benachrichtigungston** über das Lautsprechersymbol oben im Benachrichtigungscenter ein, um einen kurzen Ton für neue Hinweise zu hören. Die Einstellung bleibt in diesem Browser bzw. in der installierten Web-App gespeichert. Nach dem Neuladen kann der Browser den Ton bis zur ersten Interaktion blockieren. Ist MatoLoop geschlossen oder pausiert, steuern Browser und Betriebssystem den Ton für Web Push.
+
 Hinweise auf Freigaben und Rückfragen öffnen den zugehörigen Chat. Neue [Memory-Vorschläge](memory-und-dreaming.md#anderungsrichtlinien) prüfst du im Chat **Persönlicher Assistent**; ältere bleiben in ihrer bisherigen Quell-Session erreichbar. Normale Antworten und Laufzeitfehler erzeugen ebenfalls Hinweise, sofern ihre Session nicht sichtbar und fokussiert ist. Antwort- und Sessionanfrage-Hinweise verschwinden nach dem Lesen; andere Hinweise können einen gelesenen Verlauf behalten. Lesen oder Löschen entscheidet niemals die zugrunde liegende Anfrage.
 
 Wenn du eine Session löschst, werden auch alle mit ihr verknüpften Benachrichtigungen gelöscht. Hinweise ohne Sessionbezug bleiben erhalten.

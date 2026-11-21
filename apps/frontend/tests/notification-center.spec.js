@@ -58,6 +58,21 @@ async function mountCenter(dark = false) {
 }
 
 describe('notification center', () => {
+  it('toggles the locally stored notification sound independently of push', async () => {
+    await mountCenter()
+    const button = root.querySelector('button[aria-label="Benachrichtigungston"]')
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    button.click()
+    await nextTick()
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+    expect(useInAppNotificationStore(createPinia()).soundEnabled).toBe(true)
+    button.click()
+    await nextTick()
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    expect(api.post).not.toHaveBeenCalled()
+    window.localStorage.removeItem('matoLoopNotificationSoundEnabled')
+  })
+
   it('deletes a notice directly without confirmation, navigation or marking it read', async () => {
     const router = await mountCenter()
     api.delete.mockResolvedValue({ data: { unreadCount: 0 } })

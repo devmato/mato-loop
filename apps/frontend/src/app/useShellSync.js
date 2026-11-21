@@ -24,6 +24,7 @@ import { isPwaUpdateReload } from 'src/app/pwa-update'
 import { searchShortcutAction } from 'src/features/search/shortcut'
 import { randomUuid } from 'src/utils/random-id'
 import { notifyError } from 'src/utils/notifications'
+import { NOTIFICATION_SOUND_KEY, readNotificationSoundSetting, unlockNotificationSound } from 'src/features/notifications/sound'
 
 const PRESENCE_REFRESH_MS = 5000
 
@@ -144,6 +145,16 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   function handlePushMessage(event) {
     if (event.data?.type !== 'matoloop:push' || event.data.version !== 1) return
     queueChanges([{ resource: 'notifications' }, { resource: 'projects' }, { resource: 'approvals' }, { resource: 'questions' }])
+  }
+
+  function unlockSoundAfterInteraction() {
+    if (notifications.soundEnabled) void unlockNotificationSound()
+  }
+
+  function syncSoundSetting(event) {
+    if (event.key === NOTIFICATION_SOUND_KEY || event.key === null) {
+      notifications.soundEnabled = readNotificationSoundSetting()
+    }
   }
 
   function queueChanges(changes) {
@@ -328,6 +339,9 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     window.addEventListener('pagehide', chat.flushDraftWrite)
     document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
     window.addEventListener('matoloop:service-worker-ready', refreshPushState)
+    window.addEventListener('storage', syncSoundSetting)
+    window.addEventListener('click', unlockSoundAfterInteraction, true)
+    window.addEventListener('keydown', unlockSoundAfterInteraction, true)
     window.navigator.serviceWorker?.addEventListener('message', handlePushMessage)
     presenceTimer = window.setInterval(() => {
       if (document.visibilityState === 'visible') refreshAppPresence()
@@ -363,6 +377,9 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     browser.release()
     document.removeEventListener('visibilitychange', refreshSessionsWhenVisible)
     window.removeEventListener('matoloop:service-worker-ready', refreshPushState)
+    window.removeEventListener('storage', syncSoundSetting)
+    window.removeEventListener('click', unlockSoundAfterInteraction, true)
+    window.removeEventListener('keydown', unlockSoundAfterInteraction, true)
     window.navigator.serviceWorker?.removeEventListener('message', handlePushMessage)
     window.clearInterval(presenceTimer)
   })
