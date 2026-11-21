@@ -331,6 +331,8 @@ Preserve the longest **unchanged, still-authorized** provider prefix, not a perm
 
 The implementation owners are `agent/prompts.py` (system parts/reminders), `agent/projection.py` and `agent/context.py` (turns, checkpoints, fitting), `agent/turn_context.py` (optional context/preparation), and `agent/run_support.py` (ephemeral images).
 
+Plan, Build and Interactive require a source check before answering questions about a specific implementation or work artifact. This guidance lives in the profile reminder for the current turn; stored reminders and tool availability are unchanged.
+
 The selected-computer context identifies an assigned worktree as the default for repository work, separately from the active directory and the scratch directory. It uses the existing session binding on the connected computer and does not grant access or move the shell. Adding this hint intentionally changes older system prefixes only for sessions that receive it; unchanged context retains the same prefix across tool rounds and follow-ups.
 
 The question schema shares one branch for single and multiple choice while retaining a separate free-text branch. Tool names, accepted question shapes, and runtime validation stay the same. The new schema and shorter shell-progress guidance change the affected cache prefix once; their order remains stable in later requests.

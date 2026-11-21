@@ -59,6 +59,14 @@ def test_coding_profiles_share_batching_guidance(profile):
 
 
 @pytest.mark.parametrize("profile", [plan_profile(), build_profile(), interactive_profile()])
+def test_coding_profiles_require_source_checks_for_specific_artifacts(profile):
+    assert (
+        "When an answer depends on a specific implementation or work artifact, check the relevant source before "
+        "answering. If you can’t verify it, say so."
+    ) in agent_profile_runtime_instructions(profile)
+
+
+@pytest.mark.parametrize("profile", [plan_profile(), build_profile(), interactive_profile()])
 def test_coding_memory_restriction_reaches_delegated_agents(profile):
     prompt = agent_profile_runtime_instructions(profile, delegated=True)
     assert all(rule in prompt for rule in (

@@ -437,6 +437,12 @@ CODING_PROFILE_TOOL_AVAILABILITY = dict.fromkeys(
     False,
 )
 
+CODING_SOURCE_INSTRUCTIONS = (
+    "When an answer depends on a specific implementation or work artifact, check the relevant source before "
+    "answering. If you can’t verify it, say so."
+)
+
+
 CODING_RESPONSE_INSTRUCTIONS = (
     "Lead with the answer or outcome. Keep user-facing responses short without reducing the work or verification. "
     "For questions and assessments, default to one short paragraph or a few short bullets. "
@@ -482,6 +488,7 @@ def plan_profile() -> AgentProfile:
         ),
         instructions=(
             "Analyze the user's request and relevant evidence without changing the project. "
+            f"{CODING_SOURCE_INSTRUCTIONS} "
             "When the profile permits temporary files, use the reported temporary directory for analysis checks only. "
             "Do not implement the plan. Match depth to the requested deliverable. For questions and idea "
             "assessments, give a concise assessment and recommendation, not an implementation plan. "
@@ -547,6 +554,7 @@ def build_profile() -> AgentProfile:
         ),
         instructions=(
             "Carry out the exact current task; keep an analysis-only task read-only. "
+            f"{CODING_SOURCE_INSTRUCTIONS} "
             "Understand the relevant context before changing it. Prefer the simplest solution that "
             "fully meets the request: reuse existing code and conventions, then standard-library or "
             "native features, then installed dependencies. Add abstractions, dependencies, configuration, "
