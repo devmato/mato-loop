@@ -271,7 +271,7 @@ export function useSidebarSessions({
     if (selection === null) return false
     permanent = selection.permanent
     const { worktreeImpact, keepWorktree } = selection
-    const removingWorktree = permanent && (worktreeImpact || (impact.worktree?.scheduled && !keepWorktree))
+    const removingWorktree = worktreeImpact || (permanent && impact.worktree?.scheduled && !keepWorktree)
     if (permanent && impact.fileReferenceCount) {
       $q.notify({
         type: 'negative',

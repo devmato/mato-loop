@@ -301,14 +301,14 @@ const deletionDialog = () => document.querySelector('.q-dialog')
 const deletionButtons = () => [...deletionDialog().querySelectorAll('button')]
 const deletionHeading = () => deletionDialog()?.querySelector('[role="heading"]')?.textContent
 const deletionAction = () => deletionButtons()[1].querySelector('[aria-hidden="false"]').textContent
-const worktreeWarning = () => deletionDialog().querySelector('[aria-hidden="false"] > [role="status"] > [aria-hidden="false"]')?.textContent
-const permanentCheckbox = () => deletionDialog().querySelector('[aria-label="Sofort endgültig löschen"]')
+const worktreeWarning = () => deletionDialog().querySelector('[aria-hidden="false"] > [role="status"]')?.textContent
+const permanentCheckbox = () => deletionDialog().querySelector('[aria-label="Sofort löschen"]')
 
 it.each([
   { name: 'keep by default' }, { name: 'remove', select: true }, { name: 'blocked', blocked: true },
   { name: 'cancel from trash', trash: true, fromTrash: true, cancel: true },
   { name: 'keep despite scheduling', trash: true, fromTrash: true, scheduled: true },
-  { name: 'move without scheduling', trash: true }, { name: 'schedule', trash: true, select: true },
+  { name: 'move and keep worktree', trash: true }, { name: 'move and remove worktree', trash: true, select: true },
   { name: 'cancel move', trash: true, cancel: true }, { name: 'delete immediately', trash: true, select: true, toggle: true }
 ])('confirms deletion of an unopened session: $name', async ({ trash = false, fromTrash = false, select, blocked, scheduled, cancel, toggle }) => {
   setActivePinia(createPinia())
@@ -326,7 +326,7 @@ it.each([
     route: { query: {} }, $q: { dialog: $q.dialog, notify: vi.fn() }
   }).removeSession({ id: 'other', title: 'Auftrag' }, { permanent: fromTrash }), trash)
   await vi.waitFor(() => expect(deletionHeading()).toBe('Session löschen?'))
-  expect(deletionAction()).toBe(startsInTrashMode ? 'In den Papierkorb' : 'Endgültig löschen')
+  expect(deletionAction()).toBe(startsInTrashMode ? 'In den Papierkorb' : 'Sofort löschen')
   expect(Boolean(permanentCheckbox())).toBe(startsInTrashMode)
   expect(deletionDialog().textContent).not.toContain('7 Tage')
   const checkbox = deletionDialog().querySelector('[aria-label="Worktree ebenfalls entfernen"]')
@@ -337,15 +337,15 @@ it.each([
   }
   if (select || scheduled) checkbox.click()
   await nextTick()
-  if (select) expect(worktreeWarning()).toContain(startsInTrashMode
-    ? 'Erst beim endgültigen Löschen.' : 'Nicht committete Änderungen und unversionierte Dateien gehen verloren.')
+  const warning = worktreeWarning()
+  if (select) expect(warning).toContain('Der Worktree wird sofort und dauerhaft entfernt.')
   if (toggle) {
     permanentCheckbox().click()
     await nextTick()
-    expect(worktreeWarning()).not.toContain('Erst beim endgültigen Löschen.')
+    expect(worktreeWarning()).toBe(warning)
   }
   expect(deletionHeading()).toBe('Session löschen?')
-  expect(deletionAction()).toBe(startsInTrashMode && !toggle ? 'In den Papierkorb' : 'Endgültig löschen')
+  expect(deletionAction()).toBe(startsInTrashMode && !toggle ? 'In den Papierkorb' : 'Sofort löschen')
   deletionButtons()[cancel ? 0 : 1].click()
   await removal
   const permanent = !startsInTrashMode || Boolean(toggle)
@@ -364,7 +364,7 @@ it('uses the same confirmation for both project deletion actions', async () => {
   permanentCheckbox().click()
   await nextTick()
   expect(deletionHeading()).toBe('Projekt löschen?')
-  expect(deletionAction()).toBe('Endgültig löschen')
+  expect(deletionAction()).toBe('Sofort löschen')
   deletionButtons()[1].click()
   expect(await choice).toBe(true)
   await vi.waitFor(() => expect(deletionDialog()).toBeNull())

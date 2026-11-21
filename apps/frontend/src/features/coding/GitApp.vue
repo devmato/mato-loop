@@ -18,6 +18,11 @@
     <q-separator />
     <q-banner v-if="!online" dense rounded class="app-surface-tonal q-ma-md" role="status">Der Computer ist nicht verbunden oder bietet keinen Git-Zugriff.</q-banner>
     <q-banner v-if="error" dense rounded class="app-surface-tonal q-ma-md" role="alert">{{ apiErrorMessage(error) }}</q-banner>
+    <q-banner v-if="worktreeRecovery" dense rounded class="app-surface-tonal q-ma-md" role="status">
+      {{ worktreeRecovery.commit ? 'Der bisherige Worktree fehlt. Du kannst versuchen, ihn aus dem gespeicherten Git-Stand neu anzulegen.' : 'Der bisherige Git-Stand konnte nicht ermittelt werden.' }}
+      Einen Worktree vom aktuellen Zielbranch kannst du unter „Repository › Arbeitsbereich“ erstellen.
+      <template v-if="worktreeRecovery.commit" #action><q-btn flat dense no-caps label="Worktree neu anlegen" :disable="busy || !online" @click="retryWorktreeRecovery" /></template>
+    </q-banner>
     <q-banner v-if="remoteChanged" dense rounded class="app-surface-tonal q-ma-md" role="status">
       Die Remote-Adresse dieser Session wurde geändert. Übernimm das neue Ziel ausdrücklich, bevor du veröffentlichst.
       <template #action><q-btn flat dense no-caps label="Ziel übernehmen" :disable="busy || !online" @click="openRemote" /></template>
@@ -130,6 +135,7 @@ const context = computed(() => chat.activeContext)
 const project = computed(() => projects.items.find(item => item.id === (chat.current?.projectId || chat.sessionsProjectId)))
 const visible = computed(() => controlCenter.open && controlCenter.activeContentId === 'git')
 const online = computed(() => gitControlCenterAvailable(context.value, agents))
+const worktreeRecovery = computed(() => chat.current?.codingWorkspace?.worktreeRecovery)
 const changesAvailable = computed(() => online.value && Boolean(chat.current?.id)
   && agents.byId(context.value?.preferredExecutionAgentId)?.operations?.includes('git.changes'))
 const overviewContext = computed(() => changesAvailable.value ? gitContext(chat.current) : null)
@@ -180,6 +186,12 @@ const busy = computed(() => saving.value || savingFetch.value || commands.busy)
 const remoteChanged = computed(() => boundContext.value && binding.value.remoteIdentity
   && repository.value?.remoteIdentities?.[remote.value] && binding.value.remoteIdentity !== repository.value.remoteIdentities[remote.value])
 const requiredRule = value => Boolean(String(value || '').trim()) || 'Pflichtfeld'
+async function retryWorktreeRecovery() {
+  try {
+    if (await commands.workspaceAction('select', { create: true, restore: true })) await refresh()
+  } catch { /* Central API toast. */ }
+}
+
 async function refresh() {
   changes.setOverviewContext(overviewContext.value)
   await Promise.all([refreshRepository({ worktreeDetails: changes.view === 'repository' }), refreshCommands(), changes.refresh(changes.overview)])

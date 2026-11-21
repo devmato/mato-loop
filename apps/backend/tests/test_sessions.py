@@ -2650,6 +2650,7 @@ async def test_session_delete_trashes_commits_and_purges_tree(
                 "SELECT agent_runs.current_directory_snapshot"
             ) else active_runs_result
         client = AsyncMock()
+        client.request.return_value = coding.WorktreeRemovedResult(removed=True, headCommit="a" * 40)
         monkeypatch.setattr(coding, "coding_client", AsyncMock(return_value=client))
         if worktree == "permission":
             from mato_loop_backend.execution.client import ExecutionClientError
@@ -2675,8 +2676,8 @@ async def test_session_delete_trashes_commits_and_purges_tree(
         db.scalar.side_effect = lambda statement: session if str(statement).startswith("SELECT chat_sessions.id,") else None
         db.scalars.return_value = []
         await delete_session(session_id, user, db, worktree_impact=token, permanent=False)
-        assert (session.delete_at is not None, client.request.await_count, session_path.exists(), db.delete.await_count) == (True, 0, True, 0)
-        assert session.trash_worktree_removal["impact"] == token
+        assert (session.delete_at is not None, client.request.await_count, session_path.exists(), db.delete.await_count) == (True, 1, True, 0)
+        assert session.coding_workspace["worktreeRecovery"]["commit"] == "a" * 40
         return
 
     await delete_session(session_id, user, db, worktree_impact=token, permanent=True)

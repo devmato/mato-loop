@@ -162,9 +162,9 @@ Sessions reservieren weder Arbeitsbereiche noch gemeinsame Git-Metadaten. Eine a
 
 ## Worktree entfernen
 
-Entferne einen Worktree im Arbeitsbereich-Dialog der Git-App oder aktiviere beim Löschen einer Projekt-Session **Worktree ebenfalls entfernen**. Die Option ist standardmäßig aus. Beim Verschieben in den [Papierkorb](anmeldung-und-oberflaeche.md#papierkorb) merkst du damit nur vor, dass der Worktree beim endgültigen Löschen entfernt werden soll – manuell oder nach Fristablauf. Beim Wiederherstellen verfällt die Vormerkung. Du kannst die Auswahl auch beim manuellen endgültigen Löschen abwählen.
+Entferne einen Worktree im Arbeitsbereich-Dialog der Git-App oder aktiviere beim Löschen einer Projekt-Session **Worktree ebenfalls entfernen**. Die Option ist standardmäßig aus. Wenn du sie aktivierst, wird der Worktree beim Bestätigen sofort entfernt – auch mit **In den Papierkorb**. Scheitert die gewählte Entfernung, bleibt die Session erhalten.
 
-Ist der vorgemerkte Worktree bereits weg, wird die Session trotzdem endgültig gelöscht. Ist der Rechner nicht erreichbar oder scheitert die gewählte Entfernung, bleibt die Session erhalten.
+Beim [Wiederherstellen aus dem Papierkorb](anmeldung-und-oberflaeche.md#papierkorb) bleibt ein nicht entfernter Worktree unverändert. Wurde er entfernt, legt MatoLoop nach Möglichkeit einen neuen Worktree aus dem letzten Commit an. Ist das nicht möglich, etwa bei einem nicht verbundenen Rechner, wird nur die Session wiederhergestellt. Versuche es bei verfügbarem Rechner in der Git-App mit **Worktree neu anlegen** erneut. Ist der Commit nicht mehr verfügbar, kannst du im Arbeitsbereich bewusst einen neuen Worktree vom aktuellen Zielbranch erstellen.
 
 Fehlen Löschrechte in einem Verzeichnis, ist **Worktree ebenfalls entfernen** im Löschdialog deaktiviert; der Grund nennt den betroffenen Pfad. Die Session kannst du ohne Worktree entfernen. Vor der tatsächlichen Entfernung werden die Rechte erneut geprüft. Prüfe Zugriffsrechte und Eigentümer; MatoLoop ändert keine Rechte automatisch. Gleichzeitige Dateiänderungen können trotz Vorprüfung zu einem späteren Fehler führen.
 

@@ -128,15 +128,18 @@ active runs block removal. Before removing a worktree used by sessions, the back
 validates the local project checkout and prepares normal directory grants. Affected
 sessions, including those in its subdirectories, then return to that local checkout.
 The session deletion dialog offers unchecked worktree removal after live repository discovery
-and shows irreversible file loss and other affected sessions when selected. `worktreeImpact`
+and shows the same irreversible file-loss warning for both deletion modes. `worktreeImpact`
 binds consent to the previewed workspace and affected session IDs. Moving a session to the trash
-stores this consent with the selected worktree registration instead of removing the checkout.
-Restoring clears it; a manual purge can opt out with `keepWorktree`. Manual and scheduled
-purges revalidate consent and use the same removal service as the Git app. An explicitly missing
-scheduled checkout does not block the purge; an unreachable agent or changed checkout is not
-treated as missing. Scheduled removal requires an Agent that can check the original Git registration
-under the worktree lock. Removal failure preserves the session. Successful removal cannot be undone
-if the later database commit fails. Deletion without worktree removal requires no reachable Agent.
+with that consent removes the checkout immediately and records the removed HEAD, when available.
+Restoring the session attempts a new managed checkout at that exact commit without fetching or
+switching to the target branch. The session keeps its original integration base. If the checkout
+cannot be created, the session is still restored with the local
+workspace and the Git app offers a retry. The commit itself is not backed up.
+Previously scheduled removals retain their original behavior: restore clears the schedule and a
+manual purge can opt out with `keepWorktree`. An explicitly missing scheduled checkout does not
+block the purge; an unreachable Agent or changed checkout is not treated as missing.
+Removal failure preserves the session. Successful removal cannot be undone if the later database
+commit fails. Deletion without worktree removal requires no reachable Agent.
 The optional discovery preview has a three-second budget.
 
 Workspace and branch dialogs use searchable compact lists: selecting a row only marks it

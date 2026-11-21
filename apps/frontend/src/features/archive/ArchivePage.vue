@@ -100,9 +100,13 @@ async function restoreTrash(kind, item) {
   if (busy.value || expired(item)) return
   restoring.value = item.id
   try {
-    await archive.restoreTrash(kind, item.id)
+    const result = await archive.restoreTrash(kind, item.id)
     await Promise.all([load(), projects.fetchAll(), chat.refreshSessions(null, kind === 'sessions' ? item.projectId || null : item.id), automations.fetchAutomations()])
-    $q.notify({ type: 'positive', message: kind === 'projects' ? 'Projekt wiederhergestellt.' : 'Session wiederhergestellt.' })
+    if (result?.worktreeRestored === false) {
+      $q.notify({ type: 'warning', message: 'Session wiederhergestellt. Der Worktree konnte nicht neu angelegt werden. Öffne die Git-App, um es erneut zu versuchen.' })
+    } else {
+      $q.notify({ type: 'positive', message: kind === 'projects' ? 'Projekt wiederhergestellt.' : 'Session wiederhergestellt.' })
+    }
   } catch { /* Axios displays errors. */ } finally { restoring.value = null }
 }
 

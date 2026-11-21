@@ -774,6 +774,7 @@ async def remove_worktree(config, filesystem, arguments: GitWorktreeRemoveArgume
                 or registration["modifiedAt"] != arguments.expected_registration
             ):
                 raise AgentError("git.worktreeChanged", "The worktree registration changed")
+        head_code, head, _ = await _git(arguments.path, "rev-parse", "--verify", "HEAD^{commit}")
         code, _, _ = await _git(
             arguments.repository,
             "worktree",
@@ -786,7 +787,7 @@ async def remove_worktree(config, filesystem, arguments: GitWorktreeRemoveArgume
         )
         if code:
             raise AgentError("git.worktreeRemoveFailed", "The worktree could not be removed")
-        return {"removed": True}
+        return {"removed": True, "headCommit": _text(head).strip() if not head_code else None}
 
 
 async def _refresh_worktree_target(root: str, target: str, remote: str) -> tuple[str, str | None]:
@@ -911,9 +912,11 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
         "branch": branch,
         "targetBranch": arguments.target_branch,
         "projectId": project,
+        **({"restoreCommit": arguments.restore_commit} if arguments.restore_commit else {}),
     }
     if state is not None and (
         not isinstance(state, dict)
+        or state.get("restoreCommit") != arguments.restore_commit
         or any(state.get(key) != value for key, value in binding.items())
     ):
         raise AgentError("git.worktreeChanged", "Preparation inputs changed")
@@ -944,12 +947,15 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
     elif state.get("ready"):
         raise AgentError("git.worktreeChanged", "The completed worktree is no longer registered")
     if state.get("baseCommit") is None:
-        code, commit, _ = await _git(root, "rev-parse", "--verify", f"{target}^{{commit}}")
+        start = arguments.restore_commit or target
+        code, commit, _ = await _git(root, "rev-parse", "--verify", f"{start}^{{commit}}")
+        if arguments.restore_commit and (code or _text(commit).strip() != arguments.restore_commit):
+            raise AgentError("git.worktreeChanged", "The saved worktree commit is unavailable")
         if code:
             raise AgentError(
                 "git.localBranchRequired", "The local target branch must contain a commit"
             )
-        if arguments.remote is not None:
+        if arguments.remote is not None and not arguments.restore_commit:
             if arguments.remote not in info["remotes"]:
                 state["warningCode"] = "git.remoteRequired"
             else:

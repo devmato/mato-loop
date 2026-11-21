@@ -5,7 +5,7 @@
       <q-card-section class="q-pt-none">
         <p class="text-break q-mb-none">„{{ title }}“</p>
         <div v-if="!permanentLocked" class="q-mt-sm">
-          <q-checkbox v-model="permanent" label="Sofort endgültig löschen" />
+          <q-checkbox v-model="permanent" label="Sofort löschen" />
         </div>
         <template v-if="session && worktree">
           <div class="q-mt-sm">
@@ -13,9 +13,7 @@
           </div>
           <p v-if="worktree.removalError" class="q-mb-none text-caption text-break" role="status">{{ apiErrorMessage({ error: worktree.removalError }) }}</p>
           <div v-if="!worktree.removalError || worktree.scheduled" :class="{ invisible: !removeWorktree }" :aria-hidden="!removeWorktree">
-            <p class="delete-variants q-mb-none text-caption" role="status">
-              <span v-for="mode in [false, true]" :key="mode" :class="{ invisible: mode !== permanent }" :aria-hidden="mode !== permanent">{{ mode ? '' : 'Erst beim endgültigen Löschen. ' }}Nicht committete Änderungen und unversionierte Dateien gehen verloren. Ungesicherte Commits können verloren gehen.</span>
-            </p>
+            <p class="q-mb-none text-caption" role="status">Der Worktree wird sofort und dauerhaft entfernt. Nicht committete Änderungen und unversionierte Dateien (auch ignorierte Dateien) gehen verloren. Ungesicherte Commits können verloren gehen.</p>
             <p v-if="worktree.sessions?.length" class="q-mb-none text-caption text-break">Beim Entfernen wechseln zu Lokal: {{ worktree.sessions.map(item => item.title || 'Ohne Titel').join(', ') }}.</p>
           </div>
         </template>
@@ -26,7 +24,7 @@
         <q-btn unelevated no-caps :color="permanent ? 'negative' : 'primary'" @click="submit">
           <span class="delete-variants">
             <span :class="{ invisible: permanent }" :aria-hidden="permanent">In den Papierkorb</span>
-            <span :class="{ invisible: !permanent }" :aria-hidden="!permanent">Endgültig löschen</span>
+            <span :class="{ invisible: !permanent }" :aria-hidden="!permanent">Sofort löschen</span>
           </span>
         </q-btn>
       </q-card-actions>

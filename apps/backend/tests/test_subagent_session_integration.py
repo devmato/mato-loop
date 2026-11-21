@@ -732,8 +732,8 @@ async def test_trash_automatic_purge_only_due_and_rechecks_after_cancellation(tr
 @pytest.mark.parametrize("path_state,mode", [
     (state, mode) for state in ("present", "missing", "unavailable", "replaced")
     for mode in ("manual", "automatic")
-] + [("unavailable", "keep"), ("missing", "project"), ("replaced", "before_trash")])
-async def test_trash_purge_honors_worktree_selection(trash_tree, client, monkeypatch, path_state, mode):
+] + [("unavailable", "keep"), ("missing", "project")])
+async def test_trash_purge_honors_existing_worktree_selection(trash_tree, client, monkeypatch, path_state, mode):
     from mato_loop_backend.api import trash_retention
     from mato_loop_backend.sessions import coding
 
@@ -767,16 +767,14 @@ async def test_trash_purge_honors_worktree_selection(trash_tree, client, monkeyp
         if path == "/worktree" and path_state in {"missing", "unavailable"}:
             raise ExecutionClientError("file.pathNotFound" if path_state == "missing" else "executionAgent.unavailable")
         return result_type(path=path, kind="directory" if path == "/worktree" else "file", size=None,
-                           modifiedAt=2 if path_state == "replaced" and (item.delete_at or mode == "before_trash") else 1)
+                           modifiedAt=2 if path_state == "replaced" else 1)
 
     monkeypatch.setattr(coding, "coding_client", AsyncMock(return_value=SimpleNamespace(request=request)))
-    response = await client.delete(f"/api/sessions/{session_id}", params={"permanent": False, "worktreeImpact": token})
-    if mode == "before_trash":
-        assert response.json()["error"]["code"] == "git.worktreeChanged"
-        return
+    response = await client.delete(f"/api/sessions/{session_id}", params={"permanent": False})
     assert response.status_code == 204
     await db.refresh(item)
-    assert item.trash_worktree_removal["impact"] == token
+    item.trash_worktree_removal = {"agentId": str(agent.id), "path": "/worktree", "impact": token}
+    await db.commit()
     remove.assert_not_awaited()
 
     blocked = path_state in {"unavailable", "replaced"} and mode != "keep"
@@ -801,6 +799,74 @@ async def test_trash_purge_honors_worktree_selection(trash_tree, client, monkeyp
     assert remove.await_count == int(path_state == "present")
     if path_state == "present":
         assert remove.await_args.args[0]["expectedRegistration"] == 1.0
+
+
+@pytest.mark.parametrize("outcome", ["restored", "offline", "blocked"])
+async def test_trash_removes_worktree_immediately_and_restores_session(trash_tree, client, monkeypatch, outcome):
+    from mato_loop_backend.sessions import coding, service
+
+    db = trash_tree.db
+    item = trash_tree.records[0][0]
+    agent = ExecutionAgent(user_id=item.user_id, alias="Workstation")
+    db.add(agent)
+    await db.flush()
+    project = Project(user_id=item.user_id, name="Worktree project",
+                      default_execution_agent_id=agent.id, default_current_directory="/repo")
+    db.add(project)
+    await db.flush()
+    item.project_id = project.id
+    item.preferred_execution_agent_id = agent.id
+    item.current_directory = "/worktree"
+    item.workspace_mode = "worktree"
+    item.coding_workspace = {"baseCommit": "b" * 40}
+    item.session_profile = {"worktrees_enabled": True}
+    session_id = item.id
+    await db.commit()
+
+    info = coding.RepositoryResult(repository="/worktree", commonDirectory="/repo/.git", remotes=[],
+        defaultRemote=None, defaultBranch="main", branch=None, worktrees=[
+            {"path": "/repo", "main": True, "branch": "main", "locked": False},
+            {"path": "/worktree", "main": False, "branch": None, "locked": False},
+        ])
+    token = coding.worktree_removal_token(item, info, [item], 1.0)
+    monkeypatch.setattr(coding, "session_worktree", AsyncMock(return_value=info))
+    monkeypatch.setattr(coding, "worktree_registration", AsyncMock(return_value=1.0))
+    monkeypatch.setattr(service, "validate_execution_preferences", AsyncMock(side_effect=lambda db, user, agent, path: (path, "auto")))
+    commit = "a" * 40
+
+    async def request(operation, arguments, result_type, **kwargs):
+        if operation == "git.worktree.remove":
+            if outcome == "blocked":
+                raise ExecutionClientError("git.worktreeLocked")
+            return result_type(removed=True, headCommit=commit)
+        if outcome == "offline":
+            raise ExecutionClientError("executionAgent.unavailable")
+        assert operation == "git.worktree" and arguments["restoreCommit"] == commit
+        return result_type(repository="/repo", commonDirectory="/repo/.git", path=arguments["destinations"][0],
+                           gitDirectory="/repo/.git/worktrees/new", branch=None, baseCommit=commit, targetBranch="main")
+
+    execution = AsyncMock(side_effect=request)
+    monkeypatch.setattr(coding, "coding_client", AsyncMock(return_value=SimpleNamespace(request=execution)))
+    monkeypatch.setattr(coding, "inspect_repository", AsyncMock(return_value=info.model_copy(update={
+        "repository": "/repo", "worktree_root": "/managed", "project_worktree_directory": "/managed/project",
+    })))
+    response = await client.delete(f"/api/sessions/{session_id}", params={"permanent": False, "worktreeImpact": token})
+    assert execution.await_args.args[0] == "git.worktree.remove"
+    if outcome == "blocked":
+        assert response.status_code == 409
+        await db.rollback()
+        await db.refresh(item)
+        assert item.delete_at is None and item.current_directory == "/worktree"
+        return
+    assert response.status_code == 204
+    assert item.delete_at is not None and item.current_directory == "/repo"
+    response = await client.post(f"/api/trash/sessions/{session_id}/restore")
+    assert response.status_code == 200
+    assert response.json() == {"worktreeRestored": outcome == "restored"}
+    assert item.delete_at is None
+    assert item.workspace_mode == ("worktree" if outcome == "restored" else "local")
+    if outcome == "restored":
+        assert item.coding_workspace["baseCommit"] == "b" * 40
 
 
 async def test_trash_pauses_automations_and_restore_skips_missed_schedules(trash_tree, client):

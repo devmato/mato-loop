@@ -8,7 +8,7 @@
       </q-item>
       <q-item clickable v-close-popup :disable="disabled" class="text-negative" @click="emit('delete')">
         <q-item-section avatar><q-icon :name="trash ? 'delete_forever' : 'delete_outline'" /></q-item-section>
-        <q-item-section>{{ trash ? 'Endgültig löschen' : 'Löschen' }}</q-item-section>
+        <q-item-section>{{ trash ? 'Sofort löschen' : 'Löschen' }}</q-item-section>
       </q-item>
     </SidebarActionMenu>
   </div>

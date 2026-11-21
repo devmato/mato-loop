@@ -357,7 +357,7 @@ async def test_workspace_switch_grants_the_selected_working_directory(monkeypatc
     db.scalar.return_value = None
     monkeypatch.setattr(routes, "workspace_session", AsyncMock(return_value=(session, Project())))
     monkeypatch.setattr(routes, "select_session_workspace", AsyncMock(return_value="ask"))
-    monkeypatch.setattr(routes, "load_effective_ai", AsyncMock(return_value=AiSettings(providers=[provider], models=[model])))
+    monkeypatch.setattr("mato_loop_backend.settings.load_effective_ai", AsyncMock(return_value=AiSettings(providers=[provider], models=[model])))
     await routes.switch_workspace(session.id, routes.SessionWorkspaceRequest(directory="/external"), UserAccount(id=session.user_id), db)
     grant = db.add.call_args.args[0]
     assert (grant.capability, grant.resource_scope, grant.agent_profile_id, grant.trust_level) == (

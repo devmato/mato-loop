@@ -60,7 +60,7 @@ export const useGitActionStore = defineStore('git-actions', {
       try {
         if (action === 'select') {
           const { data } = await api.put(`/coding/sessions/${session.id}/workspace`, {
-            ...values, ...(values.create ? { worktree_id: randomUuid() } : {})
+            ...values, ...(values.create && !values.restore ? { worktree_id: randomUuid() } : {})
           })
           chat.updateCachedSession(session.id, item => ({ ...item, ...data }))
           if (chat.current?.id === session.id) {

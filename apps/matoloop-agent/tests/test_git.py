@@ -524,6 +524,34 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
         await prepare_worktree(self.config, self.fs, args)
         self.assertEqual((worktree / "file.txt").read_text(), "session work\n")
 
+    async def test_worktree_restore_checks_out_removed_head_not_target_or_uncommitted_files(self):
+        source, args = await self.managed_source()
+        created = await prepare_worktree(self.config, self.fs, args)
+        path = Path(created["path"])
+        self.git("commit", "--allow-empty", "-m", "Session commit", cwd=path)
+        head = self.git("rev-parse", "HEAD", cwd=path).decode().strip()
+        (path / "file.txt").write_text("uncommitted\n")
+        removed = await remove_worktree(
+            self.config,
+            self.fs,
+            GitWorktreeRemoveArguments(
+                path=str(path),
+                repository=str(source),
+                commonDirectory=args.common_directory,
+                force=True,
+            ),
+        )
+        restored = await prepare_worktree(
+            self.config,
+            self.fs,
+            args.model_copy(
+                update={"session_id": str(uuid4()), "restore_commit": removed["headCommit"]}
+            ),
+        )
+        restored_path = Path(restored["path"])
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=restored_path).decode().strip(), head)
+        self.assertEqual((restored_path / "file.txt").read_text(), "old\n")
+
     async def test_worktree_does_not_reserve_a_technical_branch_name(self):
         source, args = await self.managed_source()
         self.git("branch", f"worktree-{args.session_id[:8]}", cwd=source)

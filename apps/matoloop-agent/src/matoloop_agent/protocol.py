@@ -271,6 +271,9 @@ class GitWorktreeArguments(PathArguments):
     session_id: str = Field(alias="sessionId", pattern=UUID_PATTERN)
     target_branch: str = Field(alias="targetBranch", min_length=1, max_length=300)
     remote: str | None = Field(default=None, min_length=1, max_length=300)
+    restore_commit: str | None = Field(
+        default=None, alias="restoreCommit", pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    )
     destinations: list[Annotated[str, Field(min_length=1, max_length=4096)]] = Field(
         min_length=1, max_length=10
     )

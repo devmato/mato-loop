@@ -21,7 +21,8 @@ export const useArchiveStore = defineStore('archive', {
       } finally { this.loading = false }
     },
     async restoreTrash(kind, id) {
-      await api.post(`/trash/${kind}/${id}/restore`)
+      const { data } = await api.post(`/trash/${kind}/${id}/restore`)
+      return data
     },
     async loadTrashSessions(projectId, more = false) {
       const list = this.trashSessionLists[projectId]

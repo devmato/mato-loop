@@ -121,6 +121,7 @@ class WorktreeResult(ExecutionResult):
 
 class WorktreeRemovedResult(ExecutionResult):
     removed: bool
+    head_commit: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
 def resolve_git_target(
@@ -246,7 +247,7 @@ async def inspect_repository(db, user_id, agent_id, directory, target_branch=Non
     return result
 
 
-async def select_session_workspace(db, session, project, directory=None, *, create=False, worktree_id=None):
+async def select_session_workspace(db, session, project, directory=None, *, create=False, worktree_id=None, restore=False):
     from mato_loop_backend.sessions.service import (
         SessionServiceError,
         execution_filesystem_policy,
@@ -254,6 +255,10 @@ async def select_session_workspace(db, session, project, directory=None, *, crea
     )
 
     agent_id = session.preferred_execution_agent_id
+    recovery = (session.coding_workspace or {}).get("worktreeRecovery") if restore else None
+    if restore and (not recovery or not recovery.get("commit") or not create
+                    or recovery["agentId"] != str(agent_id) or session.current_directory != recovery["repository"]):
+        raise SessionServiceError(409, "git.worktreeChanged")
     if project is None or project.user_id != session.user_id or (create and project.default_execution_agent_id != agent_id):
         raise SessionServiceError(409, "git.projectWorkspaceRequired")
     if await db.scalar(select(AgentRun.id).where(
@@ -265,6 +270,8 @@ async def select_session_workspace(db, session, project, directory=None, *, crea
     root = project.default_current_directory if create else next((item.path for item in original.worktrees if item.main), None)
     if not root or (create and original.repository != root):
         raise SessionServiceError(409, "git.repositoryRootRequired")
+    if recovery and (root != recovery["repository"] or original.common_directory != recovery["commonDirectory"]):
+        raise SessionServiceError(409, "git.worktreeChanged")
     directory = directory or root
     if (create or directory != root) and not (session.session_profile or {}).get("worktrees_enabled", False):
         raise SessionServiceError(409, "sessionTemplate.worktreesDisabled")
@@ -274,7 +281,7 @@ async def select_session_workspace(db, session, project, directory=None, *, crea
             raise SessionServiceError(409, "git.configurationRequired")
         if original.project_worktree_directory.rsplit("/", 1)[0] != original.worktree_root:
             raise SessionServiceError(502, "executionAgent.protocolError")
-        identity = str(worktree_id or uuid5(session.id, "worktree"))
+        identity = recovery["id"] if recovery else str(worktree_id or uuid5(session.id, "worktree"))
         # Stable candidates let a repeated creation request recover its chosen destination.
         names = [identity[:8], *(uuid5(UUID(identity), str(attempt)).hex[:8] for attempt in range(1, 10))]
         paths = [f"{original.project_worktree_directory}/{name}" for name in names]
@@ -287,12 +294,17 @@ async def select_session_workspace(db, session, project, directory=None, *, crea
             created = await client.request("git.worktree", {
                 "path": root, "commonDirectory": original.common_directory,
                 "ownerId": str(session.user_id), "projectId": str(project.id), "sessionId": identity,
-                "targetBranch": target, "remote": remote if effective_git_fetch(previous, project) else None, "destinations": paths,
+                "targetBranch": target, "remote": remote if not recovery and effective_git_fetch(previous, project) else None,
+                "destinations": paths,
+                **({"restoreCommit": recovery["commit"]} if recovery else {}),
             }, WorktreeResult, timeout=300)
         except ExecutionClientError as exc:
+            if recovery and exc.code == "tool.invalidArguments" and exc.field == "restoreCommit":
+                raise SessionServiceError(409, "executionAgent.updateRequired") from exc
             raise SessionServiceError(409, exc.code) from exc
         if (created.path not in paths or created.repository != root or created.common_directory != original.common_directory
-                or created.target_branch != target or created.branch not in {None, f"worktree-{created.path.rsplit('/', 1)[-1]}"}):
+                or created.target_branch != target or created.branch not in {None, f"worktree-{created.path.rsplit('/', 1)[-1]}"}
+                or (recovery and created.base_commit != recovery["commit"])):
             raise SessionServiceError(502, "executionAgent.protocolError")
         directory = created.path
         info = original
@@ -312,12 +324,35 @@ async def select_session_workspace(db, session, project, directory=None, *, crea
         "path": directory, "targetBranch": target, "remote": remote, "commonDirectory": info.common_directory,
         "remoteIdentity": previous.get("remoteIdentity") if previous.get("remote") == remote else info.remote_identities.get(remote),
         **({"fetchBeforeActions": previous["fetchBeforeActions"]} if "fetchBeforeActions" in previous else {}),
-        **({"baseCommit": created.base_commit, "warningCode": created.warning_code} if create else {
+        **({"baseCommit": recovery.get("baseCommit") if recovery else created.base_commit,
+            "warningCode": created.warning_code} if create else {
             key: previous[key] for key in ("baseCommit", "warningCode")
             if previous.get("path") == directory and key in previous
         }),
     }
     return directory_policy
+
+
+async def grant_session_workspace(db, session, policy):
+    from mato_loop_backend.sessions.service import (
+        add_directory_grant,
+        model_for_session,
+        provider_for_session,
+    )
+    from mato_loop_backend.settings import (
+        apply_session_ai,
+        effective_model_trust,
+        load_effective_ai,
+    )
+
+    ai = apply_session_ai(await load_effective_ai(db, session.user_id), session)
+    model = model_for_session(ai, ai.default_model_id)
+    provider = provider_for_session(ai, model)
+    await add_directory_grant(
+        db, session.id, session.preferred_execution_agent_id, session.current_directory,
+        policy, session.agent_profile_id,
+        effective_model_trust(provider, model).value if provider and model else None,
+    )
 
 
 async def session_worktree(db, session, *, check_removal=False) -> RepositoryResult | None:
@@ -386,20 +421,7 @@ async def worktree_registration(db, session, info: RepositoryResult) -> float:
     return registration.modified_at
 
 
-async def schedule_worktree_removal(db, session, impact) -> dict[str, str]:
-    from mato_loop_backend.sessions.service import SessionServiceError
-
-    info = await session_worktree(db, session)
-    if info is None:
-        raise SessionServiceError(409, "git.worktreeChanged")
-    affected = await sessions_in_worktree(db, session.user_id, session.preferred_execution_agent_id, info.repository)
-    registered_at = await worktree_registration(db, session, info)
-    if worktree_removal_token(session, info, affected, registered_at) != impact:
-        raise SessionServiceError(409, "git.worktreeChanged")
-    return {"agentId": str(session.preferred_execution_agent_id), "path": info.repository, "impact": impact}
-
-
-async def remove_session_worktree(db, session, *, impact=None, scheduled=None) -> None:
+async def remove_session_worktree(db, session, *, impact=None, scheduled=None, recoverable=False) -> None:
     from mato_loop_backend.sessions.service import SessionServiceError
 
     async def remove():
@@ -411,7 +433,7 @@ async def remove_session_worktree(db, session, *, impact=None, scheduled=None) -
             raise SessionServiceError(409, "git.worktreeChanged")
         await remove_worktree(db, session, info, info.repository, force=True,
                               expected_impact=scheduled["impact"] if scheduled is not None else impact,
-                              scheduled=scheduled is not None)
+                              check_registration=scheduled is not None or recoverable, recoverable=recoverable)
 
     if scheduled is None:
         await remove()
@@ -427,7 +449,8 @@ async def remove_session_worktree(db, session, *, impact=None, scheduled=None) -
             raise
 
 
-async def remove_worktree(db, session, info: RepositoryResult, directory, *, force=False, expected_impact=None, scheduled=False):
+async def remove_worktree(db, session, info: RepositoryResult, directory, *, force=False, expected_impact=None,
+                          check_registration=False, recoverable=False):
     from mato_loop_backend.sessions.service import (
         ACTIVE_RUN_STATUSES,
         SessionServiceError,
@@ -480,14 +503,15 @@ async def remove_worktree(db, session, info: RepositoryResult, directory, *, for
             )
     client = await coding_client(db, session.user_id, session.preferred_execution_agent_id)
     try:
-        await client.request("git.worktree.remove", {
+        removed = await client.request("git.worktree.remove", {
             "path": directory, "repository": root, "commonDirectory": info.common_directory, "force": force,
-            **({"expectedRegistration": registered_at} if scheduled else {}),
+            **({"expectedRegistration": registered_at} if check_registration else {}),
         }, WorktreeRemovedResult, timeout=180)
     except ExecutionClientError as exc:
-        if scheduled and exc.code == "tool.invalidArguments" and exc.field == "expectedRegistration":
+        if check_registration and exc.code == "tool.invalidArguments" and exc.field == "expectedRegistration":
             raise SessionServiceError(409, "executionAgent.updateRequired") from exc
         raise SessionServiceError(409, exc.code, params=exc.params) from exc
+    previous_base = (session.coding_workspace or {}).get("baseCommit") if recoverable else None
     for item in affected:
         item.coding_workspace = {**{key: value for key, value in (item.coding_workspace or {}).items()
                                    if key not in {"baseCommit", "warningCode"}}, "mode": "local",
@@ -495,3 +519,9 @@ async def remove_worktree(db, session, info: RepositoryResult, directory, *, for
             "repository": root, "path": root, "commonDirectory": info.common_directory}
         item.current_directory = root
         item.workspace_mode = "local"
+    if recoverable:
+        session.coding_workspace = {**(session.coding_workspace or {}), "worktreeRecovery": {
+            "id": str(uuid5(session.id, f"trash-worktree:{directory}:{registered_at}")),
+            "agentId": str(session.preferred_execution_agent_id), "repository": root,
+            "commonDirectory": info.common_directory, "commit": removed.head_commit, "baseCommit": previous_base,
+        }}

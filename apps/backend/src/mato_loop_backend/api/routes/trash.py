@@ -2,6 +2,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,7 +61,8 @@ async def project_sessions(project_id: UUID,
             "nextCursor": str(items[19].id) if len(items) > 20 else None}
 
 
-@router.post("/{kind}/{item_id}/restore", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/{kind}/{item_id}/restore", status_code=status.HTTP_204_NO_CONTENT,
+             responses={200: {"description": "Restored session with worktree recovery status"}})
 async def restore(kind: Literal["sessions", "projects"], item_id: UUID,
                   user: Annotated[UserAccount, Depends(require_user)],
                   db: Annotated[AsyncSession, Depends(get_db_session)]):
@@ -69,6 +71,9 @@ async def restore(kind: Literal["sessions", "projects"], item_id: UUID,
     if item is None or isinstance(item, ChatSession) and item.parent_session_id is not None:
         raise ApiError(404, "trash.notFound")
     try:
-        await restore_from_trash(db, item)
+        worktree_restored = await restore_from_trash(db, item)
     except SessionServiceError as exc:
         raise ApiError(exc.status_code, exc.code) from exc
+    if worktree_restored is not None:
+        return JSONResponse({"worktreeRestored": worktree_restored})
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

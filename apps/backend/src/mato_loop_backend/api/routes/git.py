@@ -14,6 +14,7 @@ from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions.coding import (
     RepositoryResult,
     coding_client,
+    grant_session_workspace,
     inspect_repository,
     persist_worktree_warning,
     remove_worktree,
@@ -24,12 +25,8 @@ from mato_loop_backend.sessions.coding import (
 )
 from mato_loop_backend.sessions.service import (
     SessionServiceError,
-    add_directory_grant,
     get_owned_session,
-    model_for_session,
-    provider_for_session,
 )
-from mato_loop_backend.settings import apply_session_ai, effective_model_trust, load_effective_ai
 
 router = APIRouter(prefix="/coding", dependencies=[Depends(require_user)])
 
@@ -178,6 +175,7 @@ class SessionWorkspaceRequest(BaseModel):
     directory: str | None = Field(default=None, max_length=4096)
     create: bool = False
     worktree_id: UUID | None = None
+    restore: bool = False
 
 
 @router.put("/sessions/{session_id}/workspace")
@@ -185,16 +183,10 @@ async def switch_workspace(session_id: UUID, payload: SessionWorkspaceRequest,
     user: Annotated[UserAccount, Depends(require_user)], db: Annotated[AsyncSession, Depends(get_db_session)]):
     try:
         session, project = await workspace_session(db, user, session_id)
-        policy = await select_session_workspace(db, session, project, payload.directory, create=payload.create, worktree_id=payload.worktree_id)
+        policy = await select_session_workspace(db, session, project, payload.directory, create=payload.create,
+                                                worktree_id=payload.worktree_id, restore=payload.restore)
         await persist_worktree_warning(db, session)
-        ai = apply_session_ai(await load_effective_ai(db, user.id), session)
-        model = model_for_session(ai, ai.default_model_id)
-        provider = provider_for_session(ai, model)
-        await add_directory_grant(
-            db, session.id, session.preferred_execution_agent_id, session.current_directory,
-            policy, session.agent_profile_id,
-            effective_model_trust(provider, model).value if provider and model else None,
-        )
+        await grant_session_workspace(db, session, policy)
         await db.commit()
         return {"currentDirectory": session.current_directory, "workspaceMode": session.workspace_mode,
                 "codingWorkspace": session.coding_workspace}
