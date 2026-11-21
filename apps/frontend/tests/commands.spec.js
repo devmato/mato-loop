@@ -299,6 +299,9 @@ function openDeletionDialog(action, trashEnabled) {
 
 const deletionDialog = () => document.querySelector('.q-dialog')
 const deletionButtons = () => [...deletionDialog().querySelectorAll('button')]
+const deletionHeading = () => deletionDialog()?.querySelector('[role="heading"]')?.textContent
+const deletionAction = () => deletionButtons()[1].querySelector('[aria-hidden="false"]').textContent
+const worktreeWarning = () => deletionDialog().querySelector('[aria-hidden="false"] > [role="status"] > [aria-hidden="false"]')?.textContent
 const permanentCheckbox = () => deletionDialog().querySelector('[aria-label="Sofort endgültig löschen"]')
 
 it.each([
@@ -322,8 +325,8 @@ it.each([
     controlCenter: useControlCenterStore(), workspace: {}, automations: { fetchAutomations: vi.fn().mockResolvedValue() },
     route: { query: {} }, $q: { dialog: $q.dialog, notify: vi.fn() }
   }).removeSession({ id: 'other', title: 'Auftrag' }, { permanent: fromTrash }), trash)
-  await vi.waitFor(() => expect(deletionDialog()?.textContent ?? '').toContain(startsInTrashMode
-    ? 'Session in den Papierkorb verschieben' : 'Session endgültig löschen'))
+  await vi.waitFor(() => expect(deletionHeading()).toBe('Session löschen?'))
+  expect(deletionAction()).toBe(startsInTrashMode ? 'In den Papierkorb' : 'Endgültig löschen')
   expect(Boolean(permanentCheckbox())).toBe(startsInTrashMode)
   expect(deletionDialog().textContent).not.toContain('7 Tage')
   const checkbox = deletionDialog().querySelector('[aria-label="Worktree ebenfalls entfernen"]')
@@ -334,15 +337,15 @@ it.each([
   }
   if (select || scheduled) checkbox.click()
   await nextTick()
-  if (select) expect(deletionDialog().textContent).toContain(startsInTrashMode
+  if (select) expect(worktreeWarning()).toContain(startsInTrashMode
     ? 'Erst beim endgültigen Löschen.' : 'Nicht committete Änderungen und unversionierte Dateien gehen verloren.')
   if (toggle) {
     permanentCheckbox().click()
     await nextTick()
-    expect(deletionDialog().textContent).toContain('Session endgültig löschen')
-    expect(deletionDialog().textContent).not.toContain('Erst beim endgültigen Löschen.')
+    expect(worktreeWarning()).not.toContain('Erst beim endgültigen Löschen.')
   }
-  expect(deletionButtons().map(button => button.textContent)).toEqual(['Abbrechen', 'Bestätigen'])
+  expect(deletionHeading()).toBe('Session löschen?')
+  expect(deletionAction()).toBe(startsInTrashMode && !toggle ? 'In den Papierkorb' : 'Endgültig löschen')
   deletionButtons()[cancel ? 0 : 1].click()
   await removal
   const permanent = !startsInTrashMode || Boolean(toggle)
@@ -356,11 +359,12 @@ it.each([
 it('uses the same confirmation for both project deletion actions', async () => {
   setActivePinia(createPinia())
   const choice = openDeletionDialog($q => chooseDeletion($q, 'Projekt', 'Beispiel'), true)
-  await vi.waitFor(() => expect(deletionDialog()?.textContent ?? '').toContain('Projekt in den Papierkorb verschieben'))
+  await vi.waitFor(() => expect(deletionHeading()).toBe('Projekt löschen?'))
+  expect(deletionAction()).toBe('In den Papierkorb')
   permanentCheckbox().click()
   await nextTick()
-  expect(deletionDialog().textContent).toContain('Projekt endgültig löschen')
-  expect(deletionButtons().map(button => button.textContent)).toEqual(['Abbrechen', 'Bestätigen'])
+  expect(deletionHeading()).toBe('Projekt löschen?')
+  expect(deletionAction()).toBe('Endgültig löschen')
   deletionButtons()[1].click()
   expect(await choice).toBe(true)
   await vi.waitFor(() => expect(deletionDialog()).toBeNull())

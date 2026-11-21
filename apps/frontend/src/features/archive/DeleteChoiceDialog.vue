@@ -1,23 +1,34 @@
 <template>
   <q-dialog ref="dialogRef" :transition-duration="0" @hide="onDialogHide">
     <q-card style="width: 480px; max-width: 100vw">
-      <q-card-section class="text-h6">{{ label }} {{ permanent ? 'endgültig löschen' : 'in den Papierkorb verschieben' }}</q-card-section>
+      <q-card-section class="text-h6" role="heading" aria-level="2">{{ label }} löschen?</q-card-section>
       <q-card-section class="q-pt-none">
         <p class="text-break q-mb-none">„{{ title }}“</p>
+        <div v-if="!permanentLocked" class="q-mt-sm">
+          <q-checkbox v-model="permanent" label="Sofort endgültig löschen" />
+        </div>
         <template v-if="session && worktree">
-          <q-checkbox v-model="removeWorktree" :disable="Boolean(worktree.removalError && !worktree.scheduled)" label="Worktree ebenfalls entfernen" class="q-mt-sm" />
+          <div class="q-mt-sm">
+            <q-checkbox v-model="removeWorktree" :disable="Boolean(worktree.removalError && !worktree.scheduled)" label="Worktree ebenfalls entfernen" />
+          </div>
           <p v-if="worktree.removalError" class="q-mb-none text-caption text-break" role="status">{{ apiErrorMessage({ error: worktree.removalError }) }}</p>
-          <template v-if="removeWorktree">
-            <p class="q-mb-none text-caption" role="status">{{ permanent ? '' : 'Erst beim endgültigen Löschen. ' }}Nicht committete Änderungen und unversionierte Dateien gehen verloren. Ungesicherte Commits können verloren gehen.</p>
+          <div v-if="!worktree.removalError || worktree.scheduled" :class="{ invisible: !removeWorktree }" :aria-hidden="!removeWorktree">
+            <p class="delete-variants q-mb-none text-caption" role="status">
+              <span v-for="mode in [false, true]" :key="mode" :class="{ invisible: mode !== permanent }" :aria-hidden="mode !== permanent">{{ mode ? '' : 'Erst beim endgültigen Löschen. ' }}Nicht committete Änderungen und unversionierte Dateien gehen verloren. Ungesicherte Commits können verloren gehen.</span>
+            </p>
             <p v-if="worktree.sessions?.length" class="q-mb-none text-caption text-break">Beim Entfernen wechseln zu Lokal: {{ worktree.sessions.map(item => item.title || 'Ohne Titel').join(', ') }}.</p>
-          </template>
+          </div>
         </template>
         <p v-else-if="session && hasWorktree" class="q-mt-sm q-mb-none text-caption" role="status">Der Worktree kann nicht geprüft werden und bleibt erhalten.</p>
-        <q-checkbox v-if="!permanentLocked" v-model="permanent" label="Sofort endgültig löschen" class="q-mt-sm" />
       </q-card-section>
-      <q-card-actions align="right">
+      <q-card-actions align="right" class="delete-actions">
         <q-btn flat no-caps label="Abbrechen" @click="onDialogCancel" />
-        <q-btn unelevated no-caps color="negative" label="Bestätigen" @click="submit" />
+        <q-btn unelevated no-caps :color="permanent ? 'negative' : 'primary'" @click="submit">
+          <span class="delete-variants">
+            <span :class="{ invisible: permanent }" :aria-hidden="permanent">In den Papierkorb</span>
+            <span :class="{ invisible: !permanent }" :aria-hidden="!permanent">Endgültig löschen</span>
+          </span>
+        </q-btn>
       </q-card-actions>
     </q-card>
   </q-dialog>
@@ -46,3 +57,25 @@ function submit() {
   } : permanent.value)
 }
 </script>
+
+<style scoped>
+.delete-variants {
+  display: grid;
+}
+
+.delete-variants > * {
+  grid-area: 1 / 1;
+}
+
+@media (max-width: 400px) {
+  .delete-actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+
+  .delete-actions > .q-btn + .q-btn {
+    margin-left: 0;
+  }
+}
+</style>
