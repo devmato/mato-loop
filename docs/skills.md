@@ -60,7 +60,7 @@ bundled instructions changes the active skill prefix for subsequent runs. Runnin
 catalogs and historical requests remain fixed.
 
 Shipped defaults define their initial enabled state individually: `writing-style`
-starts enabled, while `weather` and `assistant` start disabled. They support reset and cannot be
+starts enabled, while `weather`, `assistant` and `github-repo-ops` start disabled. They support reset and cannot be
 deleted. Personal skills may be disabled instance-wide, with the existing administrator exception.
 Back up the database and `/data` together; the database alone does not contain skills.
 

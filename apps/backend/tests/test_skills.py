@@ -29,6 +29,7 @@ from mato_loop_backend.settings import (
     SkillDefinition,
     SkillsSettings,
 )
+from mato_loop_backend.settings.models import GITHUB_REPO_OPS_SKILL_ID
 from mato_loop_backend.skill_migration import initialize_skill_library, update_bundled_package
 from mato_loop_backend.skill_packages import (
     SkillError,
@@ -273,6 +274,20 @@ async def test_default_personal_override_is_separate(monkeypatch):
     skill = await SkillService.set_enabled(AsyncMock(spec=AsyncSession), user_id, WEATHER_SKILL_ID, True)
     assert skill.owner_id == user_id and skill.enabled
     assert not instance.skills[0].enabled
+
+
+async def test_github_skill_is_shipped_disabled_for_existing_installations(monkeypatch):
+    existing = InstanceSkillsSettings.model_validate({"skills": [
+        store_skill(DEFAULT_SKILLS[WEATHER_SKILL_ID]).model_dump(mode="json"),
+    ]})
+
+    async def load(_db, model, **kwargs):
+        return existing if model is InstanceSkillsSettings else SkillsSettings()
+
+    monkeypatch.setattr(SettingsStore, "load", load)
+    skill = await SkillService.get(AsyncMock(spec=AsyncSession), uuid4(), GITHUB_REPO_OPS_SKILL_ID, "personal")
+
+    assert (skill.name, skill.owner_id, skill.enabled) == ("github-repo-ops", None, False)
 
 
 async def test_writing_style_is_added_to_existing_catalog_and_personal_examples_stay_private(monkeypatch):

@@ -20,6 +20,12 @@ Eine Freigabe **Für Session erlauben** kann weitere passende Skill-Aktionen in 
 
 Für Skripte und lokale Ressourcen stellt MatoLoop eine Arbeitskopie auf dem ausgewählten Computer bereit. Die normalen Datei- und Shell-Rechte gelten weiterhin; benötigte Programme müssen dort verfügbar sein. Nach einem Computerwechsel wird die Arbeitskopie auf dem neuen Computer bereitgestellt. Änderungen an Arbeitskopien verändern nicht automatisch die zentrale Bibliothek.
 
+## GitHub-Issues, Pull Requests und CI verwalten
+
+Aktiviere den mitgelieferten Skill **github-repo-ops** unter **Skills**. Lege unter [Variablen & Secrets](variablen-und-secrets.md) ein persönliches Secret namens `GITHUB_TOKEN` mit einem fein abgestuften GitHub-PAT an. Begrenze den Token auf die benötigten Repositories und Rechte: Für CI-Logs genügt **Actions: Read**; zum Neustart fehlgeschlagener Jobs brauchst du **Actions: Write**. [Permissions required for fine-grained personal access tokens](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
+
+Wähle einen verbundenen Computer mit `curl` und gib dem Agenten zum Beispiel den GitHub-Link zu einem PR: „Lies das Log vom fehlgeschlagenen CI-Job.“ Der Skill nutzt die vorhandenen Secret- und Shell-Freigaben. Merges und CI-Neustarts erfolgen nur auf ausdrücklichen Auftrag. Git-Pushes und Merges von gestapelten PRs übernimmt der Skill nicht.
+
 ## Deinen Schreibstil hinterlegen
 
 Der mitgelieferte Skill **writing-style** ist standardmäßig verfügbar. Er hilft beim Entwerfen und Überarbeiten von Mails und anderen Texten in deinem Namen; gewöhnliche Chat-Antworten bleiben davon unberührt.
