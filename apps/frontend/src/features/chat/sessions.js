@@ -6,7 +6,7 @@ import { useQuestionStore } from 'src/stores/questions'
 import { useInAppNotificationStore } from 'src/stores/in-app-notifications'
 import { useProjectStore } from 'src/stores/projects'
 import { downloadMessageAttachmentFiles, releaseAttachmentDrafts } from 'src/features/chat/attachments'
-import { compareSessions, defaultSessionOptions, lastAssistantMessage, sanitizedSessionOptions, sessionBeforeUserMessage, sessionCreatePayload, sessionScopeKey, sessionScopeParams, sortSessions } from 'src/features/chat/state'
+import { compareSessions, defaultSessionOptions, lastAssistantMessage, mergeSessionSummary, sanitizedSessionOptions, sessionBeforeUserMessage, sessionCreatePayload, sessionScopeKey, sessionScopeParams, sortSessions } from 'src/features/chat/state'
 import { deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
 import { notifyError } from 'src/utils/notifications'
 import { errorDescriptor } from 'src/utils/api-errors'
@@ -15,6 +15,31 @@ import { useSessionTabsStore } from './session-tabs-store'
 import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
 
 const summarySyncs = new WeakMap()
+
+function reconcileSummaryRows(rows, requested, replacements, insertMissing = false) {
+  let next = null
+  let reorder = false
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index]
+    let updated = row
+    if (requested.has(row.id)) {
+      const summary = replacements.get(row.id)
+      if (insertMissing) replacements.delete(row.id)
+      updated = summary ? mergeSessionSummary(row, summary) : null
+      if (updated !== row) {
+        next ||= rows.slice(0, index)
+        reorder ||= updated !== null && compareSessions(row, updated) !== 0
+      }
+    }
+    if (next && updated) next.push(updated)
+  }
+  if (insertMissing && replacements.size) {
+    next ||= rows.slice()
+    next.push(...replacements.values())
+    reorder = true
+  }
+  return reorder ? sortSessions(next) : next || rows
+}
 
 export const sessionsActions = {
     syncSessionSummaries(ids, config = {}) {
@@ -44,47 +69,32 @@ export const sessionsActions = {
           const updates = new Map(summaries.map((summary) => [summary.id, summary]))
           const changedIds = new Set(requested)
           for (const [scope, list] of Object.entries(this.sessionLists)) {
-            const affected = list.items.filter((item) => changedIds.has(item.id))
             const incoming = summaries.filter((item) => sessionScopeKey(item.projectId) === scope && !item.archived)
-            if (!affected.length && !incoming.length) continue
-            if (!this.visibleSessionScopes.includes(scope)) { list.stale = true; continue }
+            if (!this.visibleSessionScopes.includes(scope)) {
+              if (incoming.length || list.items.some(item => changedIds.has(item.id))) list.stale = true
+              continue
+            }
             if (!list.loaded) continue
             // Preserve the original keyset boundary when its row moves or disappears.
             const boundary = list.boundary || list.items.at(-1)
             const withinPage = (item) => !list.nextCursor || !boundary || compareSessions(item, boundary) <= 0
             const additions = incoming.filter((item) => withinPage(item) && item.id !== this.personalChatSessionId)
             const replacements = new Map(additions.map((item) => [item.id, item]))
-            let reorder = false
-            const items = list.items.flatMap((item) => {
-              if (!changedIds.has(item.id)) return [item]
-              const replacement = replacements.get(item.id)
-              replacements.delete(item.id)
-              if (!replacement) return []
-              reorder ||= compareSessions(item, replacement) !== 0
-              return [Object.keys(replacement).every((key) => replacement[key] === item[key]) ? item : { ...item, ...replacement }]
-            })
-            reorder ||= replacements.size > 0
-            items.push(...replacements.values())
+            const items = reconcileSummaryRows(list.items, changedIds, replacements, true)
+            if (items === list.items) continue
             list.version += 1
             list.boundary ||= boundary ? { ...boundary } : null
-            list.items = reorder ? sortSessions(items) : items
+            list.items = items
           }
-          const catalogUpdates = new Map(summaries.map((item) => [item.id, item]))
-          this.sessionCatalog = this.sessionCatalog.filter((item) => !changedIds.has(item.id) || updates.has(item.id))
-            .map((item) => catalogUpdates.has(item.id) ? { ...item, ...catalogUpdates.get(item.id) } : item)
-          if (this.sessionCatalog.some((item) => changedIds.has(item.id))) {
-            this.sessionCatalogVersion += 1
-            this.sessionCatalog = sortSessions(this.sessionCatalog)
-          }
+          const catalog = reconcileSummaryRows(this.sessionCatalog, changedIds, updates)
+          // An equal response for a cached row must still invalidate an older catalog fetch.
+          if (catalog !== this.sessionCatalog || catalog.some(item => changedIds.has(item.id))) this.sessionCatalogVersion += 1
+          if (catalog !== this.sessionCatalog) this.sessionCatalog = catalog
           const tabs = useSessionTabsStore()
-          const tabIds = new Set(tabs.items.map((tab) => tab.sessionId))
-          const next = { ...tabs.summaries }
-          for (const id of requested) {
-            if (!tabIds.has(id)) continue
-            if (updates.has(id)) next[id] = updates.get(id)
-            else delete next[id]
+          const tabIds = tabs.items.map(tab => tab.sessionId).filter(id => changedIds.has(id))
+          if (tabIds.length) {
+            tabs.applySummaryUpdates(tabIds, Object.fromEntries(tabIds.map(id => [id, updates.get(id)])))
           }
-          tabs.applySummaryUpdates(requested, next)
         }
       }).finally(() => { if (summarySyncs.get(this) === sync) summarySyncs.delete(this) })
       summarySyncs.set(this, sync)

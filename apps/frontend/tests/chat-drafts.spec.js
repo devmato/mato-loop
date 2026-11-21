@@ -2563,6 +2563,38 @@ describe('chat drafts', () => {
       expect(chat.sessions.find((session) => session.id === summary.id).title).toBe('Aktuell')
     })
 
+    it('retains cached list and catalog references for identical session summaries', async () => {
+      const chat = useChatStore()
+      const summary = { id: 'session-1', title: 'Unchanged', workspaceContext: { operations: ['read'] } }
+      setSessions(chat, [summary])
+      chat.sessionCatalog = [summary]
+      const list = chat.activeSessionList
+      const [items, catalog, version] = [list.items, chat.sessionCatalog, list.version]
+      api.get.mockResolvedValueOnce(sessionPage([structuredClone(summary)]))
+
+      await chat.syncSessionSummaries([summary.id])
+
+      expect([list.items === items, chat.sessionCatalog === catalog, list.version]).toEqual([true, true, version])
+    })
+
+    it('keeps a confirmed catalog row when an older catalog fetch finishes later', async () => {
+      const chat = useChatStore()
+      const summary = { id: 'session-1', memoryMode: 'disabled' }
+      chat.sessionCatalog = [summary]
+      let finishPage
+      api.get.mockResolvedValueOnce(sessionPage([{ ...summary, memoryMode: 'full' }], 'next'))
+        .mockImplementationOnce(() => new Promise(resolve => { finishPage = resolve }))
+        .mockResolvedValueOnce(sessionPage([{ ...summary }]))
+
+      const fetching = chat.fetchSessionCatalog()
+      await vi.waitFor(() => expect(finishPage).toBeTypeOf('function'))
+      await chat.syncSessionSummaries([summary.id])
+      finishPage(sessionPage([{ id: 'session-2' }]))
+      await fetching
+
+      expect(chat.sessionCatalog.find(item => item.id === summary.id).memoryMode).toBe('disabled')
+    })
+
     it('moves summaries between visible scopes and removes archived or missing rows without duplicates', async () => {
       const chat = useChatStore()
       chat.visibleSessionScopes = ['standalone', 'project-1']

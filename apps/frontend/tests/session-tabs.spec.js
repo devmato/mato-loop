@@ -184,10 +184,13 @@ it('preserves targeted updates while an in-flight refresh loads other tab summar
   api.get.mockReturnValueOnce(new Promise(done => { resolve = done }))
   const refreshing = tabs.refreshSummaries()
   const newA = { ...a, title: 'Updated Alpha' }
-  tabs.applySummaryUpdates(['a'], { a: newA })
+  tabs.summaries = { a: newA }
+  const previous = tabs.summaries
+  tabs.applySummaryUpdates(['a'], { a: { ...newA } })
+  const retainedSummary = tabs.summaries === previous
   resolve({ data: { items: [a, b] } })
   await refreshing
-  expect(tabs.summaries).toEqual({ a: newA, b })
+  expect({ retainedSummary, summaries: tabs.summaries }).toEqual({ retainedSummary: true, summaries: { a: newA, b } })
 })
 
 it('removes project draft tabs before saving the remaining tabs', async () => {

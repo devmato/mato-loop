@@ -4,7 +4,7 @@ import { api } from 'src/boot/axios'
 import { useApprovalStore } from 'src/stores/approvals'
 import { useQuestionStore } from 'src/stores/questions'
 import { releaseAttachmentDrafts } from 'src/features/chat/attachments'
-import { compareSessions, defaultSessionOptions, emptyActivity, emptyDrafts, emptySessionList, newSessionQueueKey, normalizedNewSessionDraft, queueKeyForEntry, sessionScopeKey, sortSessions } from 'src/features/chat/state'
+import { compareSessions, defaultSessionOptions, emptyActivity, emptyDrafts, emptySessionList, mergeSessionSummary, newSessionQueueKey, normalizedNewSessionDraft, queueKeyForEntry, sessionScopeKey, sortSessions } from 'src/features/chat/state'
 import { compareChatOutboxEntries, deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
 import { notifyError } from 'src/utils/notifications'
 import { draftActions } from 'src/features/chat/draft'
@@ -182,22 +182,24 @@ export const useChatStore = defineStore('chat', {
     updateCachedSession(id, update) {
       this.updateCachedSessions([{ id }], (item) => update(item))
     },
-    updateCachedSessions(summaries, update = (item, summary) => ({ ...item, ...summary })) {
+    updateCachedSessions(summaries, update = mergeSessionSummary) {
       const updates = new Map(summaries.map((summary) => [summary.id, summary]))
       const apply = (items) => {
+        let matched = false
         let changed = false
         let reorder = false
         for (let index = 0; index < items.length; index += 1) {
           const previous = items[index]
           const summary = updates.get(previous.id)
           if (!summary) continue
+          matched = true
           const next = update(previous, summary)
           if (Object.keys(next).every((key) => next[key] === previous[key])) continue
           reorder ||= compareSessions(previous, next) !== 0
           items[index] = next
           changed = true
         }
-        return { changed, items: reorder ? sortSessions(items) : items }
+        return { matched, changed, items: reorder ? sortSessions(items) : items }
       }
       for (const list of Object.values(this.sessionLists)) {
         const result = apply(list.items)
@@ -207,10 +209,9 @@ export const useChatStore = defineStore('chat', {
         }
       }
       const result = apply(this.sessionCatalog)
-      if (result.changed) {
-        this.sessionCatalogVersion += 1
-        this.sessionCatalog = result.items
-      }
+      // Server summaries also arrive directly from a tab refresh.
+      if (result.changed || (result.matched && update === mergeSessionSummary)) this.sessionCatalogVersion += 1
+      if (result.changed) this.sessionCatalog = result.items
     },
     replaceAgentProfile(profileId, replacementId) {
       for (const session of this.cachedSessions) {

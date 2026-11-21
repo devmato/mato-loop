@@ -4,6 +4,7 @@ import { api } from 'src/boot/axios'
 import { reorderedTabs } from 'src/shared/ui/useTabReorder'
 import { queueRefresh } from 'src/utils/queued-refresh'
 import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
+import { equalSessionSummaryValue } from './state'
 
 export const sessionTabKey = (sessionId, projectId = null) => sessionId || `draft:${projectId || 'standalone'}`
 export const sessionTabTarget = (tab) => ({
@@ -53,13 +54,16 @@ export const useSessionTabsStore = defineStore('session-tabs', {
       this.controlCenterOpen = data.controlCenterOpen === true
     },
     applySummaryUpdates(ids, summaries) {
-      const next = { ...this.summaries }
+      let next = this.summaries
       for (const id of ids) {
+        // An equal targeted response must still supersede an older in-flight refresh.
         this.summaryVersions[id] = (this.summaryVersions[id] || 0) + 1
+        if (equalSessionSummaryValue(next[id], summaries[id])) continue
+        if (next === this.summaries) next = { ...next }
         if (summaries[id]) next[id] = summaries[id]
         else delete next[id]
       }
-      this.summaries = next
+      if (next !== this.summaries) this.summaries = next
     },
     refreshSummaries() {
       return queueRefresh(this, {}, async revision => {
