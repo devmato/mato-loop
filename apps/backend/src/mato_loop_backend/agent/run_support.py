@@ -620,6 +620,30 @@ def _tool_call_signature(call: ToolCall, *, include_reason: bool = False) -> str
     normalized = dict(call.arguments)
     if call.name in {"edit_file", "write_file"}:
         normalized.setdefault("root", "workspace")
+    omitted_fields = {
+        "write_file": ("content", "protected_content"),
+        "edit_file": (
+            "oldText", "newText", "oldString", "newString",
+            "protected_oldString", "protected_newString",
+        ),
+        "apply_patch": ("patch", "patchText"),
+    }.get(call.name, ())
+    for field in omitted_fields:
+        value = normalized.get(field)
+        if (
+            isinstance(value, str)
+            and value.startswith(
+                (
+                    "[Persisted file content omitted: ",
+                    "[Persisted edit text omitted: ",
+                    "[Persisted patch text omitted: ",
+                )
+            )
+        ) or (
+            isinstance(value, dict)
+            and value.get("redacted") is True
+        ):
+            normalized[field] = "[OMITTED FILE TEXT]"
     if not include_reason:
         normalized.pop(PERMISSION_REASON_ARGUMENT, None)
     if call.name == "fetch_transcript" and isinstance(normalized.get("url"), str):

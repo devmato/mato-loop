@@ -56,6 +56,34 @@ from mato_loop_backend.tools.validation import argument_error
 from mato_loop_backend.web.fetch import WebFetchError
 
 
+def _omitted_file_argument(tool_name: str, arguments: dict[str, Any]) -> str | None:
+    fields = {
+        "write_file": ("content", "protected_content"),
+        "edit_file": (
+            "oldString", "newString", "oldText", "newText",
+            "protected_oldString", "protected_newString",
+        ),
+        "apply_patch": ("patchText", "patch"),
+    }.get(tool_name, ())
+    for field in fields:
+        value = arguments.get(field)
+        if (
+            isinstance(value, str)
+            and value.startswith(
+                (
+                    "[Persisted file content omitted: ",
+                    "[Persisted edit text omitted: ",
+                    "[Persisted patch text omitted: ",
+                )
+            )
+        ) or (
+            isinstance(value, dict)
+            and value.get("redacted") is True
+        ):
+            return field
+    return None
+
+
 def _rejected_arguments(*, field: str | None = None, params: dict[str, Any] | None = None) -> ToolResult:
     result = ToolResult.error("tool.invalidArguments", field=field, params=params)
     result.metadata["argumentsRejected"] = True
@@ -207,6 +235,9 @@ async def execute_definition(
         ):
             return ToolResult.error("tool.unavailable")
     raw_arguments = call.arguments
+    omitted_field = _omitted_file_argument(call.name, raw_arguments)
+    if omitted_field is not None:
+        return ToolResult.error("file.omittedContent", field=omitted_field)
     if tool.default_arguments and tool.default_arguments.keys().isdisjoint(raw_arguments):
         raw_arguments = {**tool.default_arguments, **raw_arguments}
     try:

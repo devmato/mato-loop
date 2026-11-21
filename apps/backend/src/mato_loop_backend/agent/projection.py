@@ -471,6 +471,15 @@ def _model_tool_calls(
                     projected_arguments[key] = (
                         f"[Persisted edit text omitted: {count} characters. Read the file again before retrying.]"
                     )
+            for key in ("patch", "patchText"):
+                patch = projected_arguments.get(key)
+                if isinstance(patch, dict) and patch.get("redacted") is True:
+                    characters = patch.get("characters")
+                    count = characters if isinstance(characters, int) else "unknown"
+                    projected_arguments[key] = (
+                        f"[Persisted patch text omitted: {count} characters. "
+                        "Read the affected file again and construct a new patch.]"
+                    )
             instructions = projected_arguments.get("instructions")
             if isinstance(instructions, dict) and isinstance(
                 instructions.get("preview"), str

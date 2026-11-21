@@ -8,7 +8,7 @@ from runtime_helpers import _runtime_setup, _tool_messages
 
 from mato_loop_backend.agent.projection import message_dict
 from mato_loop_backend.agent.run_contracts import AgentRunError
-from mato_loop_backend.agent.run_support import _safe_tool_arguments
+from mato_loop_backend.agent.run_support import _safe_tool_arguments, _tool_call_signature
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.tool_repairs import repairable_tool_error, tool_repair_key
 from mato_loop_backend.models import AgentRun, Message, WebSearchPolicy
@@ -17,6 +17,7 @@ from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import ToolResult
+from mato_loop_backend.tools.executor import _omitted_file_argument
 from mato_loop_backend.tools.registry import ToolRegistry
 
 pytestmark = pytest.mark.usefixtures("skill_library")
@@ -138,6 +139,71 @@ def test_reason_survives_persisted_history_projection():
         "id": "read", "name": "read", "arguments": _safe_tool_arguments("read", arguments),
     }])
     assert message_dict(message)["tool_calls"][0]["arguments"] == arguments
+
+
+@pytest.mark.parametrize(
+    "tool,first,second",
+    [
+        (
+            "edit_file",
+            {"path": "note.txt", "oldString": "[Persisted edit text omitted: 11 characters.]", "newString": "new"},
+            {"path": "note.txt", "oldString": "[Persisted edit text omitted: 999 characters.]", "newString": "new"},
+        ),
+        (
+            "apply_patch",
+            {"patchText": {"characters": 11, "redacted": True}},
+            {"patchText": {"characters": 999, "redacted": True}},
+        ),
+    ],
+)
+def test_omitted_historical_file_content_has_stable_repeat_signature(tool, first, second):
+    assert _tool_call_signature(
+        ToolCall("first", tool, first), include_reason=True
+    ) == _tool_call_signature(
+        ToolCall("second", tool, second), include_reason=True
+    )
+
+
+def test_omitted_historical_patch_is_rejected_before_schema_validation():
+    assert _omitted_file_argument(
+        "apply_patch", {"patchText": {"characters": 11, "redacted": True}}
+    ) == "patchText"
+
+
+async def test_successful_write_does_not_reset_omitted_patch_failure(monkeypatch):
+    first = ToolCall("patch-1", "apply_patch", {
+        "patchText": {"characters": 11, "redacted": True},
+    })
+    write = ToolCall("write", "write_file", {
+        "root": "session", "path": "note.txt", "content": "fresh",
+    })
+    repeated = ToolCall("patch-2", "apply_patch", {
+        "patchText": {"characters": 999, "redacted": True},
+    })
+    db, run, *_ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(tool_calls=[first]),
+            ProviderResult(tool_calls=[write]),
+            ProviderResult(tool_calls=[repeated]),
+            ProviderResult(content="Done."),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        execution_agent_id=uuid4(),
+        execution_operations=("filesystem.patch",),
+    )
+    run.current_directory_snapshot = "/work"
+    tool_registry._execute_definition.side_effect = [
+        ToolResult.error("file.omittedContent", field="patchText"),
+        ToolResult.json({"written": "note.txt"}),
+    ]
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [call.args[0].name for call in tool_registry._execute_definition.await_args_list] == [
+        "apply_patch", "write_file",
+    ]
+    assert _tool_messages(db)[-1].provider_data["_matoloop"]["errorCode"] == "agent.repeatedToolCall"
 
 
 async def test_instruction_deferral_does_not_resolve_failed_edit(monkeypatch):

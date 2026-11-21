@@ -901,8 +901,12 @@ async def execute_tool_batch(
             )
         else:
             if bound_tool is not None and any(action.mutates for action in bound_tool.definition.actions):
-                # A successful mutation changes preconditions, not earlier outcomes.
-                failed_tool_call_signatures.clear()
+                # A successful mutation changes preconditions, not omitted historical input.
+                for signature in [
+                    key for key, reason in failed_tool_call_signatures.items()
+                    if reason != "file.omittedContent"
+                ]:
+                    failed_tool_call_signatures.pop(signature, None)
                 retried_transient_reads.clear()
             else:
                 failed_tool_call_signatures.pop(call_signature, None)
