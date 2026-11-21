@@ -528,6 +528,13 @@ class ApplyPatchArguments(ToolArguments):
     @field_validator("patch")
     @classmethod
     def validate_patch_envelope(cls, value: str) -> str:
+        if value.startswith("[Persisted patch text omitted: "):
+            raise invalid_argument(
+                "Read the affected files and construct a new patch. Omitted historical patch "
+                "content cannot be reused.",
+                field="patchText",
+                reason="omitted_content",
+            )
         if (
             "\r" in value
             or "\0" in value

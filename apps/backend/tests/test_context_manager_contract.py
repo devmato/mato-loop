@@ -611,6 +611,23 @@ def test_message_projection_never_restores_persisted_edit_file_text(fields) -> N
     assert arguments[new].startswith("[Persisted edit text omitted: 12")
 
 
+@pytest.mark.parametrize("field", ["patch", "patchText"])
+def test_message_projection_never_restores_persisted_patch_text(field) -> None:
+    message = _message(uuid4(), "assistant", "Patch anwenden")
+    message.tool_calls = [
+        {
+            "id": "patch",
+            "name": "apply_patch",
+            "arguments": {field: {"characters": 5307, "redacted": True}},
+        }
+    ]
+
+    value = message_dict(message)["tool_calls"][0]["arguments"][field]
+
+    assert value.startswith("[Persisted patch text omitted: 5307 characters.")
+    assert "construct a new patch" in value
+
+
 def test_projection_uses_live_tool_calls_without_mutating_persisted_history() -> None:
     session_id = uuid4()
     assistant = _message(session_id, "assistant", "")
