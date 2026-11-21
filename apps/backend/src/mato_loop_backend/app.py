@@ -46,6 +46,7 @@ from mato_loop_backend.models import (
     QuestionRequest,
     TitleGenerationStatus,
 )
+from mato_loop_backend.notifications import NotificationService
 from mato_loop_backend.projects.coding import CodingScheduler
 from mato_loop_backend.settings import InstanceLimits, SettingsStore
 from mato_loop_backend.skill_migration import initialize_skill_library
@@ -222,6 +223,7 @@ async def _application_lifespan(_app: FastAPI):
         await asyncio.gather(
             terminal_coordinator.shutdown(), browser_coordinator.shutdown(), AgentRuntime.shutdown(), voice_coordinator.shutdown()
         )
+        await NotificationService.stop_response_pushes()
         await oauth_logins.shutdown()
         session_secrets.clear_all()
         await embedding_client.close()

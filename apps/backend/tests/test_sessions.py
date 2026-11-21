@@ -863,7 +863,7 @@ async def test_session_is_created_with_first_message_and_run(
     assert session.model_config_id is None
     assert session.reasoning_effort == "low"
     assert session.user_id == user.id
-    assert session.memory_mode == "full"
+    assert session.memory_mode == ("full" if general_template else "read_only")
     assert session.web_search_policy == "available"
     assert session.preferred_execution_agent_id == selected_computer
     assert session.current_directory == "/srv/project"

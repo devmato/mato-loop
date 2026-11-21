@@ -4,7 +4,8 @@ import time
 from uuid import UUID
 
 PRESENCE_TTL_SECONDS = 15.0
-_active_users: dict[tuple[UUID, UUID | None], tuple[UUID | None, float]] = {}
+RESPONSE_PUSH_GRACE_SECONDS = 120.0
+_presence: dict[tuple[UUID, UUID | None], tuple[UUID | None, float]] = {}
 
 
 def mark_user_present(
@@ -15,26 +16,34 @@ def mark_user_present(
     _prune(now)
     key = (user_id, client_id)
     if active:
-        _active_users[key] = (session_id, now + PRESENCE_TTL_SECONDS)
-    else:
-        _active_users.pop(key, None)
+        _presence[key] = (session_id, now + PRESENCE_TTL_SECONDS)
+    elif key in _presence and _presence[key][1] > now:
+        _presence[key] = (None, now)
 
 
 def user_is_present(user_id: UUID) -> bool:
     now = time.monotonic()
     _prune(now)
-    return any(owner == user_id for owner, _client in _active_users)
+    return any(owner == user_id and expires > now for (owner, _client), (_, expires) in _presence.items())
+
+
+def response_push_delay(user_id: UUID) -> float:
+    now = time.monotonic()
+    _prune(now)
+    return max((expires + RESPONSE_PUSH_GRACE_SECONDS - now
+                for (owner, _client), (_, expires) in _presence.items() if owner == user_id), default=0.0)
 
 
 def session_is_present(user_id: UUID, session_id: UUID) -> bool:
-    _prune(time.monotonic())
+    now = time.monotonic()
+    _prune(now)
     return any(
-        owner == user_id and current_session == session_id
-        for (owner, _client), (current_session, _expires) in _active_users.items()
+        owner == user_id and current_session == session_id and expires > now
+        for (owner, _client), (current_session, expires) in _presence.items()
     )
 
 
 def _prune(now: float) -> None:
-    for key, (_session_id, expires_at) in list(_active_users.items()):
-        if expires_at <= now:
-            del _active_users[key]
+    for key, (_session_id, expires_at) in list(_presence.items()):
+        if expires_at + RESPONSE_PUSH_GRACE_SECONDS <= now:
+            del _presence[key]

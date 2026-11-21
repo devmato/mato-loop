@@ -85,7 +85,7 @@ Session-Freigaben verwaltest du unter **Session > Session-Freigaben**. Computer 
 
 Die Produktionsanwendung lässt sich über deinen Browser als Web-App installieren. Verwende vertrauenswürdiges HTTPS. Für Push muss ein Administrator zuerst [die Instanz einrichten](betrieb-und-datensicherung.md#app-und-push-benachrichtigungen). Aktiviere anschließend Push pro Browser oder installierter App im Benachrichtigungsbereich. Auf iOS/iPadOS benötigst du mindestens Version 16.4 und die Installation über **Zum Home-Bildschirm**.
 
-Bei fokussiertem MatoLoop wird Push für dein Konto auf allen Geräten unterdrückt. Zustellung ist bestmöglich; gespeicherte Hinweise und Chatverlauf bleiben maßgeblich. Die App hält nur ihre Anwendungshülle offline bereit, keine Chats, Dateien oder Anmeldedaten.
+Bei fokussiertem MatoLoop wird Push auf allen Geräten deines Kontos unterdrückt. Nach einem Fensterwechsel bleiben automatische Antwort-Hinweise zwei Minuten lang in der App, ohne Push auszulösen. Kehrst du in dieser Zeit zurück, entfällt der Push. Bleibst du weg, werden noch ungelesene Hinweise dieser Ruhezeit in höchstens einem Push gebündelt. Freigaben und Rückfragen haben keine zusätzliche Wartezeit. Push ist bestmöglich; die Hinweise in der App bleiben maßgeblich. Offline steht nur die Anwendungshülle bereit, keine Chats, Dateien oder Anmeldedaten.
 
 !!! warning "Vor einem App-Update speichern"
     Ein von dir bestätigtes App-Update lädt offene Appfenster neu. Ungespeicherte Editorzustände und andere Eingaben im Arbeitsspeicher können verloren gehen.

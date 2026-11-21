@@ -60,6 +60,8 @@ class SessionTemplate(SessionProfileConfig, ChatModelOverride):
             raise ValueError("the start agent must be selected")
         if self.id == CODING_TEMPLATE_ID:
             # Backfill missing defaults without overriding saved choices.
+            if "memory_mode" not in self.model_fields_set:
+                self.memory_mode = "read_only"
             if "worktrees_enabled" not in self.model_fields_set:
                 self.worktrees_enabled = True
             if "keyboard_agent_ids" not in self.model_fields_set and {PLAN_PROFILE_ID, BUILD_PROFILE_ID}.issubset(self.agent_ids):

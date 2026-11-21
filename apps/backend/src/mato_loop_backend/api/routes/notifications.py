@@ -194,6 +194,8 @@ async def mark_notification_presence(
             user.id, client_id=payload.client_id, session_id=payload.session_id,
             active=payload.active,
         )
+    if payload is None or payload.active:
+        NotificationService.cancel_response_pushes(user.id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

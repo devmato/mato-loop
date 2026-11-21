@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+from asyncio import sleep
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -25,9 +28,16 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.notification_content import NotificationPriority, notification_title
-from mato_loop_backend.sessions.presence import session_is_present
+from mato_loop_backend.sessions.presence import (
+    response_push_delay,
+    session_is_present,
+    user_is_present,
+)
+from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.web_push import (
     WebPushMemoryApprovalTarget,
+    WebPushNotificationCenterTarget,
+    WebPushPayload,
     WebPushService,
     WebPushSessionTarget,
     web_push_payload,
@@ -35,6 +45,47 @@ from mato_loop_backend.web_push import (
 
 SESSION_REQUEST_KINDS = ("approval.requested", "question.requested")
 READ_ONCE_KINDS = ("session.response", *SESSION_REQUEST_KINDS)
+logger = logging.getLogger(__name__)
+_pending_response_pushes: dict[UUID, tuple[set[UUID], asyncio.Task[None]]] = {}
+
+
+def _notification_push_payload(item: Notification, *, silent: bool = False) -> WebPushPayload:
+    return web_push_payload(
+        title=notification_title(item.title, item.priority), body=item.body, tag=f"notification:{item.id}",
+        notification_id=item.id, silent=silent,
+        target=WebPushMemoryApprovalTarget(
+            type="memoryApproval", approvalId=item.approval_id, sessionId=item.session_id,
+        )
+        if item.kind == "memory.approval" and item.approval_id is not None
+        else WebPushSessionTarget(type="session", sessionId=item.session_id)
+        if item.session_id else None,
+    )
+
+
+async def _deliver_response_push_batch(user_id: UUID, ids: set[UUID], delay: float) -> None:
+    try:
+        await sleep(delay)
+        if user_is_present(user_id):
+            return
+        async with AsyncSessionFactory() as db:
+            items = (await db.scalars(select(Notification).join(ChatSession).where(
+                Notification.user_id == user_id, Notification.id.in_(ids),
+                Notification.kind == "session.response", Notification.read_at.is_(None),
+                ~deleted_session_clause(),
+            ))).all()
+        if items:
+            payload = _notification_push_payload(items[0]) if len(items) == 1 else web_push_payload(
+                title=f"{len(items)} neue Session-Hinweise",
+                body="Öffne die Benachrichtigungen, um die ungelesenen Antworten zu sehen.",
+                tag="session-responses", target=WebPushNotificationCenterTarget(type="actions"),
+            )
+            await WebPushService.deliver_after_commit(user_id, payload)
+    except Exception:
+        logger.exception("Deferred session response push delivery failed")
+    finally:
+        pending = _pending_response_pushes.get(user_id)
+        if pending is not None and pending[1] is asyncio.current_task():
+            _pending_response_pushes.pop(user_id)
 
 
 class NotificationDraft(BaseModel):
@@ -218,16 +269,7 @@ class NotificationService:
             if item is None or item.read_at is not None:
                 return
             user_id = item.user_id
-            payload = web_push_payload(
-                title=notification_title(item.title, item.priority), body=item.body, tag=f"notification:{item.id}",
-                notification_id=item.id, silent=silent,
-                target=WebPushMemoryApprovalTarget(
-                    type="memoryApproval", approvalId=item.approval_id, sessionId=item.session_id,
-                )
-                if item.kind == "memory.approval" and item.approval_id is not None
-                else WebPushSessionTarget(type="session", sessionId=item.session_id)
-                if item.session_id else None,
-            )
+            payload = _notification_push_payload(item, silent=silent)
         await WebPushService.deliver_after_commit(user_id, payload)
 
     @staticmethod
@@ -235,12 +277,40 @@ class NotificationService:
         if message_id is None:
             return
         async with AsyncSessionFactory() as db:
-            notification_id = await db.scalar(select(Notification.id).where(
+            row = (await db.execute(select(Notification.user_id, Notification.id).where(
                 Notification.deduplication_key == f"message:{message_id}",
                 Notification.kind == "session.response", Notification.read_at.is_(None),
-            ))
-        if notification_id is not None:
+            ))).one_or_none()
+        if row is None:
+            return
+        user_id, notification_id = row
+        if user_is_present(user_id):
+            return
+        delay = response_push_delay(user_id)
+        if delay <= 0:
             await NotificationService.deliver_after_commit(notification_id)
+            return
+        pending = _pending_response_pushes.get(user_id)
+        if pending is not None:
+            pending[0].add(notification_id)
+        else:
+            ids = {notification_id}
+            task = asyncio.create_task(_deliver_response_push_batch(user_id, ids, delay))
+            _pending_response_pushes[user_id] = (ids, task)
+
+    @staticmethod
+    def cancel_response_pushes(user_id: UUID) -> None:
+        pending = _pending_response_pushes.pop(user_id, None)
+        if pending is not None:
+            pending[1].cancel()
+
+    @staticmethod
+    async def stop_response_pushes() -> None:
+        tasks = [task for _, task in _pending_response_pushes.values()]
+        _pending_response_pushes.clear()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     @staticmethod
     async def mark_session_read(

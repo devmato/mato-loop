@@ -192,13 +192,22 @@ class WebPushMemoryApprovalTarget(BaseModel):
     session_id: UUID | None = Field(default=None, alias="sessionId")
 
 
+class WebPushNotificationCenterTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    type: Literal["actions"]
+
+
+WebPushTarget = WebPushSessionTarget | WebPushAutomationRunTarget | WebPushMemoryApprovalTarget | WebPushNotificationCenterTarget
+
+
 class WebPushNotificationPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
     title: Annotated[str, Field(min_length=1, max_length=240)]
     body: Annotated[str | None, Field(default=None, max_length=500)]
     tag: Annotated[str | None, Field(default=None, min_length=1, max_length=120)]
-    target: WebPushSessionTarget | WebPushAutomationRunTarget | WebPushMemoryApprovalTarget | None = None
+    target: WebPushTarget | None = None
     notification_id: UUID | None = Field(default=None, alias="notificationId")
     silent: bool = False
 
@@ -215,7 +224,7 @@ def web_push_payload(
     title: str,
     body: str | None,
     tag: str,
-    target: WebPushSessionTarget | WebPushAutomationRunTarget | WebPushMemoryApprovalTarget | None,
+    target: WebPushTarget | None,
     notification_id: UUID | None = None,
     silent: bool = False,
 ) -> WebPushPayload:

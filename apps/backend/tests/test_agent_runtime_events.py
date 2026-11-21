@@ -1271,7 +1271,7 @@ async def test_normal_run_push_uses_canonical_session_target(
     await mock_agent_runtime.NotificationService.create_for_message(db, message)
     delivery_db = AsyncMock(spec=AsyncSession)
     delivery_db.__aenter__.return_value = delivery_db
-    delivery_db.scalar.return_value = notification_id
+    delivery_db.execute.return_value = Mock(one_or_none=Mock(return_value=(session.user_id, notification_id)))
     delivery_db.get.return_value = Notification(**db.scalar.await_args.args[0].compile().params)
     monkeypatch.setattr("mato_loop_backend.notifications.AsyncSessionFactory", lambda: delivery_db)
     await db.commit()

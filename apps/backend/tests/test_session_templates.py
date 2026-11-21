@@ -283,7 +283,7 @@ def test_default_templates_and_invalid_agent_selection():
     default, coding = SessionTemplatesSettings().templates
     assert [(item.name, item.agent_ids, item.start_agent_id, item.memory_mode, item.message_size, item.snapshot().worktrees_enabled) for item in (default, coding)] == [
         ("Default", [GENERAL_PROFILE_ID, SYSADMIN_PROFILE_ID], GENERAL_PROFILE_ID, "full", "standard", False),
-        ("Coding", [PLAN_PROFILE_ID, BUILD_PROFILE_ID, INTERACTIVE_PROFILE_ID], PLAN_PROFILE_ID, "full", "small", True),
+        ("Coding", [PLAN_PROFILE_ID, BUILD_PROFILE_ID, INTERACTIVE_PROFILE_ID], PLAN_PROFILE_ID, "read_only", "small", True),
     ]
     with pytest.raises(ValidationError):
         SessionTemplate(name="Invalid", agent_ids=[PLAN_PROFILE_ID], start_agent_id=BUILD_PROFILE_ID)

@@ -14,6 +14,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from mato_loop_backend import notifications
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.notifications import (
     NotificationPresenceRequest,
@@ -70,6 +71,80 @@ async def test_mark_notification_presence_is_user_scoped(monkeypatch) -> None:
 
     assert response.status_code == 204
     mark.assert_called_once_with(user.id)
+
+
+@pytest.mark.parametrize("refocus", [False, True])
+async def test_session_response_push_waits_for_grace_and_batches_unread(monkeypatch, refocus) -> None:
+    user = _user()
+    unread = [_notification(user.id), _notification(user.id)]
+    ids = [item.id for item in unread] + [uuid4()]
+    db = AsyncMock(spec=AsyncSession)
+    db.__aenter__.return_value = db
+    db.execute.return_value = MagicMock(one_or_none=MagicMock(side_effect=[(user.id, notice_id) for notice_id in ids]))
+    db.scalars.return_value = MagicMock(all=MagicMock(return_value=unread))
+    deliver = AsyncMock()
+    resume = asyncio.Event()
+
+    async def wait(delay):
+        assert delay == 120
+        await resume.wait()
+
+    monkeypatch.setattr(notifications, "AsyncSessionFactory", lambda: db)
+    monkeypatch.setattr(notifications, "response_push_delay", lambda _: 120)
+    monkeypatch.setattr(notifications, "sleep", wait)
+    monkeypatch.setattr(notifications.WebPushService, "deliver_after_commit", deliver)
+    for _ in ids:
+        await NotificationService.deliver_message_after_commit(uuid4())
+    deliver.assert_not_awaited()
+
+    task = notifications._pending_response_pushes[user.id][1]
+    if refocus:
+        await mark_notification_presence(user, db, NotificationPresenceRequest(clientId=uuid4()))
+    resume.set()
+    if refocus:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        await task
+    if refocus:
+        deliver.assert_not_awaited()
+    else:
+        assert "notifications.read_at IS NULL" in str(db.scalars.await_args.args[0])
+        deliver.assert_awaited_once()
+        payload = deliver.await_args.args[1].notification
+        assert (payload.title, payload.target.type, payload.notification_id) == ("2 neue Session-Hinweise", "actions", None)
+
+
+@pytest.mark.parametrize("trashed", [False, True])
+async def test_deferred_response_push_checks_session_trash(request, monkeypatch, trashed) -> None:
+    if not request.config.getoption("--memory-db"):
+        pytest.skip("requires the migrated development PostgreSQL database")
+    engine = create_async_engine(get_runtime_config().database_url, poolclass=NullPool)
+    try:
+        async with engine.connect() as connection:
+            await connection.begin()
+            session_factory = async_sessionmaker(connection, expire_on_commit=False)
+            async with session_factory() as db:
+                user = _user()
+                user.username = f"trash-push-{user.id}"
+                db.add(user)
+                await db.flush()
+                session = ChatSession(user_id=user.id)
+                db.add(session)
+                await db.flush()
+                notice = _notification(user.id)
+                notice.kind, notice.session_id = "session.response", session.id
+                db.add(notice)
+                if trashed:
+                    session.delete_at = datetime.now(UTC) + timedelta(days=1)
+                await db.flush()
+            deliver = AsyncMock()
+            monkeypatch.setattr(notifications, "AsyncSessionFactory", session_factory)
+            monkeypatch.setattr(notifications.WebPushService, "deliver_after_commit", deliver)
+            await notifications._deliver_response_push_batch(user.id, {notice.id}, 0)
+            assert deliver.await_count == (0 if trashed else 1)
+    finally:
+        await engine.dispose()
 
 
 def test_notification_model_deletes_notices_when_session_is_deleted() -> None:
