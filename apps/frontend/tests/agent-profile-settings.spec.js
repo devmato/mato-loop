@@ -120,3 +120,61 @@ it.each([
   }
   expect(root.querySelector('.q-checkbox')).toBeNull()
 })
+
+it('shows the effective integration state for every active agent profile', async () => {
+  api.get.mockResolvedValue({
+    data: {
+      defaultAgentProfileId: 'general',
+      personalAgentsEnabled: true,
+      effectiveAgents: [
+        { id: 'general', name: 'Allgemein', enabled: true, scope: 'instance' },
+        { id: 'build', name: 'Build', enabled: true, scope: 'instance' }
+      ],
+      agents: [{ id: 'mine', name: 'Mein Agent', enabled: true, scope: 'personal' }],
+      integrations: [{
+        id: 'wiki',
+        name: 'Projektwiki',
+        integrationType: 'knowledge',
+        adapterType: 'bookstack',
+        enabled: true,
+        available: true,
+        scope: 'instance',
+        profiles: [
+          { id: 'general', available: true, effective: true, source: 'default', toolLoading: 'on_demand' },
+          { id: 'build', available: false, effective: false, source: 'profile', toolLoading: 'all' }
+        ]
+      }]
+    }
+  })
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/agents', name: 'settings-agents', component: Page },
+      { path: '/agents/new', name: 'settings-agent-create', component: { render: () => null } },
+      { path: '/agents/:agentId', name: 'settings-agent-edit', component: { render: () => null } },
+      { path: '/integrations/:integrationId', name: 'settings-integration-edit', component: { render: () => null } }
+    ]
+  })
+  await router.push('/agents')
+  root = document.createElement('div')
+  document.body.append(root)
+  const pinia = createPinia()
+  app = createApp({ render: () => h(Page) })
+  app.use(pinia).use(router).use(Quasar, quasarOptions)
+  app.mount(root)
+
+  await vi.waitFor(() => expect(root.textContent).toContain('Integrationsübersicht'))
+  const overviewTab = [...root.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent.includes('Integrationsübersicht'))
+  overviewTab.click()
+
+  await vi.waitFor(() => expect(root.textContent).toContain('Projektwiki'))
+  expect(root.textContent).toContain('Allgemein')
+  expect(root.textContent).toContain('Build')
+  expect(root.textContent).toContain('1 aktiv')
+  expect(root.querySelector('[aria-label="Projektwiki für Build: Nicht aktiv. Berechtigungen öffnen"]')).not.toBeNull()
+  expect(root.textContent).not.toContain('Für diesen Agenten festgelegt · Alle Tools')
+  const detailsButton = root.querySelector('[aria-label="Details zu Projektwiki für Build"]')
+  detailsButton.click()
+  await vi.waitFor(() => expect(document.body.textContent).toContain('Für diesen Agenten festgelegt'))
+  expect(document.body.textContent).toContain('Alle Tools sofort laden')
+})
