@@ -412,9 +412,11 @@ class ToolRegistry:
         tool_capabilities: set[str] | frozenset[str],
         tool_settings: ToolSettings,
         execution_operations: set[str] | frozenset[str] = frozenset(),
+        browser_setup_relevant: bool = False,
     ) -> tuple[str, ...]:
         browser_unavailable = (
-            "integration.browser.execute" in execution_operations
+            browser_setup_relevant
+            and "integration.browser.execute" in execution_operations
             and "browser_tabs" not in offered_names
         )
         active_definitions = self._combined_definitions(integration_settings)[0]

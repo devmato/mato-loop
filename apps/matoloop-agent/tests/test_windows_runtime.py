@@ -182,6 +182,29 @@ class WindowsRuntimeTests(unittest.TestCase):
         self.assertEqual(web_inspection["classification"], "write")
         self.assertEqual(web_inspection["targets"], [])
 
+        (self.home / "logs").mkdir()
+        (self.home / "request.txt").write_text("test", encoding="utf-8")
+        relative_targets = self.process.inspect_shell(
+            "Start-Process OdooPrototype.exe -WorkingDirectory logs "
+            "-RedirectStandardOutput:process.log; "
+            "Invoke-WebRequest -UseBasicParsing -Uri 'https://example.invalid' "
+            "-InF request.txt -OutFile response.txt",
+            self.wire,
+        )
+        self.assertEqual(
+            {target["path"] for target in relative_targets["targets"]},
+            {
+                (self.home / path).as_posix()
+                for path in (
+                    "OdooPrototype.exe",
+                    "logs",
+                    "process.log",
+                    "request.txt",
+                    "response.txt",
+                )
+            },
+        )
+
         async def execute():
             chunks = []
 

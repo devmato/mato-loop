@@ -42,6 +42,7 @@ from mato_loop_backend.agent.projection import (
     message_dict,
 )
 from mato_loop_backend.agent.run_support import _argument_edit_payload, _tool_policy
+from mato_loop_backend.agent.turn_tools import select_turn_tools
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.files.search import MAX_MATCH_TEXT, MAX_SEARCH_RESULTS, RootFileSearch
 from mato_loop_backend.files.service import FileRoot, RootFileError, RootFileService
@@ -102,6 +103,7 @@ from mato_loop_backend.settings import (
     UserIntegrationSettings,
     UserProfileSettings,
 )
+from mato_loop_backend.settings.models import ModelConfig
 from mato_loop_backend.skill_packages import (
     MAX_SKILL_BYTES,
     SkillFile,
@@ -110,7 +112,7 @@ from mato_loop_backend.skill_packages import (
     skill_md,
 )
 from mato_loop_backend.skill_resources import read_draft
-from mato_loop_backend.skills import SkillService
+from mato_loop_backend.skills import RunSkillState, SkillService
 from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
 from mato_loop_backend.tools.arguments import (
     CreateAutomationArguments,
@@ -2029,32 +2031,39 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
     assert "parameters" not in catalog
 
 
-def test_inactive_capability_catalog_explains_unconfigured_browser() -> None:
-    settings = ToolSettings()
-    integrations = IntegrationSettings()
-    capabilities = mock_tools_catalog.effective_tool_capabilities(settings)
-    effective = tool_registry.effective(
-        integrations,
-        tool_capabilities=capabilities,
-        tool_settings=settings,
-    )
-
-    groups = tool_registry.inactive_capability_groups(
-        integrations,
-        frozenset(effective.tools),
-        webfetch_enabled=False,
-        web_search_enabled=True,
-        memory_enabled=False,
+@pytest.mark.parametrize(
+    ("session_type", "has_parent", "expects_hint"),
+    [("chat", False, True), ("chat", True, False), ("automation", False, False)],
+)
+def test_browser_setup_hint_only_in_main_chat(session_type, has_parent, expects_hint) -> None:
+    session = _session()
+    session.session_type = session_type
+    session.parent_session_id = uuid4() if has_parent else None
+    tools = select_turn_tools(
+        AgentRun(execution_agent_id=uuid4(), execution_operations=["integration.browser.execute"]),
+        session,
+        model=ModelConfig(provider_id=uuid4(), model_id="test", supports_tools=True),
+        ai_settings=AiSettings(),
+        tool_settings=ToolSettings(),
+        integration_settings=IntegrationSettings(),
+        project=None,
+        identity=EffectiveAgentIdentity(display_name="Test", persona=PersonaProfile(name="Test")),
+        skill_state=RunSkillState(),
+        active_profile=None,
+        ceiling=None,
+        delegated=False,
+        memory_read_enabled=False,
         memory_write_enabled=False,
-        tool_capabilities=capabilities,
-        tool_settings=settings,
-        execution_operations={"integration.browser.execute"},
+        web_fetch_enabled=False,
+        required_search=False,
+        required_search_completed=False,
+        memory_write_pending=False,
+        source_review_pending=None,
+        render_pending=False,
+        tool_budget_exhausted=False,
     )
 
-    assert (
-        'Browser: the selected computer supports browser operations, but no Browser '
-        'integration is available to this profile.'
-    ) in "\n".join(groups)
+    assert any(hint.startswith("Browser:") for hint in tools.inactive_groups) == expects_hint
 
 
 def test_policy_disabled_integration_tool_points_to_integration_settings(monkeypatch) -> None:
