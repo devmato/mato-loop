@@ -24,9 +24,10 @@
       </div>
     </header>
 
-    <q-tabs v-if="admin" v-model="section" dense no-caps align="left" active-color="primary" indicator-color="primary" class="q-mb-lg">
-      <q-tab name="general" icon="settings" label="Einstellungen" />
+    <q-tabs v-model="section" dense no-caps align="left" active-color="primary" indicator-color="primary" class="q-mb-lg">
+      <q-tab v-if="admin" name="general" icon="settings" label="Einstellungen" />
       <q-tab name="management" icon="smart_toy" label="Verwaltung" />
+      <q-tab name="integrations" icon="extension" label="Integrationsübersicht" />
     </q-tabs>
 
     <PersonalSettingsGate v-if="admin && section === 'general'" :model-value="agents.personalAgentsEnabled" title="Persönliche Agentenprofile erlauben" description="Benutzer können eigene Agentenprofile erstellen und verwenden." :disabled="gateSaving || agents.loading || agents.loadFailed" @update:model-value="setPersonalAgentsEnabled" />
@@ -69,6 +70,9 @@
             <q-item-label caption class="q-mt-xs">
               Persona: {{ agent.resolvedPersonaName || 'Standard' }}
             </q-item-label>
+            <q-item-label caption class="q-mt-xs">
+              Integrationen: {{ activeIntegrationCount(agent.id) }} aktiv
+            </q-item-label>
           </q-item-section>
           <q-item-section side top class="settings-list-actions">
             <div class="row items-center no-wrap q-gutter-sm">
@@ -106,6 +110,7 @@
       </q-list>
       <q-inner-loading :showing="agents.loading" />
     </q-card>
+    <AgentIntegrationOverview v-else-if="showIntegrationOverview" :admin="admin" />
   </section>
 </template>
 
@@ -120,6 +125,7 @@ import { useConfirm } from 'src/composables/confirm'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useAuthStore } from 'stores/auth'
 import PersonalSettingsGate from 'src/features/settings/PersonalSettingsGate.vue'
+import AgentIntegrationOverview from './AgentIntegrationOverview.vue'
 
 defineOptions({ name: 'AgentProfileSettingsPage' })
 const { admin } = defineProps({ admin: { type: Boolean, default: false } })
@@ -132,10 +138,17 @@ const auth = useAuthStore()
 const showEditor = computed(() => ['settings-agent-create', 'settings-agent-edit', 'admin-agent-create', 'admin-agent-edit'].includes(route.name))
 const switchingId = ref(null)
 const gateSaving = ref(false)
-const section = ref('general')
-const showManagement = computed(() => !admin || section.value === 'management')
+const section = ref(admin ? 'general' : 'management')
+const showManagement = computed(() => section.value === 'management')
+const showIntegrationOverview = computed(() => section.value === 'integrations')
 const visibleAgents = computed(() => agents.manageableAgents.filter((agent) => agent.scope === (admin ? 'instance' : 'personal')))
 const personalBlocked = computed(() => !admin && !auth.isAdmin && !agents.personalAgentsEnabled)
+
+function activeIntegrationCount(profileId) {
+  return agents.integrations.filter((integration) => (
+    integration.profiles?.some((profile) => profile.id === profileId && profile.effective)
+  )).length
+}
 
 async function load() {
   try {

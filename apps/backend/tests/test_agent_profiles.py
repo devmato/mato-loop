@@ -12,6 +12,7 @@ from mato_loop_backend.api.routes import agent_profiles as agent_profiles_module
 from mato_loop_backend.api.routes.agent_profiles import (
     AgentProfileRequest,
     _ensure_unique_name,
+    _integration_profile_payload,
     _profile_from_request,
     _profile_payload,
     delete_agent_profile,
@@ -44,6 +45,26 @@ from mato_loop_backend.settings import (
     load_effective_agent_profiles,
     resolve_agent_profile,
 )
+from mato_loop_backend.settings.models import IntegrationPermissions
+
+
+def test_integration_profile_payload_uses_profile_override() -> None:
+    profile = core_profiles()[0].model_copy(update={"integrations_enabled_by_default": True})
+    instance = IntegrationInstance(
+        name="Wiki",
+        integration_type="knowledge",
+        adapter_type="bookstack",
+        profile_permissions={
+            profile.id: IntegrationPermissions(available=False, tool_loading="all")
+        },
+    )
+
+    payload = _integration_profile_payload(instance, profile, available=True)
+
+    assert payload["available"] is False
+    assert payload["effective"] is False
+    assert payload["source"] == "profile"
+    assert payload["toolLoading"] == "all"
 
 
 def test_builtin_agent_profile_defaults() -> None:

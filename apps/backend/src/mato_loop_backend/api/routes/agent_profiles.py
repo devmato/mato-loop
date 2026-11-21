@@ -17,6 +17,7 @@ from mato_loop_backend.settings import (
     AgentProfileOverrides,
     AgentProfilesSettings,
     CustomAgentProfile,
+    IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
     ToolSettings,
@@ -28,7 +29,11 @@ from mato_loop_backend.settings import (
     resolve_agent_profile,
     shipped_profiles,
 )
-from mato_loop_backend.settings.effective import personal_settings_allowed
+from mato_loop_backend.settings.effective import (
+    integration_profile_available,
+    integration_tool_loading,
+    personal_settings_allowed,
+)
 
 router = APIRouter(prefix="/agent-profiles", dependencies=[Depends(require_user)])
 
@@ -85,6 +90,37 @@ def _profile_payload(
             else {}
         ),
         "resolvedPersonaName": resolve_agent_persona(instance_identity, personal_identity, profile).name,
+    }
+
+
+def _integration_profile_payload(
+    instance: IntegrationInstance,
+    profile: AgentProfile,
+    available: bool,
+) -> dict:
+    from mato_loop_backend.integrations.registry import integration_adapter
+
+    adapter = integration_adapter(instance.integration_type, instance.adapter_type)
+    own = instance.profile_permissions.get(profile.id)
+    base = instance.profile_permissions.get(profile.base_profile_id)
+    if adapter is not None and adapter.native_tool:
+        source = "native"
+    elif own is not None and own.available is not None:
+        source = "profile"
+    elif base is not None and base.available is not None:
+        source = "base"
+    elif profile.integration_id == instance.id:
+        source = "selected"
+    else:
+        source = "default"
+    profile_available = integration_profile_available(instance, profile)
+    return {
+        "id": str(profile.id),
+        "name": profile.name,
+        "available": profile_available,
+        "effective": available and profile_available,
+        "source": source,
+        "toolLoading": integration_tool_loading(instance, profile),
     }
 
 
@@ -172,6 +208,22 @@ async def _response(
                     instance.adapter_type
                 ).value != "disabled",
                 "scope": "personal" if instance.owner_id == user.id else "instance",
+                "profiles": [
+                    _integration_profile_payload(
+                        instance,
+                        profile,
+                        instance.enabled
+                        and integrations.availability_for(instance.adapter_type).value
+                        != "disabled",
+                    )
+                    | {
+                        "scope": (
+                            "personal" if profile.owner_id == user.id else "instance"
+                        )
+                    }
+                    for profile in effective.profiles
+                    if profile.enabled
+                ],
             }
             for instance in integrations.instances
         ],
