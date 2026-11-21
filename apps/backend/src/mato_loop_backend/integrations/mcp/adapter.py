@@ -104,6 +104,16 @@ class McpCatalogTool(BaseModel):
     output_schema: dict[str, Any] | None = None
     annotations: McpToolAnnotations = Field(default_factory=McpToolAnnotations)
 
+    def api_payload(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "title": self.title,
+            "description": self.description,
+            "inputSchema": self.input_schema,
+            "outputSchema": self.output_schema,
+            "annotations": self.annotations.model_dump(),
+        }
+
     @field_validator("name")
     @classmethod
     def normalize_name(cls, value: str) -> str:
@@ -188,6 +198,10 @@ def mcp_tool_contribution(
         )
         if current is None:
             return ToolResult.error("tool.unavailable")
+        if current.adapter_type == "mcp_stdio":
+            from mato_loop_backend.integrations.mcp.stdio import execute_stdio_tool
+
+            return await execute_stdio_tool(current, item, arguments, context)
         try:
             config = McpConfig.model_validate(current.config)
             token = await connection_token(context.db, current)
@@ -275,7 +289,7 @@ def mcp_contributions(
     approval_title: str = "MCP-Tool aufrufen?",
     approval_summary: str = "Der Agent möchte ein Tool dieses MCP-Servers aufrufen.",
 ) -> IntegrationContributions:
-    config = McpConfig.model_validate(instance.config)
+    config = catalog_config(instance)
     labels = labels or {}
     return IntegrationContributions(
         tools=tuple(
@@ -299,7 +313,7 @@ async def mcp_resources(
     *,
     labels: Mapping[str, str] | None = None,
 ) -> tuple[IntegrationResource, ...]:
-    config = McpConfig.model_validate(instance.config)
+    config = catalog_config(instance)
     labels = labels or {}
     return tuple(
         IntegrationResource(
@@ -319,6 +333,14 @@ async def mcp_resources(
         )
         for tool in config.tools
     )
+
+
+def catalog_config(instance: IntegrationInstance):
+    if instance.adapter_type == "mcp_stdio":
+        from mato_loop_backend.integrations.mcp.stdio import McpStdioConfig
+
+        return McpStdioConfig.model_validate(instance.config)
+    return McpConfig.model_validate(instance.config)
 
 
 def _contributions(instance: IntegrationInstance) -> IntegrationContributions:

@@ -168,6 +168,14 @@ export const useMcpServerStore = defineStore('mcp-servers', {
     },
     async disconnectOAuth(server) {
       await api.delete(`/mcp/servers/${server.id}/oauth`, branchConfig(server.scope))
+    },
+    async fetchSessions(server) {
+      const { data } = await api.get(`/mcp/servers/${server.id}/sessions`, branchConfig(server.scope))
+      return data.sessions || []
+    },
+    async closeSession(server, sessionId, processId) {
+      const { data } = await api.post(`/mcp/servers/${server.id}/sessions/${encodeURIComponent(sessionId)}/close`, { processId }, branchConfig(server.scope))
+      return data?.closed === true
     }
   }
 })

@@ -273,9 +273,22 @@ Unter **Ablage** oder **Computer-Dateien** wechselst du bei `.scad` zwischen Que
 
 ## MCP-Server integrieren
 
-Generische Server richtest du unter **Einstellungen > MCP-Server** oder **Administration > MCP-Server** ein. Persönliche Server benötigen administrative Freigabe. Unterstützt wird Streamable HTTP ohne Anmeldung, mit Bearer-Token oder OAuth. HTTP überträgt Zugangsdaten unverschlüsselt; verwende außerhalb eines vertrauenswürdigen Netzes HTTPS.
+Generische Server richtest du unter **Einstellungen > MCP-Server** oder **Administration > MCP-Server** ein. Persönliche Server benötigen administrative Freigabe. Für entfernte Server wird Streamable HTTP ohne Anmeldung, mit Bearer-Token oder OAuth unterstützt; lokale Programme verbindest du über **Auf Computer (stdio)**. HTTP überträgt Zugangsdaten unverschlüsselt; verwende außerhalb eines vertrauenswürdigen Netzes HTTPS.
 
 Prüfe nach dem Speichern den erkannten Tool-Katalog und dessen Rechte. Ein fehlgeschlagener Refresh erhält den vorherigen Katalog. Namen und Beschreibungen sind durchsuchbar, aber unbestätigte Serverangaben: Sie gewähren keine Rechte. MCP-Tools teilen derzeit ebenfalls die Kategorie **Schreiben**. Produktadapter wie SonoBin richtest du im eigenen Produktbereich ein.
+
+### Ein lokales Programm über stdio verbinden
+
+1. Lege einen MCP-Server an und wähle als Verbindung **Auf Computer (stdio)** sowie deinen verbundenen Computer.
+2. Trage den absoluten Pfad zur ausführbaren Datei und ein absolutes Arbeitsverzeichnis auf diesem Computer ein. Das Programm muss dort bereits installiert sein.
+3. Gib Argumente als JSON-Liste von Zeichenketten an, etwa `["--mode", "stdio"]`; ohne Argumente verwende `[]`. Hinterlege normale Umgebungsvariablen getrennt von geheimen Werten. Geheimnisse werden verschlüsselt gespeichert; schreibe sie nicht in die Argumentliste.
+4. Speichere die Verbindung. Das startet noch keinen Prozess. Wähle anschließend **Tools aktualisieren**, um den Katalog einzulesen. Dafür läuft ein eigener kurzlebiger Prozess, der nach Abschluss oder Fehler beendet wird. Aktualisiere den Katalog nach Änderungen an der Programmkonfiguration erneut.
+5. Wähle im Chat denselben Computer und prüfe Tool-Verfügbarkeit und Berechtigungen. Erst ein erlaubter Tool-Aufruf startet den Chat-Prozess; weitere Aufrufe derselben Verbindung im selben Chat verwenden ihn weiter. Andere Chats haben eigenen Prozesszustand.
+
+Der Leerlauf-Timeout beträgt standardmäßig **30 Minuten**. Er beendet wartende Prozesse, nicht laufende Tool-Aufrufe; für Aufrufe gelten eigene Zeitlimits. Pro Computer sind höchstens **vier MCP-Prozesse** gleichzeitig möglich, einschließlich der Katalogabfrage. Unter **Aktive Sitzungen** kannst du nicht mehr benötigte Prozesse schließen, solange keine Aufrufe laufen.
+
+!!! warning "Flüchtiger Zustand und lokale Zugriffsrechte"
+    Sichere oder exportiere wichtige Arbeit ausdrücklich vor längeren Pausen oder dem Schließen einer Sitzung. Prozesszustand ist flüchtig; automatisches Speichern ist nicht garantiert. Das Programm läuft mit den Betriebssystemrechten des Agents, nicht in einer Sandbox. Timeout und Prozesslimit sind keine RAM-Quote; verwende für stärkere Isolation einen passend eingeschränkten Betriebssystembenutzer, Container oder eine VM.
 
 ### Mit OAuth anmelden
 

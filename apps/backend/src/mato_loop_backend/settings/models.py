@@ -1383,7 +1383,7 @@ class IntegrationSettingsBase(SettingsDocument):
         keys = [
             (instance.execution_agent_id, instance.adapter_type)
             for instance in self.instances
-            if instance.execution_agent_id is not None
+            if instance.execution_agent_id is not None and instance.adapter_type != "mcp_stdio"
         ]
         if len(keys) != len(set(keys)):
             raise ValueError("only one integration instance per kind and MatoLoop Agent is allowed")
@@ -1442,6 +1442,8 @@ class IntegrationSettings(IntegrationSettingsBase):
         return self
 
     def availability_for(self, adapter_type: str) -> IntegrationAdapterAvailability:
+        if adapter_type == "mcp_stdio":
+            return self.availability_for("mcp_streamable_http")
         if adapter_type in {"jina", "searxng", "webiq", "webiq_search"}:
             return (
                 IntegrationAdapterAvailability.DISABLED

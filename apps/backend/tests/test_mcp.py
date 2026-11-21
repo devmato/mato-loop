@@ -899,6 +899,7 @@ async def test_api_update_allows_retained_bearer_over_http(monkeypatch) -> None:
         config={"endpoint": "http://192.168.1.30:9000/mcp", "tools": []},
     )
     monkeypatch.setattr(mcp_routes, "_owner_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(mcp_routes, "_settings", AsyncMock(return_value=IntegrationSettings(instances=[instance])))
     update = AsyncMock(return_value=instance)
     monkeypatch.setattr(McpIntegrationService, "update", update)
 

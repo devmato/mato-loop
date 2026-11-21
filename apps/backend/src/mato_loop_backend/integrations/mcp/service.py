@@ -33,6 +33,17 @@ from mato_loop_backend.security import (
 from mato_loop_backend.settings import IntegrationInstance
 
 
+async def delete_connection(db, settings, instance: IntegrationInstance, owner_id: UUID | None) -> None:
+    settings.instances = [item for item in settings.instances if item.id != instance.id]
+    if instance.credential_id is not None:
+        await delete_credential(db, instance.credential_id, owner_id=owner_id)
+    tools = await _load_tools(db, owner_id, for_update=True)
+    if tools.resource_labels.pop(str(instance.id), None) is not None:
+        await _save_settings(db, tools, owner_id)
+    await _save_settings(db, settings, owner_id)
+    await db.commit()
+
+
 class McpIntegrationService:
     integration_type = "mcp"
     adapter_type = "mcp_streamable_http"
@@ -277,14 +288,7 @@ class McpIntegrationService:
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("mcp.notFound")
-        settings.instances = [item for item in settings.instances if item.id != integration_id]
-        if instance.credential_id is not None:
-            await delete_credential(db, instance.credential_id, owner_id=owner_id)
-        tools = await _load_tools(db, owner_id, for_update=True)
-        if tools.resource_labels.pop(str(integration_id), None) is not None:
-            await _save_settings(db, tools, owner_id)
-        await _save_settings(db, settings, owner_id)
-        await db.commit()
+        await delete_connection(db, settings, instance, owner_id)
 
     @classmethod
     async def test(cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None) -> None:

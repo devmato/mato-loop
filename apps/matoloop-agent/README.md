@@ -23,6 +23,19 @@ Platform adapters compose host operations behind the common core. Linux and macO
 The [browser runtime](BROWSER.md) provides disposable per-chat Chromium profiles,
 isolated per-chat headless automation and graphical viewing on native/container agents, explicit prerequisite setup, and bounded browser actions.
 
+## Computer-bound MCP over stdio
+
+Configured stdio MCP servers run with the Agent account's operating-system access,
+not in a sandbox or under a RAM quota. Saving a connection does not launch it;
+catalog refresh uses a separate short-lived discovery process. Authorized tool
+calls lazily start or reuse one process per chat and connection on the selected
+computer. The default idle timeout is 30 minutes and does not interrupt active
+calls; separate call deadlines still apply. At most four MCP processes run at
+once, including discovery. Users can close idle processes under **Aktive Sitzungen**.
+Process state is volatile: explicitly save or export important work rather than
+assuming autosave. See [computer-bound stdio](../../docs/integrations.md#computer-bound-stdio)
+for configuration and lifecycle details.
+
 ## Configuration
 
 ```json

@@ -12,6 +12,7 @@ MAX_MESSAGE_BYTES = 1_048_576
 MAX_REQUEST_BYTES = 262_144
 MAX_EVENT_BYTES = 65_536
 MAX_OUTPUT_BYTES = 1_048_576
+MCP_MANAGE_OPERATION = "integration.mcp.manage"
 SUPPORTED_OPERATIONS = frozenset(
     {
         "cache.clear",
@@ -27,6 +28,9 @@ SUPPORTED_OPERATIONS = frozenset(
         "git.worktree",
         "git.worktree.remove",
         "integration.openscad.discover",
+        "integration.mcp.discover",
+        "integration.mcp.call",
+        MCP_MANAGE_OPERATION,
         "integration.openscad.render",
         "integration.openscad.render6",
         "integration.openscad.test",
@@ -122,7 +126,7 @@ class HelloMessage(WireModel):
     agent_version: str = Field(min_length=1, max_length=120)
     computer_name: str = Field(min_length=1, max_length=255)
     platform: str = Field(min_length=1, max_length=120)
-    operations: Annotated[list[Annotated[str, Field(pattern=r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$", max_length=80)]], Field(max_length=64)]
+    operations: Annotated[list[Annotated[str, Field(pattern=r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$", max_length=80)]], Field(max_length=128)]
     home_directory: str = Field(min_length=1, max_length=4096)
     system_info: SystemInfo | None = None
 

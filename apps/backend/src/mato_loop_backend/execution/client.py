@@ -26,7 +26,7 @@ from mato_loop_backend.execution.manager import (
 )
 from mato_loop_backend.execution.paths import absolute_path
 from mato_loop_backend.execution.paths import parent as computer_parent
-from mato_loop_backend.execution.protocol import EventMessage
+from mato_loop_backend.execution.protocol import MCP_MANAGE_OPERATION, EventMessage
 from mato_loop_backend.execution.transfers import (
     EXPORT_TIMEOUT_SECONDS,
     TransferError,
@@ -296,6 +296,12 @@ class ExecutionClientError(Exception):
 
 
 _REMOTE_ERROR_CODES = {
+    **{code: code for code in (
+        "mcp.configurationInvalid", "mcp.connectionFailed", "mcp.invalidResponse",
+        "mcp.protocolError", "mcp.refreshFailed", "mcp.responseTooLarge",
+        "mcp.timeout", "mcp.toolNotFound", "mcp.unavailable", "mcp.outcomeUnknown",
+        "mcp.processLimitReached", "mcp.busy", "mcp.startFailed",
+    )},
     "browser.unavailable": "browser.unavailable",
     "browser.notReady": "browser.notReady",
     "browser.busy": "browser.busy",
@@ -383,6 +389,7 @@ _REMOTE_ERROR_CODES = {
 
 _MANAGER_ERROR_CODES = frozenset(
     {
+        "mcp.outcomeUnknown",
         "browser.outcomeUnknown",
         "executionAgent.operationUnavailable",
         "executionAgent.outcomeUnknown",
@@ -538,6 +545,14 @@ class ExecutionClient:
                 "terminal.open", "terminal.read", "terminal.write", "terminal.resize", "terminal.close",
             }:
                 mapped_code = "executionAgent.protocolError"
+            elif (
+                code == "integration.changed"
+                and operation == MCP_MANAGE_OPERATION
+                and arguments.get("action") == "close"
+            ):
+                mapped_code = code
+            elif operation.startswith("integration.mcp.") and code in {"operation.failed", "operation.cancelled"}:
+                mapped_code = "mcp.outcomeUnknown" if operation == "integration.mcp.call" else "mcp.unavailable"
             elif operation.startswith("integration.browser.") and code in {"operation.failed", "operation.cancelled"}:
                 mapped_code = (
                     "browser.outcomeUnknown" if code == "operation.cancelled"
@@ -573,7 +588,7 @@ class ExecutionClient:
             raise ExecutionClientError(
                 mapped_code,
                 response.error.params if response.error is not None
-                and not operation.startswith("integration.browser.") else None,
+                and not operation.startswith(("integration.browser.", "integration.mcp.")) else None,
             )
         try:
             return result_model.model_validate(response.result)

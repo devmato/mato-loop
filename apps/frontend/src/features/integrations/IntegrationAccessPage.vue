@@ -69,7 +69,7 @@
     >
       <AppSelect dense :model-value="profileId" outlined emit-value map-options label="Agentenprofil" :options="profileOptions" :disable="saving || loading" @update:model-value="selectProfile" />
       <IntegrationPermissionEditor v-model="permissions" :key="profileId || 'default'" :data="permissionsData" :profile-id="profileId" :model-trust-enabled="auth.modelTrustEnabled" :disabled="adapterBlocked || saving" />
-      <q-banner v-if="permissionsData.providerType === 'mcp_streamable_http' && !permissionsData.inherited.private?.resources.length" rounded class="app-surface-tonal">Dieser Server stellt derzeit keine Tools bereit.</q-banner>
+      <q-banner v-if="isMcp && !permissionsData.inherited.private?.resources.length" rounded class="app-surface-tonal">Dieser Server stellt derzeit keine Tools bereit.</q-banner>
       <q-banner v-if="!permissionsData?.inherited.private?.actions.length" rounded class="app-surface-tonal">Diese Integration bietet keine konfigurierbaren Ausführungsrechte.</q-banner>
       <q-card v-if="!profileId && supportsDefaultResources" flat class="app-surface-tonal">
         <q-card-section>
@@ -172,8 +172,9 @@ let loadToken = 0
 
 const integrationId = computed(() => String(route.params.integrationId || route.params.serverId || ''))
 const scope = computed(() => String(route.name).startsWith('admin-') ? 'instance' : 'personal')
+const isMcp = computed(() => ['mcp_streamable_http', 'mcp_stdio'].includes(permissionsData.value?.providerType))
 const adapterBlocked = computed(() => (
-  !permissionsData.value || (permissionsData.value.providerType !== 'mcp_streamable_http' && !integrations.adapterAvailable(permissionsData.value.providerType, scope.value))
+  !permissionsData.value || (!isMcp.value && !integrations.adapterAvailable(permissionsData.value.providerType, scope.value))
 ))
 const dirty = computed(() => Boolean(
     access.value && (JSON.stringify(requestPayload()) !== savedPayload.value || JSON.stringify(permissions.value) !== savedPermissions.value)

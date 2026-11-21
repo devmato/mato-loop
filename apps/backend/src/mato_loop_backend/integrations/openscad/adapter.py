@@ -19,6 +19,8 @@ from uuid import UUID
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import Field, field_validator, model_validator
 
+from mato_loop_backend.execution.artifacts import ArtifactDescriptor
+from mato_loop_backend.execution.artifacts import export_artifact as _export_artifact
 from mato_loop_backend.execution.client import (
     ExecutionClient,
     ExecutionClientError,
@@ -153,26 +155,6 @@ class OpenScadRenderArguments(WireModel):
         return self
 
 
-class ArtifactDescriptor(WireModel):
-    artifact_id: str = Field(min_length=1, max_length=128)
-    backend_id: str = Field(min_length=1, max_length=128)
-    session_id: str = Field(min_length=1, max_length=128)
-    path: str
-    filename: str = Field(min_length=1, max_length=255)
-    size: int = Field(ge=1, le=MAX_TRANSFER_BYTES)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    content_type: str = Field(min_length=1, max_length=255)
-
-    _validate_path = field_validator("path")(_relative_path)
-
-    @field_validator("filename")
-    @classmethod
-    def plain_filename(cls, value: str) -> str:
-        if value in {".", ".."} or "/" in value or "\\" in value or "\0" in value:
-            raise ValueError("invalid artifact filename")
-        return value
-
-
 class OpenScadPreview(WireModel):
     view: Literal["isometric", "front", "back", "left", "right", "top", "bottom"]
     artifact: ArtifactDescriptor
@@ -186,11 +168,6 @@ class OpenScadRenderResult(ExecutionResult):
     previews: list[OpenScadPreview] = Field(default_factory=list, max_length=6)
     diagnostics: str = Field(max_length=256 * 1_024)
     diagnostics_truncated: bool
-
-
-class CacheExportResult(ExecutionResult):
-    size: int = Field(ge=1, le=MAX_FILE_ATTACHMENT_BYTES)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class OpenScadDiscoverResult(ExecutionResult):
@@ -579,43 +556,13 @@ async def render_project(
 
 
 async def export_artifact(client: ExecutionClient, artifact: ArtifactDescriptor) -> bytes:
-    grant, ticket = transfer_tickets.create_upload(
-        client.agent_id, size=artifact.size, sha256=artifact.sha256
+    return await _export_artifact(
+        client,
+        artifact,
+        limit=MAX_FILE_ATTACHMENT_BYTES,
+        timeout=_EXPORT_TIMEOUT_SECONDS,
+        ttl_seconds=None,
     )
-    try:
-        try:
-            transfer_url = execution_agent_connections.transfer_url(
-                client.agent_id, grant.ticket_id
-            )
-        except ExecutionAgentError as exc:
-            raise ExecutionClientError(exc.code) from exc
-        result = await client.request(
-            "cache.export",
-            {
-                "artifact": artifact.model_dump(mode="json", by_alias=True),
-                "transfer": {
-                    "url": transfer_url,
-                    "token": grant.token,
-                },
-            },
-            CacheExportResult,
-            timeout=_EXPORT_TIMEOUT_SECONDS,
-        )
-        assert isinstance(result, CacheExportResult)
-        if (
-            result.size != artifact.size
-            or result.sha256 != artifact.sha256
-            or ticket.actual_size != artifact.size
-            or ticket.actual_sha256 != artifact.sha256
-            or ticket.content is None
-        ):
-            raise ExecutionClientError("executionAgent.protocolError")
-        data = ticket.content.read(MAX_FILE_ATTACHMENT_BYTES + 1)
-        if len(data) != artifact.size or hashlib.sha256(data).hexdigest() != artifact.sha256:
-            raise ExecutionClientError("executionAgent.protocolError")
-        return data
-    finally:
-        transfer_tickets.revoke(grant.ticket_id)
 
 
 def _preview_contact_sheet(images: list[tuple[str, bytes]]) -> bytes:
@@ -911,8 +858,6 @@ OPENSCAD_ADAPTER = IntegrationAdapterDefinition(
 
 
 __all__ = [
-    "ArtifactDescriptor",
-    "CacheExportResult",
     "OPENSCAD_ADAPTER",
     "OPENSCAD_TOOL",
     "OpenScadConfig",

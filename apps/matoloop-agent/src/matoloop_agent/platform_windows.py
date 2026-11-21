@@ -24,6 +24,7 @@ from .errors import AgentError
 from .filesystem_windows import WindowsFilesystem
 from .platform import FilesystemAdapter, RuntimeServices
 from .process_windows import WindowsProcess
+from .protocol import ARGUMENT_MODELS
 from .search_windows import WindowsSearch
 from .transfer import TransferClient
 
@@ -246,6 +247,7 @@ class WindowsPlatform:
             transfer=transfer,
             operations=operations
             + tuple(sorted(BROWSER_ARGUMENT_MODELS))
+            + tuple(op for op in ARGUMENT_MODELS if op.startswith("integration.mcp."))
             + (
                 ("maintenance.start", "maintenance.update.interrupt")
                 if self._maintenance_available(config)

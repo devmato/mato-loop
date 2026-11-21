@@ -61,6 +61,7 @@ from mato_loop_backend.integrations.mail.client import MailError
 from mato_loop_backend.integrations.mail.service import MailIntegrationService
 from mato_loop_backend.integrations.mcp.client import McpClientError
 from mato_loop_backend.integrations.mcp.service import McpIntegrationService
+from mato_loop_backend.integrations.mcp.stdio_service import owned_agent
 from mato_loop_backend.integrations.mealie.adapter import (
     MEALIE_CREDENTIAL_KIND,
     MealieConfig,
@@ -721,6 +722,8 @@ async def set_integration_enabled(
     instance = next((item for item in settings.instances if item.id == integration_id), None)
     if instance is None:
         raise ApiError(404, "integration.notFound")
+    if instance.adapter_type == "mcp_stdio":
+        await owned_agent(db, user.id, instance.execution_agent_id)
     if payload.enabled:
         await api_integration_access._load_scoped_integrations(
             db, scope, user, adapter_type=instance.adapter_type
@@ -762,6 +765,8 @@ async def set_integration_enabled(
         current = next((item for item in settings.instances if item.id == integration_id), None)
         if current is None:
             raise ApiError(404, "integration.notFound")
+        if current.adapter_type == "mcp_stdio":
+            await owned_agent(db, user.id, current.execution_agent_id)
         current.enabled = payload.enabled
         if payload.enabled:
             try:
@@ -2001,6 +2006,8 @@ async def _permission_instance(db, user, scope, integration_id, *, for_update=Fa
     instance = api_integration_access._integration(settings, integration_id)
     if instance is None:
         raise ApiError(404, "integration.notFound")
+    if instance.adapter_type == "mcp_stdio":
+        await owned_agent(db, user.id, instance.execution_agent_id)
     await api_integration_access._load_scoped_integrations(db, scope, user, adapter_type=instance.adapter_type)
     return settings, owner_id, instance
 

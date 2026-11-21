@@ -6,11 +6,12 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from matoloop_agent.browser_contracts import BROWSER_ARGUMENT_MODELS
 from matoloop_agent.config import AgentConfig
 from matoloop_agent.connection import MatoLoopAgent
 from matoloop_agent.errors import AgentError
 from matoloop_agent.platform import RuntimeServices
-from matoloop_agent.protocol import Request
+from matoloop_agent.protocol import ARGUMENT_MODELS, Hello, Request
 
 AGENT_ID = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
 REQUEST_ID = "bbc46aa8-698d-4554-92c2-1cd5c6cc33a6"
@@ -38,6 +39,25 @@ class FakeFilesystem:
 
 
 class PlatformBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    def test_full_capability_set_fits_v1_hello(self):
+        all_operations = set(ARGUMENT_MODELS) | set(BROWSER_ARGUMENT_MODELS)
+        # Native maintenance.start and container maintenance.update cannot coexist.
+        for excluded in ("maintenance.start", "maintenance.update"):
+            with self.subTest(excluded=excluded):
+                hello = Hello(
+                    agentId=AGENT_ID,
+                    agentVersion="test",
+                    computerName="test-computer",
+                    platform="linux",
+                    homeDirectory="/home/test",
+                    operations=sorted(all_operations - {excluded}),
+                )
+                self.assertLessEqual(len(hello.operations), 64)
+                self.assertEqual(
+                    {op for op in hello.operations if op.startswith("integration.mcp.")},
+                    {"integration.mcp.discover", "integration.mcp.call", "integration.mcp.manage"},
+                )
+
     async def test_injected_runtime_controls_hello_and_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             config = AgentConfig.model_validate(

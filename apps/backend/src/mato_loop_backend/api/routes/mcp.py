@@ -13,6 +13,7 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.integration_access import _integration
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.integrations.mcp.adapter import McpConfig
 from mato_loop_backend.integrations.mcp.client import McpClientError
 from mato_loop_backend.integrations.mcp.oauth import (
@@ -25,6 +26,16 @@ from mato_loop_backend.integrations.mcp.oauth import (
     validate_oauth_url,
 )
 from mato_loop_backend.integrations.mcp.service import McpIntegrationService
+from mato_loop_backend.integrations.mcp.stdio_service import (
+    McpStdioRequest,
+    close_session,
+    delete_stdio,
+    managed_sessions,
+    owned_agent_states,
+    refresh_stdio,
+    save_stdio,
+    stdio_payload,
+)
 from mato_loop_backend.integrations.service import IntegrationSettingsError
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.public_url import resolve_public_base_url
@@ -140,7 +151,13 @@ async def _settings(db: AsyncSession, owner_id: UUID | None):
     return settings
 
 
-async def _connection_payload(db, instance: IntegrationInstance) -> dict:
+async def _connection_payload(db, instance: IntegrationInstance, *, deleted_computer=False) -> dict:
+    if instance.adapter_type == "mcp_stdio":
+        return {
+            **stdio_payload(instance),
+            "deletedComputer": deleted_computer,
+            "available": not deleted_computer,
+        }
     config = McpConfig.model_validate(instance.config)
     result = {
         "id": str(instance.id),
@@ -149,17 +166,7 @@ async def _connection_payload(db, instance: IntegrationInstance) -> dict:
         "enabled": instance.enabled,
         "hasBearerToken": instance.credential_id is not None and config.oauth is None,
         "oauth": config.oauth.model_dump(mode="json") if config.oauth else None,
-        "tools": [
-            {
-                "name": tool.name,
-                "title": tool.title,
-                "description": tool.description,
-                "inputSchema": tool.input_schema,
-                "outputSchema": tool.output_schema,
-                "annotations": tool.annotations.model_dump(),
-            }
-            for tool in config.tools
-        ],
+        "tools": [tool.api_payload() for tool in config.tools],
     }
 
     if result["oauth"] is not None:
@@ -198,9 +205,12 @@ def _api_error(exc: Exception) -> ApiError:
         if code in {"mcp.notFound", "mcp.oauthExpired"}
         else 409
         if code in {"integration.changed", "mcp.authorizationRequired", "mcp.oauthBusy"}
+        else 413
+        if code == "executionAgent.requestTooLarge"
         else 422
         if code
         in {
+            "mcp.configurationInvalid",
             "mcp.oauthConfigurationInvalid",
             "mcp.callbackUrlInvalid",
         }
@@ -245,11 +255,13 @@ async def list_mcp_servers(
 ) -> dict:
     owner_id = await _owner_id(db, scope, user)
     settings = await _settings(db, owner_id)
+    owned_states = await owned_agent_states(db, user.id) if any(item.adapter_type == "mcp_stdio" for item in settings.instances) else {}
     return {
         "servers": [
-            await _connection_payload(db, instance)
+            await _connection_payload(db, instance, deleted_computer=owned_states.get(instance.execution_agent_id, False))
             for instance in settings.instances
-            if instance.integration_type == "mcp" and instance.adapter_type == "mcp_streamable_http"
+            if instance.integration_type == "mcp" and instance.adapter_type in {"mcp_streamable_http", "mcp_stdio"}
+            and (instance.execution_agent_id is None or instance.execution_agent_id in owned_states)
         ]
     }
 
@@ -261,6 +273,7 @@ async def list_visible_mcp_servers(
 ) -> dict:
     instance = await SettingsStore.load(db, IntegrationSettings)
     personal = await SettingsStore.load_optional(db, UserIntegrationSettings, user_id=user.id)
+    owned_states = await owned_agent_states(db, user.id) if any(item.adapter_type == "mcp_stdio" for settings in (instance, personal) if settings for item in settings.instances) else {}
     for owner_id, settings in ((None, instance), (user.id, personal)):
         if settings:
             for item in settings.instances:
@@ -268,9 +281,9 @@ async def list_visible_mcp_servers(
     return {
         "servers": [
             {
-                **await _connection_payload(db, item),
+                **await _connection_payload(db, item, deleted_computer=owned_states.get(item.execution_agent_id, False)),
                 "scope": scope,
-                "available": (
+                "available": not owned_states.get(item.execution_agent_id, False) and (
                     instance.availability_for("mcp_streamable_http")
                     != IntegrationAdapterAvailability.DISABLED and (
                         instance.availability_for("mcp_streamable_http") == IntegrationAdapterAvailability.FULL or user.is_admin
@@ -283,19 +296,26 @@ async def list_visible_mcp_servers(
             for scope, settings in (("instance", instance), ("personal", personal))
             if settings is not None
             for item in settings.instances
-            if item.integration_type == "mcp" and item.adapter_type == "mcp_streamable_http"
+            if item.integration_type == "mcp" and item.adapter_type in {"mcp_streamable_http", "mcp_stdio"}
+            and (item.execution_agent_id is None or item.execution_agent_id in owned_states)
         ]
     }
 
 
 @router.post("/servers", status_code=status.HTTP_201_CREATED)
 async def create_mcp_server(
-    payload: McpServerCreateRequest,
+    payload: McpServerCreateRequest | McpStdioRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount, Depends(require_user)] = None,
 ) -> dict:
     owner_id = await _owner_id(db, scope, user)
+    if isinstance(payload, McpStdioRequest):
+        try:
+            return await _connection_payload(db, await save_stdio(db, payload, owner_id=owner_id, user_id=user.id))
+        except (McpClientError, IntegrationSettingsError, ExecutionClientError) as exc:
+            await db.rollback()
+            raise _api_error(exc) from exc
     if payload.oauth is not None:
         raise ApiError(409, "mcp.authorizationRequired")
     try:
@@ -317,14 +337,24 @@ async def create_mcp_server(
 @router.put("/servers/{integration_id}")
 async def update_mcp_server(
     integration_id: UUID,
-    payload: McpServerRequest,
+    payload: McpServerRequest | McpStdioRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount, Depends(require_user)] = None,
 ) -> dict:
     owner_id = await _owner_id(db, scope, user)
+    current = _mcp_instance(await _settings(db, owner_id), integration_id)
+    if isinstance(payload, McpStdioRequest):
+        if current.adapter_type != "mcp_stdio":
+            raise ApiError(422, "mcp.configurationInvalid")
+        try:
+            return await _connection_payload(db, await save_stdio(db, payload, owner_id=owner_id, user_id=user.id, integration_id=integration_id))
+        except (McpClientError, IntegrationSettingsError, ExecutionClientError) as exc:
+            await db.rollback()
+            raise _api_error(exc) from exc
+    if current.adapter_type != "mcp_streamable_http":
+        raise ApiError(422, "mcp.configurationInvalid")
     if payload.oauth is not None:
-        current = _mcp_instance(await _settings(db, owner_id), integration_id)
         if McpConfig.model_validate(current.config).oauth != payload.oauth:
             raise ApiError(409, "mcp.authorizationRequired")
     try:
@@ -355,10 +385,13 @@ async def refresh_mcp_server(
 ) -> dict:
     owner_id = await _owner_id(db, scope, user)
     try:
+        current = _mcp_instance(await _settings(db, owner_id), integration_id)
+        if current.adapter_type == "mcp_stdio":
+            return await _connection_payload(db, await refresh_stdio(db, current, user.id))
         return await _connection_payload(
             db, await McpIntegrationService.refresh(db, integration_id, owner_id=owner_id)
         )
-    except (McpClientError, IntegrationSettingsError) as exc:
+    except (McpClientError, IntegrationSettingsError, ExecutionClientError) as exc:
         await db.rollback()
         logger.warning("MCP server refresh failed with %s", type(exc).__name__)
         raise _api_error(exc) from exc
@@ -373,9 +406,55 @@ async def delete_mcp_server(
 ) -> None:
     owner_id = await _owner_id(db, scope, user)
     try:
+        current = _mcp_instance(await _settings(db, owner_id), integration_id)
+        if current.adapter_type == "mcp_stdio":
+            await delete_stdio(db, current, user.id)
+            return
         await McpIntegrationService.delete(db, integration_id, owner_id=owner_id)
-    except IntegrationSettingsError as exc:
+    except (IntegrationSettingsError, McpClientError) as exc:
         await db.rollback()
+        raise _api_error(exc) from exc
+
+
+@router.get("/servers/{integration_id}/sessions")
+async def list_mcp_sessions(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[UserAccount, Depends(require_user)],
+    scope: SettingsApiScope = "personal",
+):
+    owner_id = await _owner_id(db, scope, user)
+    instance = _mcp_instance(await _settings(db, owner_id), integration_id)
+    if instance.adapter_type != "mcp_stdio":
+        raise ApiError(422, "mcp.configurationInvalid")
+    try:
+        return {"sessions": [item.model_dump(mode="json", by_alias=True) for item in await managed_sessions(db, instance, user.id)]}
+    except (McpClientError, ExecutionClientError) as exc:
+        raise _api_error(exc) from exc
+
+
+class McpCloseSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    process_id: UUID = Field(alias="processId")
+
+
+@router.post("/servers/{integration_id}/sessions/{session_id}/close")
+async def close_mcp_session(
+    integration_id: UUID,
+    session_id: UUID,
+    payload: McpCloseSessionRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[UserAccount, Depends(require_user)],
+    scope: SettingsApiScope = "personal",
+):
+    owner_id = await _owner_id(db, scope, user)
+    instance = _mcp_instance(await _settings(db, owner_id), integration_id)
+    if instance.adapter_type != "mcp_stdio":
+        raise ApiError(422, "mcp.configurationInvalid")
+    try:
+        return await close_session(db, instance, session_id, payload.process_id, user.id)
+    except (McpClientError, ExecutionClientError) as exc:
         raise _api_error(exc) from exc
 
 
@@ -406,11 +485,12 @@ async def start_mcp_oauth(
             "mcp_streamable_http"
         ) == IntegrationAdapterAvailability.DISABLED:
             raise ApiError(409, "integration.adapterDisabled")
-        redirect_uri = await _callback_uri(db, request)
         revision = None
         client_info = None
         if payload.integration_id:
             current = _mcp_instance(await _settings(db, owner_id), payload.integration_id)
+            if current.adapter_type != "mcp_streamable_http":
+                raise McpClientError("mcp.configurationInvalid")
             revision = current.model_dump(mode="json")
             config = McpConfig.model_validate(current.config)
             if (
@@ -428,6 +508,7 @@ async def start_mcp_oauth(
             and not (client_info and client_info.get("client_secret"))
         ):
             raise McpClientError("mcp.oauthConfigurationInvalid")
+        redirect_uri = await _callback_uri(db, request)
         attempt = LoginAttempt(
             user.id,
             _session_hash(request),

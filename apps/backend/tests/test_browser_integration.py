@@ -952,7 +952,7 @@ async def test_browser_mutation_disconnect_preserves_unknown_outcome(monkeypatch
         assert operation in SUPPORTED_OPERATIONS
         assert disconnect_error_code(operation, True) == "browser.outcomeUnknown"
         assert disconnect_error_code(operation, False) == "executionAgent.unavailable"
-    assert len(SUPPORTED_OPERATIONS) <= 64
+    assert len(SUPPORTED_OPERATIONS) <= 128
     monkeypatch.setattr("mato_loop_backend.execution.client.execution_agent_connections.request", AsyncMock(side_effect=ExecutionAgentError("browser.outcomeUnknown")))
     with pytest.raises(ExecutionClientError, match="browser.outcomeUnknown"):
         await ExecutionClient(uuid4(), frozenset({"integration.browser.execute"})).request("integration.browser.execute", {}, BrowserActionResult)

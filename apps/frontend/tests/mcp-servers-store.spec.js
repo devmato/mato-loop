@@ -99,6 +99,20 @@ describe('MCP server store', () => {
   })
 
 
+  it('lists and closes local sessions using the server scope rather than the selected mutation scope', async () => {
+    const sessions = [{ connectionId: 'local', sessionId: 'chat-1', id: 'process-1', idleTimeoutSeconds: 1800, busy: false }]
+    api.get.mockResolvedValueOnce({ data: { sessions } })
+    api.post.mockResolvedValueOnce({ data: { closed: true } })
+    const store = useMcpServerStore()
+    const local = { id: 'local', transport: 'stdio', scope: 'personal' }
+
+    expect(await store.fetchSessions(local)).toEqual(sessions)
+    expect(await store.closeSession(local, 'chat-1', 'process-1')).toBe(true)
+
+    expect(api.get).toHaveBeenCalledWith('/mcp/servers/local/sessions', { params: { scope: 'personal' } })
+    expect(api.post).toHaveBeenCalledWith('/mcp/servers/local/sessions/chat-1/close', { processId: 'process-1' }, { params: { scope: 'personal' } })
+  })
+
   it('completes OAuth only after discovery is ready and reloads effective state', async () => {
     api.post.mockResolvedValueOnce({ data: { id: 'attempt', authorizationUrl: 'https://idp.example.test/authorize' } })
     api.get.mockResolvedValueOnce({ data: { status: 'ready' } }).mockResolvedValueOnce({ data: list })

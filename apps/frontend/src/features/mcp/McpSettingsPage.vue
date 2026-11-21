@@ -43,7 +43,7 @@
           <q-item-section avatar><q-avatar color="grey-7" text-color="white" icon="hub" /></q-item-section>
           <q-item-section>
             <q-item-label>Noch kein MCP-Server konfiguriert</q-item-label>
-            <q-item-label caption>Füge einen streamfähigen HTTP-Endpunkt hinzu.</q-item-label>
+            <q-item-label caption>Verbinde einen HTTP-Endpunkt oder ein Programm auf deinem Computer.</q-item-label>
           </q-item-section>
         </q-item>
          <q-item v-for="server in visibleServers" :key="server.id" class="settings-list-item q-py-md">
@@ -52,12 +52,14 @@
             <div class="row items-center q-gutter-sm">
               <q-item-label class="settings-list-name text-weight-medium">{{ server.name }}</q-item-label>
               <q-badge outline color="grey-7" :label="server.scope === 'instance' ? 'Global' : 'Persönlich'" />
+              <q-badge outline color="primary" :label="server.transport === 'stdio' ? 'Auf Computer (stdio)' : 'HTTP'" />
               <q-chip dense :color="server.enabled ? 'positive' : 'grey-7'" text-color="white">{{ server.enabled ? 'Aktiv' : 'Deaktiviert' }}</q-chip>
-              <q-chip v-if="server.available === false" dense outline color="warning">Nicht verfügbar</q-chip>
+              <q-chip v-if="server.deletedComputer" dense outline color="warning">Computer entfernt</q-chip>
+              <q-chip v-else-if="server.available === false" dense outline color="warning">Nicht verfügbar</q-chip>
               <q-chip v-if="server.status && server.status !== 'ready'" dense outline color="warning">{{ statusLabel(server.status) }}</q-chip>
               <q-chip v-if="server.oauth" dense outline :color="server.authStatus === 'authorized' ? 'positive' : 'warning'">{{ server.authStatus === 'authorized' ? 'OAuth angemeldet' : 'Anmeldung erforderlich' }}</q-chip>
             </div>
-            <q-item-label caption lines="1">{{ server.endpoint }}</q-item-label>
+            <q-item-label caption lines="1">{{ server.transport === 'stdio' ? computerName(server) : server.endpoint }}</q-item-label>
             <q-item-label caption>{{ server.tools?.length || server.toolCount || 0 }} erkannte Tools</q-item-label>
           </q-item-section>
           <q-item-section side top class="settings-list-actions">
@@ -68,6 +70,10 @@
                 <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${server.name}`" :loading="refreshingId === server.id || removingId === server.id">
                   <AppMenu auto-close>
                     <q-list>
+                      <q-item v-if="server.transport === 'stdio'" clickable :disable="!canManageSessions(server)" @click="openSessions(server)">
+                        <q-item-section avatar><q-icon name="terminal" /></q-item-section>
+                        <q-item-section>Aktive Sitzungen</q-item-section>
+                      </q-item>
                       <q-item clickable :disable="refreshingId !== null || !canEdit(server)" @click="refreshServer(server)">
                         <q-item-section avatar><q-icon name="refresh" /></q-item-section>
                         <q-item-section>Tools aktualisieren</q-item-section>
@@ -76,7 +82,7 @@
                         <q-item-section avatar><q-icon name="edit" /></q-item-section>
                         <q-item-section>Bearbeiten</q-item-section>
                       </q-item>
-                      <q-item clickable :disable="removingId !== null || !canEdit(server)" @click="removeServer(server)">
+                      <q-item clickable :disable="removingId !== null || !canRemove(server)" @click="removeServer(server)">
                         <q-item-section avatar><q-icon name="delete" color="negative" /></q-item-section>
                         <q-item-section class="text-negative">Löschen</q-item-section>
                       </q-item>
@@ -91,6 +97,7 @@
       <q-inner-loading :showing="servers.loading" />
     </q-card>
     <McpServerDialog v-model="dialogOpen" :server="selectedServer" @update:model-value="onDialogChange" />
+    <McpSessionsDialog v-model="sessionsOpen" :server="sessionsServer" />
   </section>
 </template>
 
@@ -101,6 +108,9 @@ import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import { notifyError } from 'src/utils/notifications'
 import McpServerDialog from 'src/features/mcp/McpServerDialog.vue'
+import McpSessionsDialog from 'src/features/mcp/McpSessionsDialog.vue'
+import { useExecutionAgentStore } from 'stores/execution-agents'
+import { agentDisplayName } from 'src/features/computers/display'
 import { useConfirm } from 'src/composables/confirm'
 import { useAuthStore } from 'stores/auth'
 import { useMcpServerStore } from 'stores/mcp-servers'
@@ -115,6 +125,9 @@ const oauthController = new AbortController()
 const { confirm } = useConfirm()
 const servers = useMcpServerStore()
 const auth = useAuthStore()
+const computers = useExecutionAgentStore()
+const sessionsOpen = ref(false)
+const sessionsServer = ref(null)
 const dialogOpen = ref(false)
 const selectedServer = ref(null)
 const section = ref(route.query.oauthAttempt || route.query.oauthError ? 'management' : 'general')
@@ -128,7 +141,12 @@ const personalUnavailable = computed(() => (
   !servers.settingsLoaded || servers.settingsLoadFailed || !servers.personalAllowed && !auth.isAdmin
 ))
 
-const canEdit = (server) => server.available !== false && (server.scope === 'instance' ? auth.isAdmin : !personalUnavailable.value)
+const canModifyScope = (server) => server.scope === 'instance' ? auth.isAdmin : !personalUnavailable.value
+const canEdit = (server) => !server.deletedComputer && server.available !== false && canModifyScope(server)
+const canRemove = (server) => canEdit(server) || (server.deletedComputer && canModifyScope(server))
+const canManageSessions = canEdit
+function openSessions(server) { sessionsServer.value = server; sessionsOpen.value = true }
+function computerName(server) { return agentDisplayName(computers.byId(server.executionAgentId)) || server.executionAgentName || 'Nicht verfügbarer Computer' }
 function openCreate() { servers.selectScope(admin ? 'instance' : 'personal'); selectedServer.value = null; dialogOpen.value = true }
 function openEdit(server) { servers.selectScope(server.scope); selectedServer.value = server; dialogOpen.value = true }
 function onDialogChange(open) { if (!open) void load() }
@@ -137,6 +155,7 @@ function statusLabel(status) {
 }
 async function load() { try { await servers.fetchVisibleServers() } catch { /* Central API toast. */ } }
 async function loadPage() {
+  void computers.fetchAll().catch(() => {})
   try {
     await servers.fetchSettings()
   } catch { return }

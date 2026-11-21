@@ -5,7 +5,7 @@
         <q-avatar color="primary" text-color="white" icon="hub" />
         <div class="col">
           <div class="text-h6">{{ server ? `${server.name} bearbeiten` : 'MCP-Server hinzufügen' }}</div>
-          <div class="text-body2 app-muted">Streamfähigen HTTP-MCP-Endpunkt verbinden.</div>
+          <div class="text-body2 app-muted">HTTP-Endpunkt oder ein Programm auf deinem Computer verbinden.</div>
         </div>
         <q-btn flat round dense icon="close" aria-label="Dialog schließen" @click="close" />
       </q-card-section>
@@ -14,6 +14,9 @@
       <q-form ref="formRef" class="col column no-wrap" @submit.prevent="save">
         <q-card-section class="col scroll q-gutter-md">
           <q-input dense v-model.trim="form.name" outlined label="Name" maxlength="120" lazy-rules :rules="[requiredRule]" :disable="locked" />
+          <AppSelect dense v-model="transport" outlined label="Verbindung" emit-value map-options :options="transportOptions" :disable="locked || Boolean(server)" />
+          <McpStdioFields v-if="transport === 'stdio'" v-model="localForm" :secret-keys="server?.environmentSecretNames || []" :disabled="locked" />
+          <template v-else>
           <q-input dense
             v-model.trim="form.endpoint"
             outlined
@@ -67,6 +70,7 @@
             <q-btn v-else-if="server?.oauth" outline no-caps color="primary" :label="server.authStatus === 'authorized' ? 'Erneut anmelden' : 'Verbinden'" :loading="saving" @click="connectOAuth" />
             <q-btn v-if="server?.oauth" flat no-caps color="negative" label="Anmeldung entfernen" :disable="locked" @click="disconnectOAuth" />
           </template>
+          </template>
           <q-toggle dense v-model="form.enabled" color="primary" label="MCP-Server aktivieren" :disable="locked" />
         </q-card-section>
         <q-separator />
@@ -87,6 +91,8 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useMcpServerStore } from 'stores/mcp-servers'
 import { useConfirm } from 'src/composables/confirm'
+import McpStdioFields from './McpStdioFields.vue'
+import { stdioForm, stdioPayload } from './stdio-config'
 
 defineOptions({ name: 'McpServerDialog' })
 
@@ -103,6 +109,12 @@ const formRef = ref(null)
 const saving = ref(false)
 const locked = computed(() => saving.value || prepared.value)
 const form = reactive({ name: '', endpoint: '', bearerToken: '', removeBearerToken: false, enabled: true })
+const transport = ref('http')
+const localForm = ref(stdioForm())
+const transportOptions = [
+  { label: 'HTTP', value: 'http' },
+  { label: 'Auf Computer (stdio)', value: 'stdio' }
+]
 const authMode = ref('static')
 const registeredClient = ref(false)
 const clientSecret = ref('')
@@ -123,7 +135,7 @@ function oauthConfig() {
     scope: oauth.scope || null
   }
 }
-const needsOAuth = computed(() => authMode.value === 'oauth' && (
+const needsOAuth = computed(() => transport.value !== 'stdio' && authMode.value === 'oauth' && (
   !props.server?.oauth || props.server.authStatus !== 'authorized' || Boolean(clientSecret.value)
   || form.endpoint !== props.server.endpoint
   || JSON.stringify(oauthConfig()) !== JSON.stringify(props.server.oauth)
@@ -137,6 +149,8 @@ const urlRule = (value) => {
   }
 }
 function assignForm() {
+  transport.value = props.server?.transport === 'stdio' ? 'stdio' : 'http'
+  localForm.value = stdioForm(props.server)
   Object.assign(form, {
     name: props.server?.name || '',
     endpoint: props.server?.endpoint || '',
@@ -154,6 +168,7 @@ function close() {
   if (!saving.value) {
     void cancelOAuth()
     clientSecret.value = ''
+    localForm.value.secrets = []
     emit('update:modelValue', false)
   }
 }
@@ -190,9 +205,10 @@ async function save() {
   if (!await formRef.value?.validate()) return
   saving.value = true
   try {
-    const payload = { ...form }
-    payload.oauth = authMode.value === 'oauth' ? oauthConfig() : null
-    if (authMode.value === 'oauth') {
+    const payload = transport.value === 'stdio'
+      ? { name: form.name, enabled: form.enabled, ...stdioPayload(localForm.value) }
+      : { ...form, oauth: authMode.value === 'oauth' ? oauthConfig() : null }
+    if (transport.value !== 'stdio' && authMode.value === 'oauth') {
       delete payload.bearerToken
       delete payload.removeBearerToken
     }
@@ -200,6 +216,7 @@ async function save() {
     if (!props.server) delete payload.removeBearerToken
     if (props.server) await servers.updateServer(props.server.id, payload)
     else await servers.createServer(payload)
+    localForm.value.secrets = []
     $q.notify({ type: 'positive', message: props.server ? 'MCP-Server gespeichert' : 'MCP-Server hinzugefügt' })
     emit('update:modelValue', false)
   } catch {

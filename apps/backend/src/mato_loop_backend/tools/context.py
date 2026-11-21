@@ -133,9 +133,9 @@ class ToolContext:
 
     async def current_integrations(self) -> IntegrationSettings:
         settings = await self.configured_integrations()
-        if any(item.adapter_type == "browser" for item in settings.instances):
+        if any(item.adapter_type in {"browser", "mcp_stdio"} for item in settings.instances):
             for item in settings.instances:
-                if item.adapter_type == "browser":
+                if item.adapter_type in {"browser", "mcp_stdio"}:
                     item._execution_operations = self.execution_client.operations if self.execution_client else frozenset()
                     if self.execution_client is None or item.execution_agent_id != self.execution_client.agent_id:
                         item.enabled = False

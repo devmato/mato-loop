@@ -663,7 +663,55 @@ class MaintenanceUpdateArguments(MaintenanceStartArguments):
     action: Literal["update"]
 
 
-ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
+class McpSessionArguments(StrictModel):
+    connection_id: str = Field(alias="connectionId", pattern=UUID_PATTERN)
+    session_id: str = Field(alias="sessionId", pattern=UUID_PATTERN)
+
+
+class McpCloseArguments(McpSessionArguments):
+    process_id: str = Field(alias="processId", pattern=UUID_PATTERN)
+
+
+class McpSessionsArguments(StrictModel):
+    action: Literal["list"]
+
+
+class McpManageCloseArguments(McpCloseArguments):
+    action: Literal["close"]
+
+
+class McpDiscoverArguments(McpSessionArguments):
+    executable: str = Field(min_length=1, max_length=4096)
+    args: list[Annotated[str, Field(max_length=32768)]] = Field(
+        default_factory=list, max_length=256
+    )
+    working_directory: str = Field(alias="workingDirectory", min_length=1, max_length=4096)
+    environment: dict[EnvironmentName, EnvironmentValue] = Field(
+        default_factory=dict, max_length=128
+    )
+    idle_timeout_seconds: int = Field(default=1800, alias="idleTimeoutSeconds", ge=1, le=86400)
+
+    _paths = field_validator("executable", "working_directory")(_absolute_path)
+
+    @model_validator(mode="after")
+    def no_nul(self):
+        if any("\x00" in value for value in [*self.args, *self.environment.values()]):
+            raise ValueError("NUL is not allowed in process configuration")
+        return self
+
+
+class McpCallArguments(McpDiscoverArguments):
+    name: str = Field(min_length=1, max_length=256)
+    arguments: dict[str, Any]
+    output_schema: dict[str, Any] | None = Field(default=None, alias="outputSchema")
+
+
+ARGUMENT_MODELS: dict[str, type[StrictModel] | TypeAdapter] = {
+    "integration.mcp.discover": McpDiscoverArguments,
+    "integration.mcp.call": McpCallArguments,
+    "integration.mcp.manage": TypeAdapter(
+        Annotated[McpSessionsArguments | McpManageCloseArguments, Field(discriminator="action")]
+    ),
     "git.changes": GitChangesArguments,
     "git.repository": GitRepositoryArguments,
     "git.branch": GitBranchArguments,
@@ -725,4 +773,6 @@ def validate_arguments(request: Request) -> StrictModel:
     model = ARGUMENT_MODELS.get(request.operation) or BROWSER_ARGUMENT_MODELS.get(request.operation)
     if model is None:
         raise ValueError("unsupported operation")
+    if isinstance(model, TypeAdapter):
+        return model.validate_python(request.arguments)
     return model.model_validate(request.arguments)

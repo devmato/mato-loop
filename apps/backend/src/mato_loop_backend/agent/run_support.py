@@ -65,6 +65,7 @@ logger = logging.getLogger("mato_loop_backend.agent.runtime")
 _DIRECTORY_INDEPENDENT_EXECUTION_OPERATIONS = frozenset(
     {
         "cache.export",
+        "integration.mcp.call",
         "filesystem.resolve",
         "integration.openscad.render",
         "integration.openscad.render6",

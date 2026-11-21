@@ -13,6 +13,13 @@ describe('API error messages', () => {
       'Worktree nicht entfernt: Fehlende Löschrechte bei „/worktree/cache“. Prüfe Zugriffsrechte und Eigentümer.'
     )
   })
+  it.each([
+    ['mcp.processLimitReached', 'Auf diesem Computer laufen bereits vier MCP-Prozesse. Beende eine nicht mehr benötigte Sitzung unter MCP-Server → Aktive Sitzungen.'],
+    ['mcp.busy', 'Der MCP-Prozess wird gerade verwendet. Warte, bis der laufende Aufruf abgeschlossen ist.'],
+    ['mcp.startFailed', 'Der MCP-Prozess konnte nicht gestartet werden. Prüfe die ausführbare Datei, Argumente und das Arbeitsverzeichnis auf dem gewählten Computer.']
+  ])('localizes %s without exposing process details', (code, expected) => {
+    expect(apiErrorMessage({ error: { code, message: 'private process detail' } })).toBe(expected)
+  })
   it('identifies the session waiting for approval that blocks a Git command', () => {
     expect(apiErrorMessage({ error: { code: 'git.projectBusy', params: { sessionTitle: 'Andere Aufgabe', status: 'waiting_approval' } } })).toBe(
       'Auftrag kann noch nicht starten: Die Session „Andere Aufgabe“ wartet auf Freigabe und benötigt dasselbe Arbeitsverzeichnis oder gemeinsame Git-Einstellungen. Beende oder stoppe den dortigen Lauf und starte den Auftrag erneut.'

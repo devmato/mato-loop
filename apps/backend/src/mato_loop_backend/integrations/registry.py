@@ -15,6 +15,7 @@ from mato_loop_backend.integrations.contracts import (
 from mato_loop_backend.integrations.jina.adapter import JINA_ADAPTER
 from mato_loop_backend.integrations.mail.adapter import MAIL_ADAPTER
 from mato_loop_backend.integrations.mcp.adapter import MCP_ADAPTER
+from mato_loop_backend.integrations.mcp.stdio import MCP_STDIO_ADAPTER
 from mato_loop_backend.integrations.mealie.adapter import MEALIE_ADAPTER
 from mato_loop_backend.integrations.microsoft365.adapter import MICROSOFT365_ADAPTER
 from mato_loop_backend.integrations.opencode.adapter import OPENCODE_ADAPTER
@@ -58,6 +59,7 @@ _ADAPTERS = {
     ("coding", "opencode"): OPENCODE_ADAPTER,
     ("browser", "browser"): BROWSER_ADAPTER,
     ("mcp", "mcp_streamable_http"): MCP_ADAPTER,
+    ("mcp", "mcp_stdio"): MCP_STDIO_ADAPTER,
     ("music", "sonobin"): SONOBIN_ADAPTER,
     ("support", "tbs-desk"): TBS_DESK_ADAPTER,
 }

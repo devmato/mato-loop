@@ -18,6 +18,7 @@ from mato_loop_backend.execution.protocol import (
     MAX_MESSAGE_BYTES,
     MAX_OUTPUT_BYTES,
     MAX_REQUEST_BYTES,
+    MCP_MANAGE_OPERATION,
     SUPPORTED_OPERATIONS,
     CancelMessage,
     EventMessage,
@@ -55,9 +56,13 @@ class ExecutionAgentError(Exception):
         self.code = code
 
 
-def disconnect_error_code(operation: str, dispatched: bool) -> str:
+def disconnect_error_code(
+    operation: str, dispatched: bool, *, mcp_close: bool = False
+) -> str:
     if not dispatched:
         return "executionAgent.unavailable"
+    if operation == "integration.mcp.call" or (operation == MCP_MANAGE_OPERATION and mcp_close):
+        return "mcp.outcomeUnknown"
     if operation in {
         "integration.browser.execute", "integration.browser.setup",
         "integration.browser.setupwrite", "integration.browser.open",
@@ -82,6 +87,7 @@ class _PendingRequest:
     event_handler: EventHandler | None = None
     dispatched: bool = False
     output_bytes: int = 0
+    mcp_close: bool = False
 
 
 @dataclass(slots=True)
@@ -213,6 +219,7 @@ class ExecutionAgentConnectionManager:
                 operation=operation,
                 future=asyncio.get_running_loop().create_future(),
                 event_handler=on_event,
+                mcp_close=operation == MCP_MANAGE_OPERATION and arguments.get("action") == "close",
             )
             connection.pending[request.id] = pending
 
@@ -234,11 +241,9 @@ class ExecutionAgentConnectionManager:
                 return await asyncio.shield(pending.future)
         except TimeoutError as exc:
             await self._abandon(agent_id, connection, generation, request.id)
+            code = disconnect_error_code(operation, pending.dispatched, mcp_close=pending.mcp_close)
             raise ExecutionAgentError(
-                disconnect_error_code(operation, pending.dispatched)
-                if pending.dispatched
-                and disconnect_error_code(operation, True).endswith("outcomeUnknown")
-                else "executionAgent.timeout"
+                code if code.endswith("outcomeUnknown") else "executionAgent.timeout"
             ) from exc
         except asyncio.CancelledError:
             await self._abandon(agent_id, connection, generation, request.id)
@@ -247,7 +252,7 @@ class ExecutionAgentConnectionManager:
             raise
         except Exception as exc:
             raise ExecutionAgentError(
-                disconnect_error_code(operation, pending.dispatched)
+                disconnect_error_code(operation, pending.dispatched, mcp_close=pending.mcp_close)
             ) from exc
         finally:
             async with self._lock:
@@ -378,7 +383,7 @@ class ExecutionAgentConnectionManager:
             if pending.future.done():
                 continue
             disconnect_code = disconnect_error_code(
-                pending.operation, pending.dispatched
+                pending.operation, pending.dispatched, mcp_close=pending.mcp_close
             )
             pending.future.set_exception(
                 ExecutionAgentError(

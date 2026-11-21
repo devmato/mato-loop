@@ -129,6 +129,7 @@ class IntegrationAdapterDefinition:
     instance_only: bool = False
     native_tool: str | None = None
     catalog_visible: bool = True
+    dynamic_execution_tools: bool = False
 
     def __post_init__(self) -> None:
         if self.execution_location == "backend":
@@ -186,8 +187,15 @@ class IntegrationAdapterDefinition:
             return contributions
         if instance.execution_agent_id is None:
             raise ValueError("agent integrations require a MatoLoop Agent")
-        if contributions.tools:
+        if contributions.tools and not self.dynamic_execution_tools:
             raise ValueError("agent integration tools must use static execution tools")
+        if self.dynamic_execution_tools and any(
+            tool.execution_operation not in {item.execution_operation for item in self.execution_tools}
+            or tool.result_model is None
+            or tool.handler is None
+            for tool in contributions.tools
+        ):
+            raise ValueError("dynamic agent tools require a declared operation, result model and handler")
         from mato_loop_backend.integrations.execution import execution_tool_handler
 
         tools = tuple(
@@ -206,7 +214,7 @@ class IntegrationAdapterDefinition:
                     tool.required_execution_operations,
                 ),
             )
-            for tool in self.execution_tools
+            for tool in (contributions.tools if self.dynamic_execution_tools else self.execution_tools)
             if instance._execution_operations is None
             or {
                 tool.execution_operation,
@@ -215,7 +223,7 @@ class IntegrationAdapterDefinition:
             <= instance._execution_operations
         )
         return IntegrationContributions(
-            tools=(*contributions.tools, *tools),
+            tools=tools if self.dynamic_execution_tools else (*contributions.tools, *tools),
             tool_options=contributions.tool_options,
             prompt_fragments=contributions.prompt_fragments,
             agent_profiles=contributions.agent_profiles,

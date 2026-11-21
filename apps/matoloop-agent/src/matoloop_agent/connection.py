@@ -133,6 +133,9 @@ class MatoLoopAgent:
         self.search = self.runtime.search
         self.transfer = self.runtime.transfer
         self.openscad = self.runtime.openscad
+        from .mcp import McpProcesses
+
+        self.mcp = McpProcesses(self.cache, self.filesystem)
         self._access_key = access_key
         self.operations = list(self.runtime.operations)
         self._request_tasks: set[asyncio.Task] = set()
@@ -179,6 +182,7 @@ class MatoLoopAgent:
                     self._request_tasks
                     or getattr(self.terminal, "maintenance_busy", False)
                     or getattr(self.browser, "maintenance_busy", False)
+                    or self.mcp.maintenance_busy
                 )
             )
         ):
@@ -215,6 +219,7 @@ class MatoLoopAgent:
             if pending:
                 raise AgentError("maintenance.busy", "Agent operations have not finished stopping")
         await self.browser.close(stop_setup=True)
+        await self.mcp.close_all()
         await self.terminal.close_all()
 
     async def _dispatch(
@@ -256,6 +261,10 @@ class MatoLoopAgent:
 
         if operation in BROWSER_ARGUMENT_MODELS:
             return await self.browser.dispatch(operation, arguments)
+        if operation.startswith("integration.mcp."):
+            if backend_id is None:
+                raise AgentError("request.invalid", "MCP requires an authenticated backend binding")
+            return await self.mcp.dispatch(operation, arguments, backend_id)
         if isinstance(arguments, SystemInfoArguments):
             return await asyncio.to_thread(self.system_info, arguments.current_directory)
         if isinstance(arguments, MaintenanceStartArguments):
@@ -583,9 +592,12 @@ class MatoLoopAgent:
         finally:
             self._sleep_inhibitor.close()
             try:
-                await self.browser.close()
+                await self.mcp.close_all()
             finally:
-                await self.terminal.close_all()
+                try:
+                    await self.browser.close()
+                finally:
+                    await self.terminal.close_all()
 
     async def _connect_once(self, connected: asyncio.Event) -> None:
         # Deliver completed updates before hello can trigger another automatic update.
@@ -719,9 +731,12 @@ class MatoLoopAgent:
                     for task in tasks.values():
                         task.cancel()
                     try:
-                        await self.browser.close()
+                        await self.mcp.close_all()
                     finally:
-                        await self.terminal.close_all()
+                        try:
+                            await self.browser.close()
+                        finally:
+                            await self.terminal.close_all()
                     await asyncio.gather(*tasks.values(), return_exceptions=True)
                     self.skill_cache.disconnect()
                 finally:
