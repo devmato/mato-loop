@@ -19,6 +19,12 @@
   --app-floating-control-inset: 12px;
 }
 
+// Keep WebKit's input scrolling out of the document; chat and sidebar scroll internally.
+.app-shell.app-shell--fixed-chat {
+  position: fixed;
+  inset: 0;
+}
+
 .app-floating-controls {
   position: fixed;
   z-index: 3000;

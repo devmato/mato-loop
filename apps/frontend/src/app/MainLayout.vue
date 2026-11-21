@@ -4,6 +4,7 @@
     class="app-shell"
     :class="{
       'app-shell--chat': route.name === 'chat',
+      'app-shell--fixed-chat': route.name === 'chat' && $q.platform.is.ios,
       'app-shell--top-session-tabs': route.name === 'chat' && preferences.sessionTabsEnabled && preferences.sessionTabsPosition === 'top' && !$q.screen.lt.sm && sessionTabs.items.length > 0,
       'app-shell--navigation-overlay': showFloatingNavigation,
       'app-shell--floating-chat-controls': route.name === 'chat' && showFloatingControls
