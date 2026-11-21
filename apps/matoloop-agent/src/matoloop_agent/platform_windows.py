@@ -41,6 +41,22 @@ class WindowsPlatform:
     def platform_id(self) -> str:
         return "win32"
 
+    def inhibit_idle_sleep(self) -> Callable[[], None]:
+        # Set and restore the execution state on the same Agent event loop thread.
+        set_state = ctypes.WinDLL("kernel32").SetThreadExecutionState
+        set_state.argtypes = [ctypes.c_uint32]
+        set_state.restype = ctypes.c_uint32
+        continuous, system_required = 0x80000000, 0x00000001
+        previous = set_state(continuous | system_required)
+        if not previous:
+            raise OSError("Windows rejected the idle sleep request")
+
+        def release() -> None:
+            if not set_state(continuous | previous):
+                raise OSError("Windows could not restore the thread execution state")
+
+        return release
+
     def computer_name(self) -> str:
         return socket.gethostname()
 

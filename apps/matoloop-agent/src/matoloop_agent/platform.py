@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from asyncio import Task
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -72,6 +73,9 @@ class SearchAdapter(Protocol):
 
 
 class BrowserAdapter(Protocol):
+    setup_task: Task[None] | None
+    hold_setup_awake: Callable[[], AbstractContextManager[None]]
+
     async def dispatch(self, operation: str, arguments) -> dict: ...
     async def close(self, *, stop_setup: bool = False) -> None: ...
 
@@ -111,6 +115,7 @@ class PlatformAdapter(Protocol):
     def default_config_path(self, environ: Mapping[str, str]) -> Path: ...
     def system_info(self, current_directory: str | None, filesystem: FilesystemAdapter) -> dict: ...
     def credential_store(self, data_dir: Path) -> CredentialStore: ...
+    def inhibit_idle_sleep(self) -> Callable[[], None] | None: ...
     def build_runtime(
         self, config: AgentConfig, access_key: str, *, transfer_client=None
     ) -> RuntimeServices: ...

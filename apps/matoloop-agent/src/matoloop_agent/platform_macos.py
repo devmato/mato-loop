@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import os
 import platform
 import re
@@ -27,6 +28,45 @@ class MacOSPlatform(PosixPlatform):
     @property
     def platform_id(self) -> str:
         return "darwin"
+
+    def inhibit_idle_sleep(self) -> Callable[[], None]:
+        iokit = ctypes.CDLL("/System/Library/Frameworks/IOKit.framework/IOKit")
+        cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+        cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+        cf.CFRelease.restype = None
+        iokit.IOPMAssertionCreateWithName.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint32),
+        ]
+        iokit.IOPMAssertionCreateWithName.restype = ctypes.c_int32
+        iokit.IOPMAssertionRelease.argtypes = [ctypes.c_uint32]
+        iokit.IOPMAssertionRelease.restype = ctypes.c_int32
+
+        utf8 = 0x08000100  # kCFStringEncodingUTF8
+        assertion_on = 255  # kIOPMAssertionLevelOn
+        kind = cf.CFStringCreateWithCString(None, b"PreventUserIdleSystemSleep", utf8)
+        name = cf.CFStringCreateWithCString(None, b"MatoLoop Agent work", utf8)
+        assertion = ctypes.c_uint32()
+        try:
+            if not kind or not name:
+                raise OSError("Could not create power assertion strings")
+            if iokit.IOPMAssertionCreateWithName(kind, assertion_on, name, ctypes.byref(assertion)):
+                raise OSError("IOKit rejected the idle sleep assertion")
+        finally:
+            if kind:
+                cf.CFRelease(kind)
+            if name:
+                cf.CFRelease(name)
+
+        def release() -> None:
+            if iokit.IOPMAssertionRelease(assertion):
+                raise OSError("IOKit could not release the idle sleep assertion")
+
+        return release
 
     def default_config_path(self, environ: Mapping[str, str]) -> Path:
         return Path(

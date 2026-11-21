@@ -11,6 +11,8 @@ import shutil
 import signal
 import stat
 import sys
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
@@ -67,7 +69,8 @@ class BrowserRuntime:
         self.view_tasks: set[asyncio.Task] = set()
         self.setup = None
         self.setup_offset = 0
-        self.setup_task = None
+        self.setup_task: asyncio.Task[None] | None = None
+        self.hold_setup_awake: Callable[[], AbstractContextManager[None]] = contextlib.nullcontext
         self.last_status = BrowserStatus(state="missing")
 
     @property
@@ -410,6 +413,10 @@ class BrowserRuntime:
         self.last_status.setup_id = self.setup.terminal_id if self.setup else None
         return self.last_status.model_dump(by_alias=True)
 
+    async def run_setup_output(self, entry) -> None:
+        with self.hold_setup_awake():
+            await self.setup_output(entry)
+
     async def setup_output(self, entry) -> None:
         try:
             while chunk := await self.terminal._read_fd(entry):
@@ -423,6 +430,8 @@ class BrowserRuntime:
             self.terminal._close_fd(entry)
             async with entry.condition:
                 entry.condition.notify_all()
+        if entry.wait_task is not None:
+            await asyncio.shield(entry.wait_task)
 
     async def start_setup(self, owner_id: str) -> dict:
         root = self.storage(owner_id)
@@ -458,7 +467,7 @@ class BrowserRuntime:
             environment,
         )
         # This entry is deliberately not registered with disconnect-scoped terminals.
-        self.setup_task = asyncio.create_task(self.setup_output(self.setup))
+        self.setup_task = asyncio.create_task(self.run_setup_output(self.setup))
         return await self.status()
 
     async def setup_io(self, action: str, args) -> dict:
@@ -729,7 +738,7 @@ class NativeBrowserRuntime(BrowserRuntime):
         )
         self.setup_offset = 0
         self.setup = _Setup(str(uuid4()), process)
-        self.setup_task = asyncio.create_task(self.setup_output(self.setup))
+        self.setup_task = asyncio.create_task(self.run_setup_output(self.setup))
         return await self.status()
 
     async def setup_io(self, action: str, args) -> dict:

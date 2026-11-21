@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import errno
 import os
 import pwd
 import shlex
@@ -26,6 +28,67 @@ class LinuxPlatform(PosixPlatform):
     @property
     def platform_id(self) -> str:
         return sys.platform
+
+    def inhibit_idle_sleep(self) -> Callable[[], None] | None:
+        if os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1":
+            return None
+
+        # logind grants a lock owned by a file descriptor; no helper can outlive the Agent.
+        lib = ctypes.CDLL("libsystemd.so.0")
+        ptr, text = ctypes.c_void_p, ctypes.c_char_p
+        out_ptr = ctypes.POINTER(ptr)
+        lib.sd_bus_open_system.argtypes = [out_ptr]
+        lib.sd_bus_set_method_call_timeout.argtypes = [ptr, ctypes.c_uint64]
+        lib.sd_bus_call_method.argtypes = [ptr, text, text, text, text, ptr, out_ptr, text]
+        lib.sd_bus_message_read.argtypes = [ptr, text]
+        lib.sd_bus_message_unref.argtypes = [ptr]
+        lib.sd_bus_message_unref.restype = ptr
+        lib.sd_bus_unref.argtypes = [ptr]
+        lib.sd_bus_unref.restype = ptr
+
+        def check(result: int) -> None:
+            if result < 0:
+                raise OSError(-result, os.strerror(-result))
+
+        bus, reply = ptr(), ptr()
+
+        def inhibit(what: bytes, mode: bytes) -> int:
+            return lib.sd_bus_call_method(
+                bus,
+                b"org.freedesktop.login1",
+                b"/org/freedesktop/login1",
+                b"org.freedesktop.login1.Manager",
+                b"Inhibit",
+                None,
+                ctypes.byref(reply),
+                b"ssss",
+                what,
+                b"MatoLoop Agent",
+                b"Local work in progress",
+                mode,
+            )
+
+        check(lib.sd_bus_open_system(ctypes.byref(bus)))
+        try:
+            check(lib.sd_bus_set_method_call_timeout(bus, 1_000_000))
+            mode = b"block-weak"
+            for what in (b"idle:sleep", b"idle"):
+                result = inhibit(what, mode)
+                # Before systemd 257, the only blocking mode had the weaker semantics.
+                if result == -errno.EINVAL and mode == b"block-weak":
+                    mode = b"block"
+                    result = inhibit(what, mode)
+                if what == b"idle:sleep" and result in (-errno.EACCES, -errno.EPERM):
+                    continue
+                check(result)
+                break
+            fd = ctypes.c_int(-1)
+            check(lib.sd_bus_message_read(reply, b"h", ctypes.byref(fd)))
+            lock_fd = os.dup(fd.value)  # The reply owns the original descriptor.
+        finally:
+            lib.sd_bus_message_unref(reply)
+            lib.sd_bus_unref(bus)
+        return lambda: os.close(lock_fd)
 
     def default_config_path(self, environ: Mapping[str, str]) -> Path:
         configured = environ.get("MATOLOOP_AGENT_CONFIG")

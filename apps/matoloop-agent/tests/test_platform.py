@@ -22,6 +22,9 @@ class FakePlatform:
     def maintenance_running(self, config):
         return False
 
+    def inhibit_idle_sleep(self):
+        raise AssertionError("A system info query must not inhibit sleep")
+
     def computer_name(self):
         return "test-computer"
 

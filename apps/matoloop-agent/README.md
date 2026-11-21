@@ -181,6 +181,25 @@ Setup is non-interactive and needs no administrator privileges. Updates retain t
 browser packages and probe matching Chromium before activation.
 OpenSCAD and interactive terminals are not advertised by the Windows adapter.
 
+## Idle sleep during local work
+
+The native Agent prevents automatic idle sleep while handling local operations, including browser
+setup, and for five minutes after the last one finishes. Idle connections and background polling
+do not extend that period. Commands typed into the personal terminal are not tracked through
+completion. Stopping the Agent releases the assertion without the grace period, as does a backend
+disconnect unless browser setup is still running locally. The Agent does not keep the display on
+or prevent screen locking.
+Do not rely on it to prevent sleep when closing the lid or explicitly putting the computer to sleep.
+
+macOS and Windows use native power management APIs. On Linux the Agent uses logind and falls back
+to an idle-only lock if the combined idle and sleep lock is denied. Support depends on the desktop
+and its power policy. Container Agents do not inhibit host sleep. If the OS does not grant an
+assertion, local work proceeds normally.
+
+To verify on macOS, run a shell command longer than the configured idle sleep time. Check
+`pmset -g assertions` for `MatoLoop Agent work` while it runs, and confirm that the assertion
+disappears five minutes after the work finishes or immediately when the Agent disconnects.
+
 ## Container updates and development checks
 
 Managed Docker Agents can update to the running backend's exact commit through **Agent aktualisieren** or `matoloop-agent update`. Updates survive restart; recreation restores the selected image version. Data and workspaces remain in their mounts. See [computer maintenance](../../docs/computer-maintenance.md) for lifecycle and recovery details and [Windows acceptance](../../docs/windows-agent-acceptance.md) for native validation.

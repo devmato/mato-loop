@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from typing import Any
 
 import websockets
@@ -48,6 +48,7 @@ from .protocol import (
     SkillCachePrepareArguments,
     SkillCacheReleaseArguments,
     StatArguments,
+    StrictModel,
     SystemInfo,
     SystemInfoArguments,
     TerminalCloseArguments,
@@ -62,10 +63,22 @@ from .protocol import (
     parse_inbound,
     validate_arguments,
 )
+from .sleep_inhibitor import SleepInhibitor
 
 logger = logging.getLogger(__name__)
 MAX_WIRE_BYTES = 1024 * 1024
 MAINTENANCE_DRAIN_SECONDS = 60
+# Background polling and bookkeeping are not work, even while a UI is open.
+PASSIVE_OPERATIONS = frozenset(
+    {
+        "system.info",
+        "terminal.read",
+        "integration.browser.status",
+        "integration.browser.setupread",
+        "integration.browser.view",
+        "cache.skills.release",
+    }
+)
 
 
 def serialize_message(message, max_bytes: int = MAX_WIRE_BYTES) -> str:
@@ -124,6 +137,8 @@ class MatoLoopAgent:
         self.operations = list(self.runtime.operations)
         self._request_tasks: set[asyncio.Task] = set()
         self._maintenance_starting = False
+        self._sleep_inhibitor = SleepInhibitor(self.platform.inhibit_idle_sleep)
+        self.browser.hold_setup_awake = self._sleep_inhibitor.hold
 
     def hello(self) -> Hello:
         home = self.filesystem.resolve_directory(self.config.home_directory.as_posix())
@@ -221,17 +236,26 @@ class MatoLoopAgent:
                 ) from exc
             raise AgentError("request.invalid", "Invalid operation arguments", params) from exc
 
+        passive = request.operation in PASSIVE_OPERATIONS or (
+            isinstance(arguments, GitChangesArguments) and arguments.status_only
+        )
+        with nullcontext() if passive else self._sleep_inhibitor.hold():
+            return await self._execute_operation(request.operation, arguments, stream, backend_id)
+
+    async def _execute_operation(
+        self, operation: str, arguments: StrictModel, stream, backend_id: str | None
+    ) -> dict[str, Any]:
         if isinstance(arguments, AdministratorArguments):
             from .administrator import run_administrator
 
             return await run_administrator(self.config, arguments, stream)
-        if request.operation == "shell.classify":
+        if operation == "shell.classify":
             return self.process.inspect_shell(
                 arguments.command, arguments.current_directory, resolve_paths=False
             )
 
-        if request.operation in BROWSER_ARGUMENT_MODELS:
-            return await self.browser.dispatch(request.operation, arguments)
+        if operation in BROWSER_ARGUMENT_MODELS:
+            return await self.browser.dispatch(operation, arguments)
         if isinstance(arguments, SystemInfoArguments):
             return await asyncio.to_thread(self.system_info, arguments.current_directory)
         if isinstance(arguments, MaintenanceStartArguments):
@@ -243,7 +267,7 @@ class MatoLoopAgent:
                 arguments.revision,
                 **(
                     {"before_start": self._interrupt_operations}
-                    if request.operation == "maintenance.update.interrupt"
+                    if operation == "maintenance.update.interrupt"
                     else {}
                 ),
             )
@@ -262,7 +286,7 @@ class MatoLoopAgent:
             return await changes(
                 self.filesystem, arguments.path, arguments.file, status_only=arguments.status_only
             )
-        if request.operation == "git.repository":
+        if operation == "git.repository":
             from .git import _check_removal_permissions, project_worktree_directory, repository
 
             result = {
@@ -296,15 +320,15 @@ class MatoLoopAgent:
                     )
                 ).as_posix()
             return result
-        if request.operation == "git.worktree":
+        if operation == "git.worktree":
             from .git import prepare_worktree
 
             return await prepare_worktree(self.config, self.filesystem, arguments)
-        if request.operation == "git.branch":
+        if operation == "git.branch":
             from .git import branch_action
 
             return await branch_action(self.config, self.filesystem, arguments)
-        if request.operation == "git.worktree.remove":
+        if operation == "git.worktree.remove":
             from .git import remove_worktree
 
             return await remove_worktree(self.config, self.filesystem, arguments)
@@ -373,7 +397,7 @@ class MatoLoopAgent:
                 self.filesystem.copy_or_move,
                 arguments.path,
                 arguments.destination,
-                move=request.operation == "filesystem.move",
+                move=operation == "filesystem.move",
             )
         if isinstance(arguments, RenameArguments):
             return await _run_mutation(
@@ -525,10 +549,10 @@ class MatoLoopAgent:
             return await self.openscad.render(
                 arguments,
                 backend_id,
-                six_views=request.operation == "integration.openscad.render6",
+                six_views=operation == "integration.openscad.render6",
             )
         # CacheClearArguments has no fields and is intentionally last.
-        if request.operation == "cache.clear":
+        if operation == "cache.clear":
             return await _run_mutation(lambda: {"removed": self.cache.clear()})
         raise AgentError("operation.unsupported", "Operation is not supported")
 
@@ -557,6 +581,7 @@ class MatoLoopAgent:
                         await asyncio.sleep(delay)
                         delay = min(delay * 2, 30.0)
         finally:
+            self._sleep_inhibitor.close()
             try:
                 await self.browser.close()
             finally:
@@ -688,13 +713,19 @@ class MatoLoopAgent:
                         await socket.close(code=1007, reason="Unexpected protocol message")
                         break
             finally:
-                reporter.cancel()
-                await asyncio.gather(reporter, return_exceptions=True)
-                for task in tasks.values():
-                    task.cancel()
                 try:
-                    await self.browser.close()
+                    reporter.cancel()
+                    await asyncio.gather(reporter, return_exceptions=True)
+                    for task in tasks.values():
+                        task.cancel()
+                    try:
+                        await self.browser.close()
+                    finally:
+                        await self.terminal.close_all()
+                    await asyncio.gather(*tasks.values(), return_exceptions=True)
+                    self.skill_cache.disconnect()
                 finally:
-                    await self.terminal.close_all()
-                await asyncio.gather(*tasks.values(), return_exceptions=True)
-                self.skill_cache.disconnect()
+                    # Browser setup is deliberately independent of the backend connection.
+                    setup = self.browser.setup_task
+                    if setup is None or setup.done():
+                        self._sleep_inhibitor.close()

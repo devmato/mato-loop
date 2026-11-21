@@ -14,7 +14,7 @@ from uuid import uuid4
 from playwright.async_api import Error as PlaywrightError
 from pydantic import ValidationError
 
-from matoloop_agent.browser import BrowserManager, BrowserRuntime
+from matoloop_agent.browser import BrowserManager, BrowserRuntime, NativeBrowserRuntime
 from matoloop_agent.browser_contracts import (
     BrowserControlArguments,
     BrowserExecuteArguments,
@@ -33,6 +33,7 @@ from matoloop_agent.connection import MatoLoopAgent
 from matoloop_agent.errors import AgentError
 from matoloop_agent.filesystem import Filesystem
 from matoloop_agent.process import ProcessRunner
+from matoloop_agent.sleep_inhibitor import SleepInhibitor
 from matoloop_agent.terminal import TerminalManager
 
 
@@ -386,6 +387,36 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 await pending
             close.assert_not_awaited()
             self.assertEqual(runtime.browser_id, self.browser_id)
+
+    async def test_setup_keeps_sleep_assertion_until_process_exit(self):
+        runtime = NativeBrowserRuntime(self.manager.config, None)
+        release = Mock()
+        inhibitor = SleepInhibitor(Mock(return_value=release))
+        self.addCleanup(inhibitor.close)
+        runtime.hold_setup_awake = inhibitor.hold
+        waiting, finished = asyncio.Event(), asyncio.Event()
+
+        async def wait():
+            waiting.set()
+            await finished.wait()
+
+        process = SimpleNamespace(
+            stdout=SimpleNamespace(read=AsyncMock(return_value=b"")),
+            returncode=None,
+            wait=wait,
+        )
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=process),
+            patch.object(asyncio.get_running_loop(), "call_later") as schedule,
+        ):
+            try:
+                with inhibitor.hold():
+                    await runtime.launch_setup(self.root, {})
+                    await waiting.wait()
+                schedule.assert_not_called()
+            finally:
+                finished.set()
+                await runtime.setup_task
 
     async def test_setup_replay_survives_terminal_and_browser_disconnect(self):
         entry = self.manager.terminal._spawn(

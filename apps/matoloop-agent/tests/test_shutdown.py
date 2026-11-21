@@ -18,6 +18,7 @@ from matoloop_agent.browser_contracts import BrowserOpenArguments
 from matoloop_agent.browser_worker import BrowserWorker
 from matoloop_agent.config import AgentConfig
 from matoloop_agent.connection import MatoLoopAgent
+from matoloop_agent.sleep_inhibitor import SleepInhibitor
 
 # Run the actual CLI and signal handling, replacing only pairing and test-specific I/O.
 CHILD = """
@@ -289,8 +290,11 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_disconnect_closes_browser_before_waiting_for_cancelled_request(self):
         started, closed = asyncio.Event(), asyncio.Event()
+        release_sleep = Mock()
 
-        async def dispatch(*args, **kwargs):
+        async def execute(*args, **kwargs):
+            acquire_sleep.assert_called_once_with()
+            release_sleep.assert_not_called()
             started.set()
             try:
                 await asyncio.Event().wait()
@@ -320,13 +324,16 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
                 f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/api/execution-agents/connect"
             )
             agent = MatoLoopAgent(self.config, "synthetic")
+            acquire_sleep = Mock(return_value=release_sleep)
+            agent._sleep_inhibitor = SleepInhibitor(acquire_sleep)
             with (
-                patch.object(agent, "dispatch", side_effect=dispatch),
+                patch.object(agent, "_execute_operation", side_effect=execute),
                 patch.object(agent.browser, "close", side_effect=closed.set) as close,
             ):
                 try:
                     await asyncio.wait_for(agent._connect_once(asyncio.Event()), 3)
                     close.assert_awaited_once()
+                    release_sleep.assert_called_once_with()
                 finally:
                     closed.set()
 
