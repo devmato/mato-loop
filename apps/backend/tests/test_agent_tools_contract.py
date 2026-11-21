@@ -2029,6 +2029,34 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
     assert "parameters" not in catalog
 
 
+def test_inactive_capability_catalog_explains_unconfigured_browser() -> None:
+    settings = ToolSettings()
+    integrations = IntegrationSettings()
+    capabilities = mock_tools_catalog.effective_tool_capabilities(settings)
+    effective = tool_registry.effective(
+        integrations,
+        tool_capabilities=capabilities,
+        tool_settings=settings,
+    )
+
+    groups = tool_registry.inactive_capability_groups(
+        integrations,
+        frozenset(effective.tools),
+        webfetch_enabled=False,
+        web_search_enabled=True,
+        memory_enabled=False,
+        memory_write_enabled=False,
+        tool_capabilities=capabilities,
+        tool_settings=settings,
+        execution_operations={"integration.browser.execute"},
+    )
+
+    assert (
+        'Browser: the selected computer supports browser operations, but no Browser '
+        'integration is available to this profile.'
+    ) in "\n".join(groups)
+
+
 def test_policy_disabled_integration_tool_points_to_integration_settings(monkeypatch) -> None:
     _shared_adapter(monkeypatch, AsyncMock())
     integrations = IntegrationSettings(instances=[_shared_integration("Tasks")])

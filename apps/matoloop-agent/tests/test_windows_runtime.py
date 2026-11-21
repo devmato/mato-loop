@@ -162,6 +162,25 @@ class WindowsRuntimeTests(unittest.TestCase):
                 self.assertEqual(
                     self.process.inspect_shell(command, self.wire)["requiredCategories"], categories
                 )
+        executable = self.home / "OdooPrototype.exe"
+        executable.write_bytes(b"")
+        process_command = (
+            f"Start-Process -FilePath '{executable}' "
+            "-ArgumentList '--urls','http://127.0.0.1:5137' "
+            f"-WorkingDirectory '{self.home}'"
+        )
+        process_inspection = self.process.inspect_shell(process_command, self.wire)
+        self.assertEqual(process_inspection["classification"], "write")
+        self.assertEqual(
+            [target["path"] for target in process_inspection["targets"]],
+            [executable.as_posix(), self.home.as_posix()],
+        )
+        web_inspection = self.process.inspect_shell(
+            "Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:5137/kunden' -TimeoutSec 3",
+            self.wire,
+        )
+        self.assertEqual(web_inspection["classification"], "write")
+        self.assertEqual(web_inspection["targets"], [])
 
         async def execute():
             chunks = []

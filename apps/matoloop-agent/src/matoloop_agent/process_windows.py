@@ -104,6 +104,11 @@ _READ_FILES = {
     "ls",
     "dir",
 }
+_NON_PATH_OPERAND_COMMANDS = {
+    "invoke-webrequest",
+    "start-process",
+    "stop-process",
+}
 
 
 def _encoded(command: str) -> str:
@@ -227,7 +232,11 @@ class WindowsProcess:
                     token.startswith("./")
                     or token.startswith("../")
                     or (len(token) > 2 and token[1:3] in {":/", ":\\"})
-                    or (name in _READ_FILES | _WRITES | _DELETES and not token.startswith("-"))
+                    or (
+                        name in _READ_FILES | _WRITES | _DELETES
+                        and name not in _NON_PATH_OPERAND_COMMANDS
+                        and not token.startswith("-")
+                    )
                 ):
                     continue
                 candidate = os.path.abspath(os.path.join(native(current_directory), token))
