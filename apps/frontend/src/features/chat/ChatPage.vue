@@ -24,6 +24,12 @@
         <q-btn flat no-caps color="primary" label="Archiv öffnen" :to="{ name: 'archive' }" />
       </template>
     </q-banner>
+    <q-banner v-if="positionLoadFailed" dense class="app-surface-tonal" role="alert">
+      Die gewünschte Stelle im Verlauf konnte nicht geladen werden.
+      <template #action>
+        <q-btn flat dense no-caps color="primary" label="Erneut versuchen" @click="retryPositionLoad" />
+      </template>
+    </q-banner>
     <q-scroll-area
       id="chat-scroll-area"
       ref="scrollArea"
@@ -102,7 +108,7 @@
               <span class="app-sr-only">Ältere Nachrichten werden geladen</span>
             </div>
             <q-banner
-              v-else-if="chat.olderMessagesLoadFailed"
+              v-else-if="chat.olderMessagesLoadFailed && !positionLoadFailed"
               dense
               rounded
               class="app-surface-tonal q-mb-md"
@@ -569,7 +575,7 @@ const trustedImageOrigins = computed(() => (
   trustedImageOriginsBySession.value.get(chat.current?.id) || emptyItems
 ))
 const {
-  followingBottom, transcriptPreparing, highlightedMessageId,
+  followingBottom, transcriptPreparing, highlightedMessageId, positionLoadFailed, retryPositionLoad,
   scheduleTranscriptLayout, loadOlderHistory, enableFollowMode,
   beginActivityResize, finishActivityResize, handleMessageRendered,
   handleVirtualScroll, handleScrollKey, handleScrollAreaMouseDown, scrollToTop

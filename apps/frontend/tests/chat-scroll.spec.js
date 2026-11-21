@@ -40,12 +40,12 @@ describe('chat scroll geometry', () => {
         getBoundingClientRect: () => ({ top: 0, bottom: 80 })
       },
       {
-        dataset: { messageId: 'visible' },
+        dataset: { messageId: 'visible', renderId: 'optimistic' },
         getBoundingClientRect: () => ({ top: 60, bottom: 180 })
       }
     ]
 
-    expect(chatReadingAnchor(target, elements)).toEqual({ id: 'visible', offsetTop: -40 })
+    expect(chatReadingAnchor(target, elements)).toEqual({ id: 'optimistic', messageId: 'visible', offsetTop: -40 })
   })
 
   it('restores the captured message offset after layout changes', () => {

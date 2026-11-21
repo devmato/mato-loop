@@ -1272,10 +1272,10 @@ describe('chat drafts', () => {
     api.get.mockReturnValueOnce(new Promise((resolve) => { finishLoad = resolve }))
     const first = chat.loadSession('session-1')
     const second = chat.loadSession('session-1')
-    const opening = [chat.current.messages[0].id, chat.loading, await chat.loadThroughMessage('older'), api.get.mock.calls.length]
+    const opening = [chat.current.messages[0].id, chat.loading, await chat.loadOlderMessages(), api.get.mock.calls.length]
     finishLoad({ data: { id: 'session-1', messages: [{ id: 'fresh' }] } })
     await Promise.all([first, second])
-    expect([opening, chat.current.messages[0].id]).toEqual([['cached', true, false, 1], 'fresh'])
+    expect([opening, chat.current.messages[0].id]).toEqual([['cached', true, [], 1], 'fresh'])
   })
 
   it('drops cached details and pending session responses when the owner changes', async () => {
@@ -1383,6 +1383,22 @@ describe('chat drafts', () => {
 
     expect(api.get).toHaveBeenCalledOnce()
     expect(chat.current.messages).toEqual([{ id: 'user-1' }])
+  })
+
+  it('ignores an older page from before an A → B → A session switch', async () => {
+    let finishOldPage
+    api.get.mockReturnValueOnce(new Promise(resolve => { finishOldPage = resolve }))
+    const chat = useChatStore()
+    const session = { id: 'session-1', nextMessageCursor: 'cursor-1', messages: [] }
+    chat.current = { ...session }
+    const oldPage = chat.loadOlderMessages()
+    api.get.mockResolvedValueOnce({ data: { id: 'session-2', messages: [] } })
+    await chat.loadSession('session-2')
+    api.get.mockResolvedValueOnce({ data: { ...session } })
+    await chat.loadSession('session-1')
+    finishOldPage({ data: { items: [{ id: 'stale' }] } })
+    await oldPage
+    expect(chat.current.messages).toEqual([])
   })
 
   it('merges a latest-page refresh into already loaded history', async () => {

@@ -11,6 +11,7 @@ import {
 // Keep interactive prepends smaller than the rendered slice so the current
 // message stays mounted while Quasar updates its range.
 const SCROLL_HISTORY_PAGE_SIZE = 8
+const STORED_MESSAGE_ID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i
 
 export function useChatViewport({ chat, route, scrollArea, scrollContent, virtualScroll, displayMessages, setWorkHistoryExpanded }) {
   const tabs = useSessionTabsStore()
@@ -18,6 +19,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   const routeMessageId = computed(() => typeof route.query.message === 'string' ? route.query.message : null)
   const followingBottom = ref(true)
   const transcriptPreparing = ref(Boolean(chat.current))
+  const positionLoadFailed = ref(false)
   const highlightedMessageId = ref(null)
   let target, observer, operation, scheduledFrame, userScrollTimer, highlightTimer
   let disposed = false
@@ -30,15 +32,13 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   let lastScrollTop = 0
   let stalledHistoryCursor = null
   let historyRequest = null
-  let positioningHistory = false
   let positionSessionId = chat.current?.id || null
 
   function savePosition() {
     if (tabs.items.some(tab => tab.key === positionSessionId) && !transcriptPreparing.value) {
-      tabs.readingPositions[positionSessionId] = {
-        following: followingBottom.value,
-        anchor: followingBottom.value ? null : captureAnchor() || readingAnchor
-      }
+      const anchor = !followingBottom.value && (operation ? readingAnchor : captureAnchor() || readingAnchor)
+      if (anchor) tabs.readingPositions[positionSessionId] = anchor
+      else delete tabs.readingPositions[positionSessionId]
     }
   }
   watch(routeSessionId, savePosition, { flush: 'sync' })
@@ -46,8 +46,19 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   const elements = () => [...(scrollContent.value?.querySelectorAll('[data-message-id]') || [])]
   const findElement = id => elements().find(element => element.dataset.messageId === id || element.dataset.renderId === id)
   const captureAnchor = () => chatReadingAnchor(target, elements())
+  const rowId = message => message.renderId || message.id
+  function findAnchorIndex(anchor) {
+    if (!anchor) return -1
+    const index = displayMessages.value.findIndex(message => rowId(message) === anchor.id)
+    return index >= 0 ? index : displayMessages.value.findIndex(message => message.id === anchor.messageId)
+  }
   const isCurrent = request => !disposed && operation === request && !chat.loading
-    && virtualScroll.value === request.virtualScroll
+    && virtualScroll.value === request.view && chat.current?.id === request.sessionId
+    && routeSessionId.value === request.routeId
+
+  function beginLayout(view, prepending = false) {
+    return (operation = { view, sessionId: chat.current?.id, routeId: routeSessionId.value, prepending })
+  }
 
   function cancelLayout() {
     clearTimeout(highlightTimer)
@@ -78,49 +89,99 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     if (disposed) return
     pending = true
     resetSizes ||= reset
-    if (userScrolling || operation || positioningHistory || scheduledFrame != null) return
+    if (userScrolling || operation || scheduledFrame != null) return
     scheduledFrame = window.requestAnimationFrame(() => {
       scheduledFrame = null
       void layoutTranscript()
     })
   }
 
-  // Search, initial positioning, follow mode and anchor restoration share this operation.
+  async function loadUntil(findIndex, request) {
+    let index = findIndex()
+    while (index < 0 && isCurrent(request) && chat.current?.nextMessageCursor) {
+      const cursor = chat.current.nextMessageCursor
+      await chat.loadOlderMessages(request.sessionId)
+      if (!isCurrent(request)) break
+      index = findIndex()
+      if (chat.current.nextMessageCursor === cursor) break
+    }
+    return index
+  }
+
+  async function loadReadingAnchor(anchor, request) {
+    const index = findAnchorIndex(anchor)
+    if (index >= 0 || !anchor || !chat.current?.nextMessageCursor) return index
+    // Local transcript rows (e.g. context summaries) have no message endpoint.
+    if (STORED_MESSAGE_ID.test(anchor.messageId) && !await chat.hasStoredMessage(request.sessionId, anchor.messageId)) return -1
+    if (!isCurrent(request)) return -1
+    return loadUntil(() => findAnchorIndex(anchor), request)
+  }
+
+  function retryPositionLoad() {
+    positionLoadFailed.value = false
+    scheduleTranscriptLayout()
+  }
+
+  async function position(request, index, edge, anchor, force = false) {
+    const id = index >= 0 ? rowId(displayMessages.value[index]) : null
+    if (id && (force || !findElement(id))) {
+      request.view.scrollTo(index, `${edge}-force`)
+      if (request.prepending) {
+        // Compensate before paint, then correct against Quasar's measured slice.
+        await nextTick()
+        if (!isCurrent(request)) return false
+        restoreChatReadingAnchor(target, findElement(id), anchor)
+        lastScrollTop = target?.scrollTop || 0
+      }
+      if (!await rendered(request)) return false
+    }
+    const element = id ? findElement(id) : null
+    if (id && !element) return false
+    if (edge === 'end') scrollChatToBottom(target)
+    else if (edge === 'center' && element && target) {
+      restoreChatReadingAnchor(target, element, {
+        offsetTop: Math.max(0, (target.clientHeight - element.getBoundingClientRect().height) / 2)
+      })
+    } else restoreChatReadingAnchor(target, element, anchor)
+    lastScrollTop = target?.scrollTop || 0
+    return element || true
+  }
+
   // Virtual-scroll events are notifications, not completion promises: reset may emit none.
   async function layoutTranscript() {
-    if (disposed || userScrolling || positioningHistory || chat.loading || chat.olderMessagesLoading || !virtualScroll.value
-      || revealMessageId && chat.current?.id !== routeSessionId.value) return
-    const request = {
-      virtualScroll: virtualScroll.value,
-      anchor: followingBottom.value ? null : readingAnchor || captureAnchor()
-    }
-    operation = request
+    if (disposed || userScrolling || operation || positionLoadFailed.value || chat.loading || chat.olderMessagesLoading || !virtualScroll.value
+      || routeSessionId.value && chat.current?.id !== routeSessionId.value) return
+    const request = beginLayout(virtualScroll.value)
     pending = false
     const messageId = revealMessageId
+    const opening = transcriptPreparing.value
+    let anchor = followingBottom.value ? null : readingAnchor || (!opening ? captureAnchor() : null)
     try {
       const matches = message => message.id === messageId || message.workHistory?.entries?.some(entry => (
         entry.message?.id === messageId || entry.batchId === messageId
       ))
-      let searchIndex = messageId ? displayMessages.value.findIndex(matches) : -1
-      while (!messageId && transcriptPreparing.value && request.anchor && !displayMessages.value.some(message => (message.renderId || message.id) === request.anchor.id)
-        && chat.current?.nextMessageCursor) {
-        const cursor = chat.current.nextMessageCursor
-        try { await chat.loadOlderMessages(chat.current.id) } catch { break /* Central API toast. */ }
+      let searchIndex = -1
+      try {
+        if (messageId) searchIndex = await loadUntil(() => displayMessages.value.findIndex(matches), request)
         if (!isCurrent(request)) return
-        if (chat.current?.nextMessageCursor === cursor) break
-      }
-      while (messageId && searchIndex < 0 && chat.current?.nextMessageCursor) {
-        const cursor = chat.current.nextMessageCursor
-        try { await chat.loadOlderMessages(chat.current.id) } catch { break /* The API interceptor reports failures. */ }
-        await nextTick()
-        if (!isCurrent(request)) return
-        searchIndex = displayMessages.value.findIndex(matches)
-        if (chat.current?.nextMessageCursor === cursor) break
+        if (searchIndex < 0 && opening && !followingBottom.value) {
+          const index = await loadReadingAnchor(anchor, request)
+          if (!isCurrent(request)) return
+          if (index < 0) {
+            // Do not reveal the incoming transcript at an inherited offset.
+            anchor = readingAnchor = null
+            delete tabs.readingPositions[request.sessionId]
+            followingBottom.value = true
+          }
+        }
+      } catch {
+        if (isCurrent(request)) positionLoadFailed.value = true
+        return
       }
       const searchedMessage = searchIndex >= 0 ? displayMessages.value[searchIndex] : null
       if (searchedMessage) {
         followingBottom.value = false
-        readingAnchor = request.anchor = null
+        anchor = readingAnchor = null
         highlightedMessageId.value = searchedMessage.id
         if (searchedMessage.id !== messageId) {
           setWorkHistoryExpanded(searchedMessage.workHistory.id || searchedMessage.id, true)
@@ -129,43 +190,27 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
       await nextTick()
       if (!isCurrent(request)) return
       request.refreshing = true
-      if (resetSizes) virtualScroll.value.reset?.()
-      else virtualScroll.value.refresh?.(-1)
+      if (resetSizes) request.view.reset?.()
+      else request.view.refresh?.(-1)
       request.refreshing = false
       resetSizes = false
       if (!await rendered(request)) return
       const messages = displayMessages.value
-      const anchorIndex = request.anchor
-        ? messages.findIndex(message => (message.renderId || message.id) === request.anchor.id) : -1
-      const index = searchedMessage ? messages.findIndex(matches) : followingBottom.value ? messages.length - 1 : anchorIndex
-      const id = searchedMessage?.id || (index >= 0 ? messages[index].renderId || messages[index].id : null)
-      if (index >= 0 && (searchedMessage || transcriptPreparing.value && request.anchor || !findElement(id))) {
-        virtualScroll.value?.scrollTo(index, searchedMessage ? 'center-force' : followingBottom.value ? 'end-force' : 'start-force')
-        if (!await rendered(request)) return
-      }
-      const element = id ? findElement(id) : null
-      // Do not uncover an initial transcript before Quasar has rendered its destination.
-      if (index >= 0 && !element) {
-        return
-      }
-      if (searchedMessage && element && target) {
-        restoreChatReadingAnchor(target, element, {
-          offsetTop: Math.max(0, (target.clientHeight - element.getBoundingClientRect().height) / 2)
-        })
-      } else if (followingBottom.value) scrollChatToBottom(target)
-      else restoreChatReadingAnchor(target, element, request.anchor)
-      lastScrollTop = target?.scrollTop || 0
+      const index = searchedMessage ? messages.findIndex(matches) : followingBottom.value ? messages.length - 1 : findAnchorIndex(anchor)
+      const edge = searchedMessage ? 'center' : followingBottom.value ? 'end' : 'start'
+      const element = await position(request, index, edge, anchor, Boolean(searchedMessage || opening && anchor))
+      if (!isCurrent(request) || !element) return
       transcriptPreparing.value = false
       // Focus only after Vue has removed inert, never while initial positioning is hidden.
       await nextTick()
       if (!isCurrent(request)) return
       if (searchedMessage) {
-        element?.focus({ preventScroll: true })
+        element.focus?.({ preventScroll: true })
         clearTimeout(highlightTimer)
         highlightTimer = window.setTimeout(() => { highlightedMessageId.value = null }, 2500)
       }
       if (revealMessageId === messageId) revealMessageId = null
-      if (!followingBottom.value) readingAnchor = captureAnchor() || request.anchor
+      if (!followingBottom.value) readingAnchor = captureAnchor() || anchor
       // Fetch one page at a time until collapsed history fills the viewport,
       // or prepended messages move the reading anchor away from the top edge.
       if (!messageId) maybeLoadOlderHistory()
@@ -179,7 +224,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
 
   function maybeLoadOlderHistory() {
     const cursor = chat.current?.nextMessageCursor
-    if (!transcriptPreparing.value && !revealMessageId && target?.clientHeight > 0
+    if (!transcriptPreparing.value && !revealMessageId && !positionLoadFailed.value && target?.clientHeight > 0
       && (target.scrollHeight <= target.clientHeight + 1
         || !followingBottom.value && target.scrollTop <= target.clientHeight)
       && cursor && !chat.olderMessagesLoadFailed && cursor !== stalledHistoryCursor) {
@@ -192,7 +237,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
       || chat.current.id !== routeSessionId.value) return
     const sessionId = chat.current.id
     const cursor = chat.current.nextMessageCursor
-    const request = { sessionId, firstMessage: chat.current.messages?.[0]?.id, anchor: captureAnchor() }
+    const request = { sessionId, firstMessage: chat.current.messages?.[0]?.id, anchor: captureAnchor() || readingAnchor }
     historyRequest = request
     try {
       await chat.loadOlderMessages(sessionId, followingBottom.value ? undefined : SCROLL_HISTORY_PAGE_SIZE)
@@ -208,40 +253,28 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     }
   }
 
-  async function positionPrependedHistory(request, anchor) {
-    const current = () => !disposed && historyRequest === request && !chat.loading
-      && chat.current?.id === request.sessionId && routeSessionId.value === request.sessionId
-      && virtualScroll.value === request.view && target && !revealMessageId && !followingBottom.value
+  async function positionPrependedHistory(anchor) {
     cancelLayout()
-    positioningHistory = true
+    const request = beginLayout(virtualScroll.value, true)
     try {
       await nextTick()
-      if (!current()) return
-      const index = displayMessages.value.findIndex(message => (message.renderId || message.id) === anchor.id)
-      if (index < 0) return
-      // Select the new slice before paint, then compensate in the same frame as Quasar's scrollTo.
-      request.view.scrollTo(index, 'start-force')
-      await nextTick()
-      if (!current()) return
-      restoreChatReadingAnchor(target, findElement(anchor.id), anchor)
-      await new Promise(resolve => window.requestAnimationFrame(resolve))
-      await nextTick()
-      if (!current()) return
-      restoreChatReadingAnchor(target, findElement(anchor.id), anchor)
-      lastScrollTop = target.scrollTop
-      readingAnchor = anchor
+      if (!isCurrent(request)) return
+      const index = findAnchorIndex(anchor)
+      if (index >= 0 && await position(request, index, 'start', anchor, true) && isCurrent(request)) {
+        readingAnchor = captureAnchor() || anchor
+      }
     } finally {
-      positioningHistory = false
+      if (operation === request) operation = null
     }
   }
 
   function handleVirtualScroll() {
-    if (positioningHistory) return
+    if (operation?.prepending) return
     if (operation && !operation.refreshing) pending = true
-    if (!operation && !followingBottom.value) {
+    if (!operation && userScrolling && !followingBottom.value) {
       const anchor = captureAnchor()
       readingAnchor = anchor || readingAnchor
-      if (userScrolling && anchor) maybeLoadOlderHistory()
+      if (anchor) maybeLoadOlderHistory()
     }
     if (!operation && (transcriptPreparing.value || revealMessageId)) scheduleTranscriptLayout()
   }
@@ -250,6 +283,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     if (!chat.current) return
     cancelLayout()
     revealMessageId = null
+    positionLoadFailed.value = false
     followingBottom.value = false
     readingAnchor = captureAnchor()
   }
@@ -257,7 +291,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   function updateFollowState() {
     const movedUp = target.scrollTop < lastScrollTop
     lastScrollTop = target.scrollTop
-    if (positioningHistory) return
+    if (transcriptPreparing.value || operation?.prepending) return
     if (operation && !userScrolling) return
     followingBottom.value = chatShouldFollowBottom(
       followingBottom.value, userScrolling && movedUp, userScrolling && !movedUp && chatBottomDistance(target) <= 64
@@ -278,6 +312,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   function beginUserScroll() {
     cancelLayout()
     revealMessageId = null
+    positionLoadFailed.value = false
     userScrolling = true
     clearTimeout(userScrollTimer)
   }
@@ -287,28 +322,28 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     userScrollTimer = window.setTimeout(() => {
       userScrolling = false
       // Momentum scrolling can continue after touchend; capture only when it settles.
-      if (!followingBottom.value) readingAnchor = captureAnchor()
+      if (!transcriptPreparing.value && !followingBottom.value) readingAnchor = captureAnchor() || readingAnchor
       scheduleTranscriptLayout()
     }, 180)
   }
 
-  function handleTouchStart() { touching = true; beginUserScroll() }
-  function handleTouchMove() { if (!userScrolling) beginUserScroll() }
+  function handleTouchStart() { if (!transcriptPreparing.value) { touching = true; beginUserScroll() } }
+  function handleTouchMove() { if (!transcriptPreparing.value && !userScrolling) beginUserScroll() }
   function handleTouchEnd() { touching = false; if (userScrolling) scheduleUserScrollEnd() }
   function handleWheel(event) {
-    if (!event.deltaY) return
+    if (transcriptPreparing.value || !event.deltaY) return
     beginUserScroll()
     scheduleUserScrollEnd()
   }
   function handleScrollKey(event) {
-    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey
+    if (transcriptPreparing.value || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey
       || event.target?.closest?.('input, textarea, select, [contenteditable="true"]')
       || !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) return
     beginUserScroll()
     scheduleUserScrollEnd()
   }
   function handleScrollAreaMouseDown(event) {
-    if (event.button !== 0 || !target || target.contains(event.target)) return
+    if (transcriptPreparing.value || event.button !== 0 || !target || target.contains(event.target)) return
     beginUserScroll()
     window.removeEventListener('mouseup', scheduleUserScrollEnd)
     window.addEventListener('mouseup', scheduleUserScrollEnd, { once: true })
@@ -317,6 +352,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   function enableFollowMode() {
     cancelLayout()
     revealMessageId = null
+    positionLoadFailed.value = false
     touching = userScrolling = false
     clearTimeout(userScrollTimer)
     followingBottom.value = true
@@ -332,17 +368,17 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
 
   watch([() => chat.current?.id, routeSessionId, routeMessageId], ([sessionId], previous = []) => {
     cancelLayout()
+    positionLoadFailed.value = false
     revealMessageId = routeMessageId.value
-    if (sessionId !== previous[0]) {
-      const saved = sessionId ? tabs.readingPositions[sessionId] : null
+    if (sessionId !== previous[0] || routeSessionId.value !== previous[1]) {
       positionSessionId = sessionId || null
       stalledHistoryCursor = null
       historyRequest = null
       clearTimeout(userScrollTimer)
       window.removeEventListener('mouseup', scheduleUserScrollEnd)
       touching = userScrolling = false
-      readingAnchor = saved?.anchor || null
-      followingBottom.value = saved?.following ?? true
+      readingAnchor = sessionId ? tabs.readingPositions[sessionId] || null : null
+      followingBottom.value = !readingAnchor
       transcriptPreparing.value = Boolean(sessionId)
       resetSizes = true
     }
@@ -351,11 +387,11 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   watch(displayMessages, () => {
     const request = historyRequest
     if (request && !request.positioned && !followingBottom.value && virtualScroll.value
+      && !revealMessageId && routeSessionId.value === request.sessionId
       && chat.current?.id === request.sessionId && chat.current.messages?.[0]?.id !== request.firstMessage) {
       const anchor = captureAnchor() || request.anchor || readingAnchor
       if (anchor) {
-        request.view = virtualScroll.value
-        request.positioned = positionPrependedHistory(request, anchor)
+        request.positioned = positionPrependedHistory(anchor)
         return
       }
     }
@@ -365,6 +401,9 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     if (loading) cancelLayout()
     else scheduleTranscriptLayout()
   }, { flush: 'sync' })
+  watch(() => chat.olderMessagesLoading, loading => {
+    if (!loading) scheduleTranscriptLayout()
+  })
   watch(() => chat.activeContext.sessionProfile?.messageSize || 'standard', () => scheduleTranscriptLayout(true), { flush: 'pre' })
   watch(virtualScroll, () => {
     cancelLayout()
@@ -398,7 +437,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   })
 
   return {
-    followingBottom, transcriptPreparing, highlightedMessageId,
+    followingBottom, transcriptPreparing, highlightedMessageId, positionLoadFailed, retryPositionLoad,
     scheduleTranscriptLayout, loadOlderHistory, enableFollowMode,
     beginActivityResize, finishActivityResize: () => scheduleTranscriptLayout(),
     handleMessageRendered: () => scheduleTranscriptLayout(), handleVirtualScroll,

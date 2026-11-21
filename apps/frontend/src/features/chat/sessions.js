@@ -9,6 +9,7 @@ import { downloadMessageAttachmentFiles, releaseAttachmentDrafts } from 'src/fea
 import { compareSessions, defaultSessionOptions, lastAssistantMessage, sanitizedSessionOptions, sessionBeforeUserMessage, sessionCreatePayload, sessionScopeKey, sessionScopeParams, sortSessions } from 'src/features/chat/state'
 import { deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
 import { notifyError } from 'src/utils/notifications'
+import { errorDescriptor } from 'src/utils/api-errors'
 import { SESSION_PAGE_SIZE, ACTIVE_TITLE_GENERATION_STATUSES, mergeMessages, sessionStateAfterMutation } from 'src/features/chat/model'
 import { useSessionTabsStore } from './session-tabs-store'
 import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
@@ -579,6 +580,17 @@ export const sessionsActions = {
       const { data } = await api.get(`/sessions/${id}`)
       return data
     },
+    async hasStoredMessage(sessionId, messageId) {
+      try {
+        await api.get(`/sessions/${sessionId}/messages/${messageId}`, {
+          params: { compact: true }, suppressErrorToast: true
+        })
+        return true
+      } catch (error) {
+        if (errorDescriptor(error)?.code === 'session.messageNotFound') return false
+        throw error
+      }
+    },
     async loadOlderMessages(id = this.current?.id, pageSize = SESSION_PAGE_SIZE) {
       if (this.loading) return []
       const session = this.current
@@ -591,7 +603,7 @@ export const sessionsActions = {
         const { data } = await api.get(`/sessions/${id}/messages`, {
           params: { cursor, pageSize }
         })
-        if (this.current?.id !== id || this.current.nextMessageCursor !== cursor) return []
+        if (this.olderMessagesPromise !== request || this.current?.id !== id || this.current.nextMessageCursor !== cursor) return []
         const existingIds = new Set((this.current.messages || []).map((message) => message.id))
         const added = (data.items || []).filter((message) => !existingIds.has(message.id))
         const existingSummaryIds = new Set(
@@ -611,23 +623,14 @@ export const sessionsActions = {
       try {
         return await request
       } catch (error) {
-        if (this.current?.id === id) this.olderMessagesLoadFailed = true
+        if (this.olderMessagesPromise === request) this.olderMessagesLoadFailed = true
         throw error
       } finally {
-        if (this.current?.id === id) this.olderMessagesLoading = false
-        if (this.olderMessagesPromise === request) this.olderMessagesPromise = null
+        if (this.olderMessagesPromise === request) {
+          this.olderMessagesLoading = false
+          this.olderMessagesPromise = null
+        }
       }
-    },
-    async loadThroughMessage(messageId) {
-      if (this.loading) return false
-      while (
-        this.current
-        && !this.current.messages?.some((message) => message.id === messageId)
-        && this.current.nextMessageCursor
-      ) {
-        await this.loadOlderMessages(this.current.id)
-      }
-      return Boolean(this.current?.messages?.some((message) => message.id === messageId))
     },
     async updateActive(patch, { draftOnly = false } = {}) {
       if (this.loading) return

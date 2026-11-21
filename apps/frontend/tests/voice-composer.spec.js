@@ -52,6 +52,7 @@ import ChatComposer from '../src/features/chat/components/ChatComposer.vue'
 import { quotedMessage } from '../src/features/chat/quote-drafts'
 import ChatPage from '../src/features/chat/ChatPage.vue'
 import { useChatStore } from '../src/features/chat/store'
+import { useSessionTabsStore } from '../src/features/chat/session-tabs-store'
 import { useAgentProfileStore } from '../src/stores/agent-profiles'
 import { useProviderStore } from '../src/stores/providers'
 import { useToolSettingsStore } from '../src/stores/tool-settings'
@@ -165,9 +166,10 @@ beforeEach(async () => {
     props: ['modelValue', 'options', 'disable'], emits: ['update:modelValue'],
     render() { return h('select', { value: this.modelValue ?? '', disabled: this.disable, onChange: event => this.$emit('update:modelValue', event.target.value || null) }, this.options.map(option => h('option', { value: option.value ?? '' }, option.label))) }
   })
-  for (const name of ['QCard', 'QCardActions', 'QForm', 'QIcon', 'QSpace', 'QBanner', 'QTooltip', 'QSpinner', 'QChip', 'QPopupProxy', 'QToolbar', 'QToolbarTitle', 'QSeparator', 'QCardSection']) {
+  for (const name of ['QCard', 'QCardActions', 'QForm', 'QIcon', 'QSpace', 'QTooltip', 'QSpinner', 'QChip', 'QPopupProxy', 'QToolbar', 'QToolbarTitle', 'QSeparator', 'QCardSection']) {
     app.component(name, { methods: { focus() {} }, render() { return h('div', this.$slots.default?.()) } })
   }
+  app.component('QBanner', { render() { return h('div', [this.$slots.default?.(), this.$slots.action?.()]) } })
   app.directive('close-popup', {})
   app.component('QPage', { render() { return h('div', this.$slots.default?.()) } })
   app.component('QSplitter', { render() { return h('div', this.$slots.before?.()) } })
@@ -323,14 +325,68 @@ describe('voice attachment composer', () => {
   it('reveals a switched session only after its transcript has been positioned', async () => {
     mocks.api.get.mockImplementation(async url => ({ data: url === '/sessions/session-1'
       ? { id: 'session-1', messages: [{ id: 'answer', role: 'assistant', content: 'Answer' }] }
-      : { items: [] } }))
+      : url === '/sessions/session-2' ? { id: 'session-2', messages: [{ id: 'next', role: 'user', content: 'Next' }] } : { items: [] } }))
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.chat-transcript:not(.invisible) [data-message-id="answer"]')).not.toBeNull())
-    chat.current = { id: 'session-2', messages: [{ id: 'next', role: 'user', content: 'Next' }] }
-    await nextTick()
-    const preparing = root.querySelector('.chat-transcript').classList.contains('invisible')
+    await router.push('/?session=session-2')
+    await vi.waitFor(() => expect(root.querySelector('.chat-transcript.invisible [data-message-id="next"]')).not.toBeNull(), { interval: 1 })
     await vi.waitFor(() => expect(root.querySelector('.chat-transcript:not(.invisible) [data-message-id="next"]')).not.toBeNull())
-    expect(preparing).toBe(true)
+  })
+
+  it('opens at the bottom when the saved reading anchor cannot be found', async () => {
+    const target = document.createElement('div')
+    Object.defineProperties(target, { clientHeight: { value: 400 }, scrollHeight: { value: 1400 } })
+    target.scrollTop = 250
+    mocks.scrollTarget = target
+    const deleted = '550e8400-e29b-41d4-a716-446655440001'
+    useSessionTabsStore().readingPositions['session-1'] = { id: deleted, messageId: deleted, offsetTop: 0 }
+    mocks.api.get.mockImplementation(async url => {
+      if (url.endsWith(deleted)) throw { response: { status: 404, data: { error: { code: 'session.messageNotFound' } } } }
+      return { data: url === '/sessions/session-1'
+        ? { id: 'session-1', messages: [{ id: 'latest', role: 'user', content: 'Latest' }], nextMessageCursor: 'older' }
+        : { items: [] } }
+    })
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.chat-transcript:not(.invisible) [data-message-id="latest"]') && target.scrollTop).toBe(1000))
+    expect(mocks.api.get.mock.calls.map(([url]) => url).filter(url => url.startsWith('/sessions/session-1/messages')))
+      .toEqual([`/sessions/session-1/messages/${deleted}`])
+  })
+
+  it('continues restoring a saved message after retrying a failed history page', async () => {
+    const target = document.createElement('div')
+    Object.defineProperties(target, { clientHeight: { value: 400 }, scrollHeight: { value: 1400 } })
+    target.getBoundingClientRect = () => ({ top: 0, bottom: 400 })
+    mocks.scrollTarget = target
+    const id = '550e8400-e29b-41d4-a716-446655440002'
+    const getBounds = HTMLElement.prototype.getBoundingClientRect
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      if (this.dataset.messageId === id) return { top: 120 - target.scrollTop, bottom: 300 - target.scrollTop }
+      return getBounds.call(this)
+    })
+    const saved = { id, role: 'user', content: 'Saved reading position' }
+    useSessionTabsStore().readingPositions['session-1'] = { id, messageId: id, offsetTop: -20 }
+    let fail = true
+    mocks.api.get.mockImplementation(async (url, config) => {
+      if (url === '/sessions/session-1') return { data: { id: 'session-1', messages: [{ id: 'latest', role: 'user' }], nextMessageCursor: 'first' } }
+      if (url.endsWith(id)) return { data: saved }
+      if (url === '/sessions/session-1/messages') {
+        if (config.params.cursor === 'first') {
+          if (fail) throw { response: { status: 500 } }
+          return { data: { items: [{ id: 'newer-than-anchor', role: 'user' }], nextCursor: 'second' } }
+        }
+        return { data: { items: [saved] } }
+      }
+      return { data: { items: [] } }
+    })
+    try {
+      showPage.value = true
+      await vi.waitFor(() => expect(root.textContent).toContain('Die gewünschte Stelle im Verlauf konnte nicht geladen werden.'))
+      fail = false
+      await click('Erneut versuchen')
+      await vi.waitFor(() => expect(root.querySelector(`.chat-transcript:not(.invisible) [data-message-id="${id}"]`)?.getBoundingClientRect().top).toBe(-20))
+    } finally {
+      bounds.mockRestore()
+    }
   })
 
   it('keeps the final touch-scroll position when a transcript update was deferred during the gesture', async () => {
