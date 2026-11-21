@@ -412,7 +412,13 @@ class ToolRegistry:
         tool_capabilities: set[str] | frozenset[str],
         tool_settings: ToolSettings,
         execution_operations: set[str] | frozenset[str] = frozenset(),
+        browser_setup_relevant: bool = False,
     ) -> tuple[str, ...]:
+        browser_unavailable = (
+            browser_setup_relevant
+            and "integration.browser.execute" in execution_operations
+            and "browser_tabs" not in offered_names
+        )
         active_definitions = self._combined_definitions(integration_settings)[0]
         installed_definitions = dict(self._definitions)
         installed_definitions.update(active_definitions)
@@ -471,9 +477,16 @@ class ToolRegistry:
             else:
                 reason = "temporary"
             reasons.add(reason)
+        if browser_unavailable:
+            reasons.add("browser")
 
         hints = {
             "integrations": 'Integrations: check the connection under "Integrationen" and access in the agent profile.',
+            "browser": (
+                'Browser: the selected computer supports browser operations, but no Browser '
+                'integration is available to this profile. Configure a personal Browser integration '
+                'under "Einstellungen > Integrationen", select this computer, and allow it for the agent profile.'
+            ),
             "media": 'Media: enable the tool and choose a capable model under "Standardmodelle".',
             "web": 'Web: enable access in the session or under "Einstellungen > Tools".',
             "memory": 'Memory: enable it for the session and its model.',

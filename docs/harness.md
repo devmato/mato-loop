@@ -336,6 +336,7 @@ The selected-computer context identifies an assigned worktree as the default for
 The question schema shares one branch for single and multiple choice while retaining a separate free-text branch. Tool names, accepted question shapes, and runtime validation stay the same. The new schema and shorter shell-progress guidance change the affected cache prefix once; their order remains stable in later requests.
 
 Inactive capability hints summarize settings/profile locations or workflow prerequisites by category, without listing tool names. Selected-computer context includes platform and workspace paths; use `get_system_info` for hardware details. Shorter host text and field descriptions change the affected provider prefix once; tool order and history serialization stay unchanged.
+Browser setup guidance appears only for eligible main chats; it is omitted where the session or run cannot use Browser tools. This changes the prompt prefix only for affected sessions, not the tool schemas or retained history.
 
 The shared prompt explains optional `_reason` fields once; tools retain any action-specific guidance and the same argument limits. File-reference instructions live on `provide_file`. These text changes affect the provider prefix once, not tool eligibility, approval behavior, or history serialization.
 

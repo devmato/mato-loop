@@ -20,6 +20,8 @@ from .windows_paths import absolute, native
 
 # Parse with the same installed PowerShell engine that executes the command.
 _INSPECTOR = r"""
+using namespace System.Management.Automation.Language
+
 $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = [Text.Encoding]::UTF8
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -30,6 +32,18 @@ $ast = [System.Management.Automation.Language.Parser]::ParseInput(
 )
 if ($errors.Count -gt 0) { [Console]::Out.WriteLine('{"syntaxError":true}'); exit 0 }
 $commands = @()
+$commandPaths = @()
+$pathParameters = @{
+  'Start-Process' = @('FilePath', 'WorkingDirectory', 'RedirectStandardInput',
+                      'RedirectStandardOutput', 'RedirectStandardError')
+  'Invoke-WebRequest' = @('InFile', 'OutFile')
+}
+$cmdlets = @{
+  'Start-Process' = 'Microsoft.PowerShell.Management\Start-Process'
+  'Invoke-WebRequest' = 'Microsoft.PowerShell.Utility\Invoke-WebRequest'
+}
+# Only load metadata from modules shipped with the selected PowerShell engine.
+$env:PSModulePath = Join-Path $PSHOME 'Modules'
 $complete = $true
 if ($ast.FindAll({ param($n)
   $n -is [System.Management.Automation.Language.AssignmentStatementAst] -or
@@ -53,6 +67,58 @@ foreach ($node in $ast.FindAll({
   }
   if (-not $name) { $complete = $false }
   $commands += ,@($words)
+  $paths = $null
+  if ($name -eq 'Stop-Process') { $paths = @() }
+  if ($name -and $cmdlets.Values -contains $name) { $name = $name.Split('\')[-1] }
+  if ($name -and $cmdlets.ContainsKey($name)) {
+    $paths = @()
+    # Resolve parameters against fixed built-in metadata, never the submitted command.
+    $parameters = (Get-Command -Name $cmdlets[$name] -CommandType Cmdlet).Parameters
+    $hasFilePath = $false
+    $firstPositional = $null
+    for ($i = 1; $i -lt $node.CommandElements.Count; $i++) {
+      $element = $node.CommandElements[$i]
+      if ($element -isnot [CommandParameterAst]) {
+        if ($null -eq $firstPositional) { $firstPositional = $element }
+        continue
+      }
+      $key = $element.ParameterName
+      $parameter = $parameters[$key]
+      if ($null -eq $parameter) {
+        $aliases = @($parameters.Values | Where-Object { $_.Aliases -contains $key })
+        if ($aliases.Count -eq 1) { $parameter = $aliases[0] }
+      }
+      if ($null -eq $parameter) {
+        $matches = @($parameters.Values | Where-Object {
+          $names = @($_.Name; $_.Aliases)
+          @($names | Where-Object {
+            $_.StartsWith($key, [StringComparison]::OrdinalIgnoreCase)
+          }).Count -gt 0
+        })
+        if ($matches.Count -eq 1) { $parameter = $matches[0] }
+      }
+      if ($null -eq $parameter) { $complete = $false; continue }
+      $value = $element.Argument
+      if ($null -eq $value -and $parameter.ParameterType -ne [switch] -and
+          $i + 1 -lt $node.CommandElements.Count -and
+          $node.CommandElements[$i + 1] -isnot [CommandParameterAst]) {
+        $i++
+        $value = $node.CommandElements[$i]
+      }
+      if ($parameter.Name -eq 'FilePath') { $hasFilePath = $true }
+      if ($pathParameters[$name] -contains $parameter.Name) {
+        if ($value -is [StringConstantExpressionAst]) {
+          $paths += $value.Value
+        } else { $complete = $false }
+      }
+    }
+    if ($name -eq 'Start-Process' -and -not $hasFilePath) {
+      if ($firstPositional -is [StringConstantExpressionAst]) {
+        $paths = @($firstPositional.Value) + $paths
+      } else { $complete = $false }
+    }
+  }
+  $commandPaths += ,$paths
 }
 $redirections = @($ast.FindAll({
   param($n) $n -is [System.Management.Automation.Language.FileRedirectionAst]
@@ -64,7 +130,7 @@ foreach ($redirection in $redirections) {
     $redirectPaths += $redirection.Location.Value
   } else { $complete = $false }
 }
-$result = @{commands=$commands; complete=$complete;
+$result = @{commands=$commands; commandPaths=$commandPaths; complete=$complete;
   redirect=($redirections.Count -gt 0); redirectPaths=$redirectPaths}
 [Console]::Out.WriteLine((ConvertTo-Json -InputObject $result -Compress -Depth 10))
 """
@@ -159,7 +225,7 @@ class WindowsProcess:
         commands = []
         writes = structure.get("redirect") is True
         required_categories = {"write"} if writes else set()
-        for unit in units:
+        for unit, command_paths in zip(units, structure["commandPaths"], strict=True):
             if not unit or not all(isinstance(token, str) for token in unit):
                 complete = False
                 continue
@@ -218,6 +284,7 @@ class WindowsProcess:
                 self.filesystem._checked(executable)
                 targets.append({"path": executable, "kind": "executable", "access": "read"})
             # Static file operands and explicit paths are inspected; dynamic forms are incomplete.
+            paths = dict.fromkeys(command_paths or ())
             for token in unit[1:]:
                 if token.startswith("-") or "$" in token or "`" in token:
                     if "$" in token or "`" in token:
@@ -227,9 +294,11 @@ class WindowsProcess:
                     token.startswith("./")
                     or token.startswith("../")
                     or (len(token) > 2 and token[1:3] in {":/", ":\\"})
-                    or (name in _READ_FILES | _WRITES | _DELETES and not token.startswith("-"))
+                    or (command_paths is None and name in _READ_FILES | _WRITES | _DELETES)
                 ):
                     continue
+                paths[token] = None
+            for token in paths:
                 candidate = os.path.abspath(os.path.join(native(current_directory), token))
                 path = candidate.replace("\\", "/")
                 path = path[0].upper() + path[1:]

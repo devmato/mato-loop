@@ -119,9 +119,13 @@ def select_turn_tools(
     hide_skill_catalog_tools = (
         not skill_state.catalog
     )
+    main_chat = (
+        session.session_type == "chat"
+        and session.parent_session_id is None
+        and run.parent_run_id is None
+    )
     if toolset is not None:
-        if (session.session_type != "chat" or session.parent_session_id is not None
-                or run.parent_run_id is not None):
+        if not main_chat:
             toolset = toolset.without("select_execution_agent", *(name for name in toolset.tools if name.startswith("browser_")))
         if ceiling is not None:
             toolset = toolset.only(*ceiling["toolNames"]).without("task")
@@ -169,6 +173,10 @@ def select_turn_tools(
         tool_capabilities=capabilities,
         tool_settings=tool_settings,
         execution_operations=execution_operations,
+        browser_setup_relevant=(
+            main_chat and model.supports_tools
+            and (ceiling is None or "browser_tabs" in ceiling["toolNames"])
+        ),
     )
     if tool_budget_exhausted and toolset is not None:
         toolset = toolset.only(*previous_tool_names)
