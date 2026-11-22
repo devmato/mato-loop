@@ -2,6 +2,8 @@ import { technicalDetailsDisplay } from 'src/features/approvals/display'
 import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
 import { cleanUrlForDisplay } from 'src/shared/url-display'
 
+export const TOOL_SCRIPT = 'run_tool_script'
+
 const TOOL_DISPLAY = {
   task: { label: 'Subagent starten', icon: 'account_tree' },
   question: { label: 'Rückfrage stellen', icon: 'help_outline' },
@@ -149,6 +151,7 @@ function validToolDisplay(value) {
 
 export function toolIdentity(tool) {
   const name = typeof tool === 'string' ? tool : tool?.name
+  if (name === TOOL_SCRIPT) return { label: 'Skriptausführung', icon: 'code' }
   const supplied = validToolDisplay(tool?.toolDisplay) ? tool.toolDisplay : null
   const group = supplied?.group || (name === 'browser' || name?.startsWith('browser_') ? 'web' : '')
   const fallback = TOOL_DISPLAY[name]
@@ -301,6 +304,7 @@ export function toolPresentation(tool, displayItems = []) {
     }
   }
   if (suppliedItems.length) return { summary: toolSummary(tool), items: suppliedItems }
+  if (tool?.name === TOOL_SCRIPT) return { summary: '', items: [] }
 
   if (tool?.name === 'update_user_profile' || (tool?.name === 'customize_matoloop'
     && tool.arguments?.area === 'user_profile' && tool.arguments?.action === 'update')) {
@@ -354,6 +358,7 @@ export function toolPresentation(tool, displayItems = []) {
 }
 
 export function toolSummary(tool) {
+  if (tool?.name === TOOL_SCRIPT) return ''
   const suppliedDisplay = validToolDisplay(tool?.toolDisplay)
   if (suppliedDisplay && tool.toolDisplay.summary !== undefined) return displayText(tool.toolDisplay.summary)
   const argumentsValue = tool?.arguments
@@ -594,6 +599,11 @@ export function parseToolResult(content, toolName = null, message = null) {
       errorMessage: null
     }
   }
+}
+
+export function hiddenToolScript({ tool, result, approval, question }) {
+  return tool?.name === TOOL_SCRIPT && !approval && !question
+    && !parseToolResult(result?.content, TOOL_SCRIPT, result).error
 }
 
 export function toolStatus({ result, approval, question, active }) {

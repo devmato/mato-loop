@@ -19,7 +19,9 @@ from mato_loop_backend.agent.run_support import (
     _tool_call_signature,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.script_tools import SCRIPT_TOOL
 from mato_loop_backend.agent.subagents import integration_ceiling_ids, permission_snapshot
+from mato_loop_backend.agent.tool_round import ToolBatchResult
 from mato_loop_backend.files.service import RootFileError
 from mato_loop_backend.models import ExecutionAgent, Message, WebSearchPolicy
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
@@ -35,6 +37,107 @@ from mato_loop_backend.tools.registry import ToolRegistry
 from mato_loop_backend.tools.secrets import resolve_sudo_password
 
 pytestmark = pytest.mark.usefixtures("skill_library")
+
+
+@pytest.mark.parametrize("failure", ["empty", "javascript", "continuation"])
+async def test_repeated_distinct_empty_scripts_end_with_answer_only_after_evidence(monkeypatch, failure):
+    codes = ["throw new Error('one');", "throw new Error('two');"] if failure == "javascript" else ["return;", "return null;"]
+    answers = [ProviderResult(content="The supported answer.")]
+    if failure == "continuation":
+        answers.append(ProviderResult(content="Answer to the continuation."))
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=[ToolCall("read", "read", {"root": "files", "path": "facts.txt"})])]
+        + [ProviderResult(tool_calls=[ToolCall(str(index), SCRIPT_TOOL, {"code": code})])
+           for index, code in enumerate(codes)] + answers,
+        max_tool_calls=None, search_policy=WebSearchPolicy.DISABLED, scripted_tools_enabled=True,
+    )
+    evidence = tool_registry._execute_definition.return_value
+
+    async def execute(call, context, tool):
+        if call.name == SCRIPT_TOOL:
+            return await tool.definition.handler(tool.definition.validate_arguments(call.arguments), context)
+        assert call.name == "read"
+        return evidence
+
+    tool_registry._execute_definition.side_effect = execute
+    if failure == "continuation":
+        complete = ProviderService.complete
+        continuation_pending = False
+
+        async def complete_with_continuation(*args, **kwargs):
+            nonlocal continuation_pending
+            continuation_pending = kwargs["tool_choice"] == "none"
+            return await complete(*args, **kwargs)
+
+        async def await_continuations(_run_id):
+            nonlocal continuation_pending
+            pending, continuation_pending = continuation_pending, False
+            return pending
+
+        monkeypatch.setattr(ProviderService, "complete", staticmethod(complete_with_continuation))
+        monkeypatch.setattr(AgentRuntime, "_await_continuations", await_continuations)
+        monkeypatch.setattr(AgentRuntime, "_resume_continuation", AsyncMock())
+    await AgentRuntime._execute_loop(db, run)
+
+    expected = ["auto", "auto", "auto", "none"] + (["auto"] if failure == "continuation" else [])
+    assert [request["tool_choice"] for request in requests] == expected
+
+
+async def test_repeated_calls_do_not_finalize_with_new_memory_write_pending(monkeypatch):
+    db, run, *_ = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=[ToolCall("script", SCRIPT_TOOL, {"code": "return 1;"})]),
+         ProviderResult(content="An answer without finishing the memory workflow.")],
+        max_tool_calls=None, search_policy=WebSearchPolicy.DISABLED, scripted_tools_enabled=True,
+    )
+    monkeypatch.setattr(mock_agent_loop, "execute_tool_batch", AsyncMock(return_value=ToolBatchResult(
+        read_evidence_available=True, repeated_tool_call_limit_reached=True, memory_workflow_started=True,
+    )))
+    with pytest.raises(AgentRunError, match="agent.repeatedToolCall"):
+        await AgentRuntime._execute_loop(db, run)
+
+
+@pytest.mark.parametrize("retry_directly", [False, True])
+async def test_failed_script_does_not_repeat_a_successful_session_edit(monkeypatch, retry_directly):
+    args = "{root: 'files', path: 'x.txt', oldString: 'X', newString: 'XY'"
+    codes = [
+        "await callTool('edit_file', " + args + "}); throw new Error('later step failed');",
+        "return await callTool('edit_file', " + args + ", _reason: 'Retry'});",
+    ]
+    scripted_attempts = [ToolCall(str(index), SCRIPT_TOOL, {"code": code}) for index, code in enumerate(codes)]
+    if retry_directly:
+        scripted_attempts[1] = ToolCall("1", "edit_file", {
+            "root": "session", "path": "x.txt", "oldString": "X", "newString": "XY", "_reason": "Retry",
+        })
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=[call]) for call in scripted_attempts]
+        + [ProviderResult(content="The original edit remains applied.")],
+        search_policy=WebSearchPolicy.DISABLED, scripted_tools_enabled=True,
+    )
+    edits = []
+
+    async def assign_message_ids():
+        for message in _tool_messages(db):
+            if message.id is None:
+                message.id = uuid4()
+
+    db.flush.side_effect = assign_message_ids
+
+    async def execute(call, context, tool):
+        if call.name == SCRIPT_TOOL:
+            return await tool.definition.handler(tool.definition.validate_arguments(call.arguments), context)
+        assert call.name == "edit_file"
+        edits.append(call.arguments)
+        return ToolResult.json({"edited": "x.txt"})
+
+    tool_registry._execute_definition.side_effect = execute
+    await AgentRuntime._execute_loop(db, run)
+
+    assert {"edit_file", SCRIPT_TOOL} <= {schema["name"] for schema in requests[1]["tools"]}
+    assert len(edits) == 1
+    assert _tool_messages(db)[-1].provider_data["_matoloop"]["errorCode"] == "tool.scriptEditAlreadyApplied"
 
 
 @pytest.mark.parametrize("transmitted", [30_000, None])

@@ -1,9 +1,13 @@
 import asyncio
 import json
+from unittest.mock import Mock
 from uuid import uuid4
+
+import pytest
 
 from mato_loop_backend.agent import script_tools
 from mato_loop_backend.agent.projection import _target_tool_result
+from mato_loop_backend.agent.tool_round import session_edit_replay_key
 from mato_loop_backend.settings import TrustLevel
 from mato_loop_backend.settings.models import ModelConfig
 
@@ -15,19 +19,20 @@ def test_script_opt_in_is_off_by_default_and_requires_tools():
     assert not ModelConfig(**config, supports_tools=False, scriptedToolsEnabled=True).scripted_tools_enabled
 
 
-def test_script_mode_exposes_ordinary_tools_only_in_the_catalog():
+def test_script_mode_reuses_direct_schemas_and_keeps_controls_direct_only():
     schemas = [
         {"name": "read", "description": "Read a file", "parameters": {"type": "object"}},
         {"name": "question"},
         script_tools.DEFINITION.schema(),
     ]
     direct, script_names = script_tools.tool_call_offer(schemas, True)
-    assert [schema["name"] for schema in direct] == ["question", "run_tool_script"]
+    assert direct[:2] == schemas[:2]
     assert script_names == {"read"}
     assert direct[-1]["description"] == schemas[-1]["description"]
     description = direct[-1]["parameters"]["properties"]["code"]["description"]
-    assert "untrusted remote metadata" in description
-    assert json.loads(description.splitlines()[-1]) == schemas[:1]
+    assert description.endswith("Only these offered tools can run inside a script: read.")
+    assert "Read a file" not in description
+    assert script_tools.tool_call_offer(schemas[1:], True) == ([schemas[1]], frozenset())
     assert script_tools.tool_call_offer(schemas[:2], False) == (schemas[:2], frozenset())
 
 
@@ -44,6 +49,27 @@ async def test_script_chains_data_without_ambient_capabilities():
     }
 
 
+@pytest.mark.parametrize(("ending", "code"), [
+    ("return 'x'.repeat(16_001);", "tool.scriptOutputLimit"),
+    ("throw new Error('private exception text');", "tool.scriptJavaScriptFailed"),
+])
+async def test_script_late_failure_preserves_progress(ending, code):
+    steps = []
+
+    async def dispatch(name, _args):
+        steps.append({"tool": name, "messageId": str(uuid4()), "status": "completed"})
+
+    result = await script_tools.run_script(
+        script_tools.ScriptArguments(code=f"await callTool('read'); {ending}"), dispatch,
+    )
+    script_tools.with_script_progress(result, steps, 4)
+    assert json.loads(result.content) == {
+        "error": {"code": code, "message": json.loads(script_tools.ToolResult.error(code).content)["error"]["message"],
+                  "params": {"toolCalls": 1}},
+        "scriptSteps": steps, "runToolCalls": 4,
+    }
+
+
 async def test_script_cannot_catch_host_denial_and_continue():
     calls = []
 
@@ -56,6 +82,11 @@ async def test_script_cannot_catch_host_denial_and_continue():
         await callTool('second');
     """), dispatch)
     assert calls == ["first"] and result.metadata["errorCode"] == "permission.userDenied"
+
+
+async def test_script_with_no_calls_or_result_is_not_reported_as_success():
+    result = await script_tools.run_script(script_tools.ScriptArguments(code="return;"), None)
+    assert result.metadata["errorCode"] == "tool.scriptNoProgress"
 
 
 async def test_script_runaway_loop_times_out(monkeypatch):
@@ -99,3 +130,13 @@ def test_private_script_output_is_not_replayed_to_public_model():
     result = _target_tool_result("run_tool_script", '{"result":"private"}', TrustLevel.PUBLIC,
                                  source_trust_level="private")
     assert json.loads(result) == {"redactedPrivateContext": True}
+
+
+def test_script_edit_replay_identity_ignores_permission_reason_and_root_alias():
+    files = Mock()
+    files.normalize_relative_path.side_effect = lambda path: path
+    args = {"root": "files", "path": "example.txt", "oldString": "X", "newString": "XY"}
+    key = session_edit_replay_key("edit_file", args, files)
+    assert key and key == session_edit_replay_key(
+        "edit_file", {**args, "root": "session", "replaceAll": False, "_reason": "A retry"}, files,
+    )

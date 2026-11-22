@@ -706,6 +706,10 @@ class WebSearchArguments(ToolArguments):
         ),
     )
     search_type: Literal["web", "images"] = "web"
+    timeout: int | None = Field(
+        default=None, ge=1, le=35,
+        description="Optional search deadline in seconds. Omit for the provider default.",
+    )
 
 
 class WebFetchArguments(ToolArguments):

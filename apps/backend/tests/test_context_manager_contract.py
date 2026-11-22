@@ -963,6 +963,7 @@ def test_script_steps_visible_in_chat_but_not_replayed_to_provider() -> None:
     live = {**parent, "arguments": {"code": "return 42;"}}
     projected = _projection_messages("System", None, [user, assistant, intermediate, result], TrustLevel.PRIVATE,
                                      live_tool_calls={assistant.id: [live]})
+    assert next(item["tool_calls"] for item in projected if item.get("tool_calls"))[0]["arguments"] == {}
     for serialize in (_chat_messages, _responses_input):
         assert json.dumps(serialize(projected)) == json.dumps(serialize(baseline))
 

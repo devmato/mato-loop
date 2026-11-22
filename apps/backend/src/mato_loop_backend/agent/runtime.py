@@ -1445,6 +1445,8 @@ class AgentRuntime:
         db: AsyncSession, session_id: UUID, *, run_id: UUID
     ) -> None:
         from mato_loop_backend.agent.interaction_context import tool_batches
+        from mato_loop_backend.agent.script_tools import SCRIPT_TOOL, with_script_progress
+        from mato_loop_backend.tools.contracts import ToolResult
 
         records = list((await db.scalars(
             select(Message).where(
@@ -1459,36 +1461,65 @@ class AgentRuntime:
             return
         assistant = records[batch]
         _, results = tool_batches(records)
+        saved = {item.tool_call_id: item for item in records[batch + 1:] if item.role == "tool"}
         missing = [
-            (str(call["id"]), {})
+            (str(call["id"]), {"toolName": call["name"]} if call.get("name") else {})
             for call in assistant.tool_calls
             if call.get("id") and (batch, call["id"]) not in results
         ]
         script_calls = (assistant.provider_data or {}).get("_matoloop", {}).get("scriptToolCalls", {})
         if script_calls:
-            finished = {item.tool_call_id for item in records[batch + 1:] if item.role == "tool"}
             missing.extend(
                 (call_id, {"scriptParent": child["scriptParent"], "toolName": child["name"]})
-                for call_id, child in script_calls.items() if call_id not in finished
+                for call_id, child in script_calls.items() if call_id not in saved
             )
         if not missing:
             return
         content = json.dumps(
             error_payload("tool.executionInterrupted"), ensure_ascii=False
         )
-        db.add_all(
-            [
-                Message(
-                    session_id=session_id,
-                    role="tool",
-                    content=content,
-                    tool_call_id=tool_call_id,
-                    trust_level=assistant.trust_level,
-                    provider_data={"_matoloop": {"runId": str(run_id), "fileOutputsPending": True, **binding}},
-                )
-                for tool_call_id, binding in missing
-            ]
-        )
+        inserted = {
+            tool_call_id: Message(
+                id=uuid4(),
+                session_id=session_id,
+                role="tool",
+                content=content,
+                tool_call_id=tool_call_id,
+                trust_level=assistant.trust_level,
+                provider_data={"_matoloop": {
+                    "runId": str(run_id), "fileOutputsPending": True,
+                    "errorCode": "tool.executionInterrupted", **binding,
+                }},
+            )
+            for tool_call_id, binding in missing
+        }
+        count = sum(
+            item.role == "tool" and item.provider_data["_matoloop"].get("toolName") not in {None, SCRIPT_TOOL}
+            for item in records
+        ) + sum(binding.get("toolName") not in {None, SCRIPT_TOOL} for _, binding in missing)
+        for parent in inserted.values():
+            if parent.provider_data["_matoloop"].get("toolName") != SCRIPT_TOOL:
+                continue
+            children = []
+            for call_id, trace in sorted(script_calls.items(), key=lambda item: item[1].get("scriptIndex", 0)):
+                if trace.get("scriptParent") != parent.tool_call_id:
+                    continue
+                result = saved.get(call_id) or inserted.get(call_id)
+                if result is None:
+                    continue
+                host = result.provider_data["_matoloop"]
+                error = "tool.executionInterrupted" if call_id in inserted else host.get("errorCode")
+                children.append({
+                    "tool": trace["name"], "messageId": str(result.id),
+                    "status": "error" if error else (
+                        "deferred" if host.get("repositoryInstructionsDeferred") else "completed"
+                    ),
+                    **({"errorCode": error} if error else {}),
+                })
+                if result.trust_level == TrustLevel.PRIVATE.value:
+                    parent.trust_level = TrustLevel.PRIVATE.value
+            parent.content = with_script_progress(ToolResult(content, {}), children, count).content
+        db.add_all(list(inserted.values()))
         await db.flush()
 
     @staticmethod

@@ -318,6 +318,11 @@ def general_system_prompt(
             "profile allows it. No other proactive discovery."
         )
     if offered_tool_names:
+        if "run_tool_script" in offered_tool_names:
+            parts.append(
+                "Use offered tools directly or use run_tool_script to combine predictable dependent steps. "
+                "Do not rerun completed steps when changing how you call tools."
+            )
         parts.extend(
             [
                 "Call only supplied schemas when facts or actions require them.",

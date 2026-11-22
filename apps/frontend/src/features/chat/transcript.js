@@ -1,4 +1,5 @@
 import { runWarningEntries } from 'src/features/chat/agent-activity'
+import { hiddenToolScript, TOOL_SCRIPT } from 'src/features/chat/tool-display'
 import { toolFileActions, toolOpenFileActions } from 'src/features/files/attachments'
 import { apiErrorMessage } from 'src/utils/api-errors'
 
@@ -61,6 +62,17 @@ export function groupWorkHistoryEntries(entries = [], current = null, includePen
     grouped.push(entry)
   }
   return grouped
+}
+
+function toolHistoryEntries(items) {
+  const children = new Map(items.filter(({ tool }) => tool.name === TOOL_SCRIPT && tool.id).map(({ tool }) => [tool.id, []]))
+  for (const item of items) {
+    children.get(item.tool.scriptParent)?.push(item)
+  }
+  // The API appends script children to the batch. Show them in their parent's slot, before its result.
+  return items.flatMap((item) => children.has(item.tool.scriptParent) ? [] : [
+    ...(children.get(item.tool.id) || []), item
+  ]).filter((item) => !hiddenToolScript(item)).map((item) => ({ ...item, type: 'tool' }))
 }
 
 export function buildChatTranscript(
@@ -141,11 +153,13 @@ export function buildChatTranscript(
         const question = currentRound ? questionsByToolCall.get(requestKey) || null : null
         if (approval) matchedApprovalIds.add(approval.id)
         if (question) matchedQuestionIds.add(question.id)
-        const active = currentRound && toolExecutionActive && !result && !approval && !question && (activeToolCallId
+        const executionPending = currentRound && toolExecutionActive && !result
+          && !hiddenToolScript({ tool, result, approval, question })
+        const active = executionPending && !approval && !question && (activeToolCallId
           ? tool.id === activeToolCallId
           : !activeAssigned && !executionBlocked)
         if (active) activeAssigned = true
-        if (currentRound && toolExecutionActive && !result && !activeToolCallId) executionBlocked = true
+        if (executionPending && !activeToolCallId) executionBlocked = true
         return {
           key: `${message.id || index}:${tool.id || toolIndex}:${toolIndex}`,
           batchId: message.id || index,
@@ -255,7 +269,7 @@ export function buildChatTranscript(
             }
           }]
         : []),
-      ...message.toolCalls.map((item) => ({ ...item, type: 'tool' }))
+      ...toolHistoryEntries(message.toolCalls)
     ])
     const reasoningItems = workEntries
       .filter((entry) => entry.type === 'reasoning')

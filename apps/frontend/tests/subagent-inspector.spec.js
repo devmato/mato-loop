@@ -122,6 +122,72 @@ describe('subagent inspector navigation and presentation', () => {
     }).toEqual({ tools: expanded ? ['saved.txt', 'denied.txt'] : [], activity: 'Verarbeite Anfrage', count: expanded ? '· 2' : undefined })
   })
 
+  it('hides internal script steps while preserving real tool approvals and script failures', async () => {
+    const script = { id: 'script', name: 'run_tool_script', toolDisplay: { label: 'Tools per Skript aufrufen', group: 'agent', icon: 'smart_toy' } }
+    const child = { id: 'child', name: 'read_file', scriptParent: script.id, arguments: { path: 'plan.md' } }
+    const carrier = { id: 'round', role: 'assistant', runId: 'run', toolCalls: [script, child] }
+    const approval = { id: 'approval', runId: 'run', title: 'Datei lesen?', details: { toolCallId: child.id } }
+    const childResult = { role: 'tool', toolCallId: child.id, content: 'Plan' }
+    const phase = ref('script')
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => {
+      const running = phase.value !== 'retained'
+      const messages = phase.value === 'child' ? [carrier, childResult] : phase.value === 'failure' ? [carrier, childResult,
+        { role: 'tool', toolCallId: script.id, content: '{"error":{"code":"tool.scriptJavaScriptFailed"}}' }
+      ] : running ? [carrier] : [
+        { ...carrier, toolCalls: [
+          { id: 'before', name: 'write_file', arguments: { path: 'before.md' } },
+          script,
+          { id: 'after', name: 'edit_file', arguments: { path: 'after.md' } },
+          { ...script, id: 'succeeded' },
+          child
+        ] },
+        childResult,
+        { role: 'tool', toolCallId: script.id, content: '{"error":{"code":"tool.scriptOutputLimit"}}' },
+        { role: 'tool', toolCallId: 'succeeded', content: '{"result":null,"toolCalls":0}' }
+      ]
+      const activity = ['child', 'failure'].includes(phase.value)
+        ? { phase: phase.value === 'child' ? 'processing_tool' : 'waiting_model', tool: child.name, toolCallId: child.id }
+        : { phase: 'processing_tool', tool: script.name, toolCallId: script.id, activityLabel: script.toolDisplay.label }
+      const transcript = buildChatTranscript(messages, phase.value === 'approval' ? [approval] : [], {
+        running, activeToolCallId: activity.toolCallId,
+        completedToolCallId: phase.value === 'failure' ? script.id : phase.value === 'child' ? child.id : null
+      })
+      const presentation = agentRunPresentation({ running, activity, transcript })
+      return h(AgentActivityPanel, { running, activity, presentation, expanded: !running,
+        history: transcript.messages[0]?.workHistory || { entries: [] } })
+    } })
+    app.use(createPinia()).use(Quasar, { components })
+    mountApp()
+
+    const rows = () => [...root.querySelectorAll('.activity-row')].map((row) => [
+      row.querySelector('.work-history__activity-title')?.textContent.trim(),
+      row.querySelector('.work-history__activity-summary')?.textContent,
+      row.querySelector('.tool-call__status [role="img"]')?.getAttribute('aria-label')
+    ].filter(Boolean).join(' | '))
+    const liveScript = rows()
+    phase.value = 'approval'
+    await nextTick()
+    const liveApproval = rows()
+    phase.value = 'child'
+    await nextTick()
+    const liveChild = rows()
+    phase.value = 'failure'
+    await nextTick()
+    const liveFailure = rows()
+    phase.value = 'retained'
+    await nextTick()
+    expect([liveScript, liveApproval, liveChild, liveFailure, rows()]).toEqual([
+      ['Verarbeite Anfrage'],
+      ['Datei lesen | plan.md | Freigabe erforderlich'],
+      ['Datei lesen | plan.md'],
+      ['Skriptausführung | Bei der Skriptausführung ist ein JavaScript-Fehler aufgetreten. | Fehlgeschlagen'],
+      ['Datei schreiben | before.md', 'Datei lesen | plan.md',
+        'Skriptausführung | Die Skriptausgabe hat das Größenlimit überschritten. | Fehlgeschlagen', 'Datei bearbeiten | after.md']
+    ])
+  })
+
   it.each([
     ['pending', true, false],
     ['recovered', false, false],

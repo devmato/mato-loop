@@ -159,10 +159,10 @@ def _compact_results(
 
 
 async def search_without_api_key(
-    query: str, *, search_type: Literal["web", "images"] = "web"
+    query: str, *, search_type: Literal["web", "images"] = "web", timeout: float = 35,
 ) -> str:
     def execute() -> list[dict[str, str]]:
-        client = DDGS(timeout=30)
+        client = DDGS(timeout=min(30, timeout))
         search = client.images if search_type == "images" else client.text
         try:
             return search(
@@ -175,7 +175,7 @@ async def search_without_api_key(
             return []
 
     try:
-        async with asyncio.timeout(35):
+        async with asyncio.timeout(timeout):
             results = await asyncio.to_thread(execute)
     except Exception as exc:
         logger.warning("No-key web search failed: %s", type(exc).__name__)
@@ -190,9 +190,10 @@ async def search_with_key(
     *,
     search_type: Literal["web", "images"] = "web",
     db: AsyncSession | None = None,
+    timeout: float | None = None,
 ) -> str:
     if provider_key == "no_key":
-        return await search_without_api_key(query, search_type=search_type)
+        return await search_without_api_key(query, search_type=search_type, timeout=timeout or SEARCH_DEADLINE_SECONDS)
     provider = search_provider(settings, provider_key)
     if provider is None:
         raise SearchIntegrationError("integration.providerUnavailable")
@@ -224,11 +225,13 @@ async def search_web(
     search_type: Literal["web", "images"] = "web",
     provider: str = "no_key",
     db: AsyncSession | None = None,
+    timeout: float | None = None,
 ) -> str:
+    deadline = SEARCH_DEADLINE_SECONDS if timeout is None else min(timeout, SEARCH_DEADLINE_SECONDS)
     try:
-        async with asyncio.timeout(SEARCH_DEADLINE_SECONDS):
+        async with asyncio.timeout(deadline):
             return await search_with_key(
-                settings, provider, query, search_type=search_type, db=db
+                settings, provider, query, search_type=search_type, db=db, timeout=deadline,
             )
     except TimeoutError as exc:
         raise SearchIntegrationError("integration.unavailable") from exc

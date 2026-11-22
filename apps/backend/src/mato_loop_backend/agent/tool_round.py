@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -10,6 +11,7 @@ from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import run_support
@@ -30,7 +32,12 @@ from mato_loop_backend.agent.run_support import (
     _RESEARCH_TOOL_NAMES,
     MEMORY_WRITE_OUTCOME_PRIORITY,
 )
-from mato_loop_backend.agent.script_tools import SCRIPT_TOOL, StopScript, run_script
+from mato_loop_backend.agent.script_tools import (
+    SCRIPT_TOOL,
+    StopScript,
+    run_script,
+    with_script_progress,
+)
 from mato_loop_backend.agent.session_settings import apply_run_session_settings
 from mato_loop_backend.agent.subagents import run_tasks
 from mato_loop_backend.agent.tool_repairs import repairable_tool_error, tool_repair_key
@@ -38,7 +45,7 @@ from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import ExecutionClient
-from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.files.service import RootFileError, RootFileService
 from mato_loop_backend.media.attachments import AttachmentError, AttachmentService
 from mato_loop_backend.memory import policy as memory_policy
 from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
@@ -67,6 +74,7 @@ from mato_loop_backend.settings.models import (
     TrustLevel,
 )
 from mato_loop_backend.skills import RunSkillState
+from mato_loop_backend.tools.arguments import EditFileArguments
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import (
     RepositoryInstructionsChanged,
@@ -114,6 +122,7 @@ async def persist_tool_result(
                 **({"userEditedArguments": True} if metadata.get("userEdited") is True else {}),
                 **({"errorCode": metadata["errorCode"]} if isinstance(metadata.get("errorCode"), str) else {}),
                 **({"argumentsRejected": True} if metadata.get("argumentsRejected") is True else {}),
+                **({"repositoryInstructionsDeferred": True} if metadata.get("repositoryInstructionsDeferred") is True else {}),
                 **({"toolRepair": metadata["toolRepair"]} if "toolRepair" in metadata else {}),
                 **({"toolSnapshot": metadata["toolSnapshot"]} if isinstance(metadata.get("toolSnapshot"), dict) else {}),
                 **({"toolDiscovery": metadata["toolDiscovery"]}
@@ -237,9 +246,29 @@ async def persist_tool_result(
     return tool_message, content, metadata
 
 
+def session_edit_replay_key(name: str, arguments: dict[str, Any], root_files: RootFileService) -> str | None:
+    """Identify the same plain session edit within a live turn, not across runs."""
+    if name != "edit_file" or arguments.get("root") not in ("files", "session"):
+        return None
+    value = {key: item for key, item in arguments.items() if key != "_reason"}
+    value["root"] = "session"
+    try:
+        edit = EditFileArguments.model_validate(value)
+        path = root_files.normalize_relative_path(edit.path)
+    except (ValidationError, RootFileError):
+        return None
+    if edit.elevated or edit.old_text is None or edit.new_text is None:
+        return None
+    effect = json.dumps([path, edit.old_text, edit.new_text, edit.replace_all], ensure_ascii=True)
+    return hashlib.sha256(effect.encode()).hexdigest()
+
+
 @dataclass
 class ToolBatchResult:
     script_tool_calls_used: int = 0
+    read_evidence_available: bool = False
+    script_no_progress: bool = False
+    recorded_tool_calls: int = 0
     research_tool_calls_used: int = 0
     research_used: bool = False
     openscad_render_pending: bool = False
@@ -324,9 +353,13 @@ async def execute_tool_batch(
     delegation_tool_names: frozenset[str] | None = None,
     repository_authorize: Callable[[PermissionRequest], Awaitable[PermissionDecision]] | None = None,
     pending_tool_repairs: dict[str, Message] | None = None,
+    recorded_tool_calls: int = 0,
+    interrupted_script_edits: dict[str, UUID] | None = None,
 ) -> ToolBatchResult:
     if pending_tool_repairs is None:
         pending_tool_repairs = {}
+    if interrupted_script_edits is None:
+        interrupted_script_edits = {}
     state = ToolBatchResult(
         research_tool_calls_used=research_tool_calls_used,
         research_used=research_used,
@@ -379,6 +412,8 @@ async def execute_tool_batch(
         child_result: list[tuple[Message, str, dict[str, Any]]] | None = None,
     ) -> AsyncGenerator[asyncio.Task[ToolResult], None]:
         nonlocal superseded, repository_deferred
+        script_steps: list[dict[str, Any]] = []
+        script_edits: dict[str, UUID] = {}
         read_started = False
         bound_tool = toolset.tools.get(call.name) if toolset is not None else None
         tool_label = bound_tool.definition.label if bound_tool else None
@@ -420,6 +455,10 @@ async def execute_tool_batch(
         call_signature = run_support._tool_call_signature(call)
         call_signature += authentication_scope
         validation_signature = "arguments:" + run_support._tool_call_signature(call, include_reason=True)
+        if call.name in script_names and call.name not in offered_names and script_parent is None:
+            # An unavailable direct call must not mark the same catalog call as failed.
+            call_signature = "not-offered-directly:" + call_signature
+            validation_signature = "not-offered-directly:" + validation_signature
         if (call.arguments.get("root") in {"workspace", "computer"}
                 or call.name in {"shell_run", "apply_patch"}
                 or call.name in {"edit_file", "write_file"} and "root" not in call.arguments):
@@ -445,6 +484,8 @@ async def execute_tool_batch(
         if not rejected_batch_code and not repository_deferred and is_research_call and not repeated_research_call and not state.user_denied_batch:
             state.research_tool_calls_used += 1
         tool_trust = trust_level
+        edit_key = session_edit_replay_key(call.name, call.arguments, root_files) if interrupted_script_edits else None
+        applied_edit = interrupted_script_edits.get(edit_key) if edit_key is not None else None
         if superseded:
             content = json.dumps(error_payload("tool.superseded"), ensure_ascii=False)
             metadata = {"errorCode": "tool.superseded"}
@@ -507,6 +548,9 @@ async def execute_tool_batch(
         ):
             content = json.dumps(error_payload("tool.unavailable"), ensure_ascii=False)
             metadata = {"errorCode": "tool.unavailable"}
+        elif applied_edit is not None:
+            result = ToolResult.error("tool.scriptEditAlreadyApplied", params={"messageId": str(applied_edit)})
+            content, metadata = result.content, result.metadata
         else:
             if call_signature in failed_tool_call_signatures:
                 retried_transient_reads.add(call_signature)
@@ -606,13 +650,32 @@ async def execute_tool_batch(
                             or (arguments.get("root"), arguments.get("path")) != openscad_source_review_pending
                         ):
                             raise StopScript(ToolResult.error("tool.invalidArguments", field="code"))
+                        edit_key = session_edit_replay_key(name, arguments, root_files)
+                        previous = interrupted_script_edits.get(edit_key) if edit_key else None
+                        if previous is not None:
+                            raise StopScript(ToolResult.error("tool.scriptEditAlreadyApplied", params={
+                                "messageId": str(previous),
+                            }))
                         result = []
+                        child = ToolCall(f"call-{uuid4()}", name, arguments)
                         async with aclosing(execute_one(
-                            index, ToolCall(f"call-{uuid4()}", name, arguments), parallel=False,
+                            index, child, parallel=False,
                             script_parent=call.id, child_result=result,
                         )) as execution:
                             await anext(execution, None)
                         message, child_content, child_metadata = result[0]
+                        child_error = child_metadata.get("errorCode")
+                        if child_metadata.get("userEdited"):
+                            edit_key = session_edit_replay_key(name, child.arguments, root_files)
+                        if edit_key and not child_error and not child_metadata.get("repositoryInstructionsDeferred"):
+                            script_edits[edit_key] = message.id
+                        script_steps.append({
+                            "tool": name, "messageId": str(message.id),
+                            "status": "error" if child_error else (
+                                "deferred" if child_metadata.get("repositoryInstructionsDeferred") else "completed"
+                            ),
+                            **({"errorCode": child_error} if child_error else {}),
+                        })
                         if message.trust_level == TrustLevel.PRIVATE.value:
                             tool_trust = TrustLevel.PRIVATE
                         if state.user_denied_batch or superseded or repository_deferred:
@@ -771,6 +834,13 @@ async def execute_tool_batch(
             attachments = tuple(attachment for attachment in attachments if not attachment.ephemeral)
         if parallel and not read_started:
             await finish_reads()
+        if call.name == SCRIPT_TOOL and script_parent is None:
+            # Build from host-recorded outcomes, never from the script's own output.
+            envelope = with_script_progress(ToolResult(content, metadata), script_steps,
+                                            recorded_tool_calls + state.recorded_tool_calls)
+            content = envelope.content
+            if metadata.get("errorCode") or any(step["status"] != "completed" for step in script_steps):
+                interrupted_script_edits.update(script_edits)
         workflow_repair = (
             (call.name == "web_search" and session.web_search_policy == WebSearchPolicy.REQUIRED)
             or call.name == "memory_write"
@@ -779,6 +849,11 @@ async def execute_tool_batch(
         repair_key = tool_repair_key(call, run)
         repairable = repairable_tool_error(call, metadata, workflow=workflow_repair)
         error_code = metadata.get("errorCode")
+        if (call.name == SCRIPT_TOOL and not script_steps and isinstance(error_code, str)
+                and rejected_batch_code is None and error_code not in {
+                    "permission.denied", "permission.userDenied", "tool.skippedAfterUserDenial", "tool.superseded",
+                }):
+            state.script_no_progress = True
         previous_repair = None
         if not metadata.get("repositoryInstructionsDeferred") and (
             repairable or not error_code or error_code == "agent.repeatedToolCall"
@@ -794,6 +869,8 @@ async def execute_tool_batch(
             execution_binding=(execution_binding if script_parent is None else
                                {**execution_binding, "scriptParent": script_parent}),
         )
+        if call.name != SCRIPT_TOOL:
+            state.recorded_tool_calls += 1
         if previous_repair is not None:
             previous_repair.provider_data = {
                 **previous_repair.provider_data,
@@ -822,6 +899,10 @@ async def execute_tool_batch(
         if metadata.get("repositoryInstructionsDeferred") is True:
             return
         if not isinstance(error_code, str):
+            if call.name == "read" and (
+                trust_level == TrustLevel.PRIVATE or tool_message.trust_level == TrustLevel.PUBLIC.value
+            ):
+                state.read_evidence_available = True
             if call.name == "render_openscad" and call.arguments.get("output", "preview") == "preview":
                 rendered_root = call.arguments.get("root")
                 rendered_path = call.arguments.get("path")

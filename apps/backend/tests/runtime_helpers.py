@@ -94,6 +94,7 @@ async def _runtime_setup(
     safety_reserve_tokens: int = 4_096,
     input_budget_tokens: int = 1_000,
     integration_tool_loading: str = "all",
+    scripted_tools_enabled: bool = False,
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -104,6 +105,7 @@ async def _runtime_setup(
         provider_id=provider.id,
         model_id=model_id,
         supports_image_input=active_supports_image_input,
+        scripted_tools_enabled=scripted_tools_enabled,
     )
     vision_model = (
         ModelConfig(

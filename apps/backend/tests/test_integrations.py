@@ -700,7 +700,7 @@ def test_no_key_provider_makes_search_available_without_configuration() -> None:
     schemas = tool_registry.schemas(settings)
     search_schema = next(item for item in schemas if item["name"] == "web_search")
     properties = search_schema["parameters"]["properties"]
-    assert set(properties) == {"_reason", "query", "search_type"}
+    assert set(properties) == {"_reason", "query", "search_type", "timeout"}
     assert properties["query"]["description"] == (
         "One compact search-engine query for one information need. Preserve user-supplied dates, "
         "versions, model numbers, and exact names; never add a date."

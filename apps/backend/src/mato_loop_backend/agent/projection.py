@@ -415,10 +415,9 @@ def _model_tool_calls(
     projected = []
     for call in tool_calls:
         item = dict(call)
-        if item.get("name") == "run_tool_script" and isinstance(item.get("arguments"), dict):
-            from mato_loop_backend.agent.run_support import _safe_tool_arguments
-
-            item["arguments"] = _safe_tool_arguments("run_tool_script", item["arguments"])
+        if item.get("name") == "run_tool_script":
+            # History pairs the call with its result, but contains no executable source.
+            item["arguments"] = {}
         arguments = item.get("arguments")
         if isinstance(arguments, dict):
             projected_arguments = model_tool_reference_arguments(

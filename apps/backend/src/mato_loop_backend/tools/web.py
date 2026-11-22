@@ -85,6 +85,7 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
         search_type=arguments.search_type,
         provider=primary_provider,
         db=context.db,
+        **({"timeout": arguments.timeout} if arguments.timeout is not None else {}),
     )
     try:
         items = json.loads(content)

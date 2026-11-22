@@ -12,6 +12,28 @@ import { modelRuntimeForm, modelRuntimePayload } from '../src/features/providers
 let app, root
 afterEach(() => { app?.unmount(); root?.remove() })
 
+it('lets tool-capable models opt into scripted calls without a separate mode setting', async () => {
+  const form = reactive(modelRuntimeForm({ supportsTools: true, scriptedToolsEnabled: false }))
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(ModelRuntimeFields, { modelValue: form }) })
+  app.use(Quasar, quasarOptions)
+  app.mount(root)
+  root.querySelector('.q-expansion-item .q-item').click()
+  await nextTick()
+
+  const toggle = [...root.querySelectorAll('.q-toggle')]
+    .find((item) => item.textContent.includes('Skriptmodus erlauben (experimentell)'))
+  expect(modelRuntimePayload(form).scripted_tools_enabled).toBe(false)
+  toggle.click()
+  await nextTick()
+  expect(modelRuntimePayload(form).scripted_tools_enabled).toBe(true)
+  form.supportsTools = false
+  await nextTick()
+  expect(toggle.getAttribute('aria-disabled')).toBe('true')
+  expect(modelRuntimePayload(form).scripted_tools_enabled).toBe(false)
+})
+
 it('keeps pseudonymization active with private models when the trust selector is hidden', async () => {
   const form = reactive(modelRuntimeForm({ trustLevel: 'private', pseudonymizationEnabled: true }))
   root = document.createElement('div')

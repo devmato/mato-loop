@@ -251,11 +251,16 @@ async def execute_loop_body(
     research_tool_calls_used = 0
     successful_research_calls: dict[str, dict[str, Any]] = {}
     tool_calls_used = 0
+    recorded_tool_calls = 0
     failed_tool_call_signatures: dict[str, str] = {}
     retried_transient_reads: set[str] = set()
     repeated_tool_call_repair_available = True
     pending_tool_repairs: dict[str, Message] = {}
     budget_finalization = False
+    script_finalization = False
+    read_evidence_available = False
+    empty_script_rounds = 0
+    interrupted_script_edits: dict[str, UUID] = {}
     truncated_tool_batches = 0
     live_tool_calls: dict[UUID, list[dict[str, Any]]] = {}
     pseudonymization_key = (
@@ -281,6 +286,13 @@ async def execute_loop_body(
                 await run_events.publish(run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)})
             await cls._transcribe_continuation_messages(db, run)
         if continuation_received or continuation_context_stale:
+            empty_script_rounds = 0
+            script_finalization = False
+            read_evidence_available = False
+            interrupted_script_edits.clear()
+            for signature, code in tuple(failed_tool_call_signatures.items()):
+                if code == "tool.scriptEditAlreadyApplied":
+                    failed_tool_call_signatures.pop(signature)
             if await cls._apply_continuation_profile(db, run):
                 agent_profile_id = run.agent_profile_id
                 prompt_agent_profile = await load_agent_profile(db, chat_session.user_id, agent_profile_id)
@@ -311,7 +323,7 @@ async def execute_loop_body(
                 await db.refresh(project)
             continuation_context_stale = False
         await deliver_updates(db, run, chat_session)
-        tool_budget_exhausted = budget_finalization or (
+        tool_budget_exhausted = script_finalization or budget_finalization or (
             tool_call_limit is not None and tool_calls_used >= tool_call_limit
         )
         if tool_budget_exhausted:
@@ -604,13 +616,17 @@ async def execute_loop_body(
         )
 
         system_prompt = render_system_prompt()
+        finalization_context = (
+            "Tool execution stopped after repeated failed calls. Answer using the evidence already collected. "
+            "State what you could not verify. Do not invent results."
+            if script_finalization else None
+        )
         request_options: dict[str, Any] = {
             "provider": provider,
             "model": model,
             "tools": schemas,
-            "tool_choice": (
-                "required"
-                if not tool_budget_exhausted and (
+            "tool_choice": "none" if script_finalization else (
+                "required" if not tool_budget_exhausted and (
                     search_pending
                     or memory_write_pending
                     or openscad_render_pending
@@ -663,7 +679,7 @@ async def execute_loop_body(
                 session_contexts=session_contexts,
                 runtime_context="\n\n".join(part for part in (review_context, tool_budget_prompt(
                     None if tool_call_limit is None else max(0, tool_call_limit - tool_calls_used),
-                )) if part) or None,
+                ), finalization_context) if part) or None,
                 schemas=schemas,
                 offered_tool_names=frozenset(effective_toolset.tools if effective_toolset else ()),
                 tool_snapshots=collect_tool_snapshots(
@@ -956,6 +972,8 @@ async def execute_loop_body(
                 excluded_memory_content_hashes=excluded_memory_content_hashes,
                 delegated=delegated, max_tool_calls=tool_call_limit,
                 tool_calls_used=tool_calls_used,
+                recorded_tool_calls=recorded_tool_calls,
+                interrupted_script_edits=interrupted_script_edits,
                 execution_binding={
                     "executionAgentId": str(execution_client.agent_id) if execution_client else None,
                     "executionAgentAlias": selected_execution_agent.display_name if selected_execution_agent else None,
@@ -991,6 +1009,11 @@ async def execute_loop_body(
         if run.id in cls._redirected_runs and run.id in cls._user_cancelled_runs:
             raise asyncio.CancelledError
         tool_calls_used += batch.script_tool_calls_used
+        recorded_tool_calls += batch.recorded_tool_calls
+        read_evidence_available |= batch.read_evidence_available
+        empty_script_rounds = (
+            empty_script_rounds + 1 if batch.script_no_progress and batch.recorded_tool_calls == 0 else 0
+        )
         research_tool_calls_used = batch.research_tool_calls_used
         research_used = batch.research_used
         openscad_render_pending = batch.openscad_render_pending
@@ -1023,8 +1046,6 @@ async def execute_loop_body(
             if not budget_finalization and truncated_tool_batches > TRUNCATED_TOOL_BATCH_RETRIES:
                 raise AgentRunError("agent.outputLimitReached")
             continue
-        if repeated_tool_call_limit_reached and not budget_finalization:
-            raise AgentRunError("agent.repeatedToolCall")
         if turn_tools.script_names and review_source_was_pending and openscad_source_review_pending is not None:
             openscad_source_review_retries += 1
             if openscad_source_review_retries > REQUIRED_OPENSCAD_SOURCE_REVIEW_RETRIES and not budget_finalization:
@@ -1043,6 +1064,13 @@ async def execute_loop_body(
                 memory_write_retries += 1
             if memory_write_retries > REQUIRED_MEMORY_WRITE_RETRIES and not budget_finalization:
                 raise AgentRunError("agent.requiredMemoryWriteMissing")
+        if (repeated_tool_call_limit_reached or empty_script_rounds >= 2) and not budget_finalization:
+            if (turn_tools.script_names and (research_used or read_evidence_available)
+                    and (not required_search or required_search_completed)
+                    and not (memory_write_pending or openscad_render_pending or openscad_source_review_pending)):
+                script_finalization = True
+                continue
+            raise AgentRunError("tool.scriptNoProgress" if empty_script_rounds >= 2 else "agent.repeatedToolCall")
         if search_pending:
             if user_denied_batch:
                 required_search_completed = True

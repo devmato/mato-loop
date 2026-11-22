@@ -95,12 +95,17 @@ async def test_terminalization_pairs_reused_ids_with_latest_own_batch(foreign_ru
                 provider_data={"_matoloop": {"runId": str(run_id)}}),
     ]
     if scripted:
+        records[2].tool_calls[0]["name"] = "run_tool_script"
+        records[2].tool_calls.append({"id": "queued-direct", "name": "edit_file"})
+        records[3].provider_data["_matoloop"]["toolName"] = "read"
         records[2].provider_data["_matoloop"]["scriptToolCalls"] = {
             "started": {"scriptParent": "reused", "name": "write_file"},
             "child-done": {"scriptParent": "reused", "name": "read"},
         }
-        records.append(Message(session_id=session_id, role="tool", tool_call_id="child-done",
-                               provider_data={"_matoloop": {"runId": str(run_id), "scriptParent": "reused"}}))
+        records.append(Message(id=uuid4(), session_id=session_id, role="tool", tool_call_id="child-done",
+                               provider_data={"_matoloop": {
+                                   "runId": str(run_id), "scriptParent": "reused", "toolName": "read",
+                               }}))
     db = AsyncMock(spec=AsyncSession)
     db.scalars.return_value = Mock(all=lambda: [
         item for item in records if item.provider_data["_matoloop"]["runId"] == str(run_id)
@@ -111,10 +116,18 @@ async def test_terminalization_pairs_reused_ids_with_latest_own_batch(foreign_ru
     inserted = db.add_all.call_args.args[0]
     assert [(item.tool_call_id, json.loads(item.content)["error"]["code"])
             for item in inserted] == [("reused", "tool.executionInterrupted")] + (
-                [("started", "tool.executionInterrupted")] if scripted else []
+                [("queued-direct", "tool.executionInterrupted"), ("started", "tool.executionInterrupted")]
+                if scripted else []
             )
     if scripted:
+        assert inserted[1].provider_data["_matoloop"]["toolName"] == "edit_file"
+        assert json.loads(inserted[0].content)["runToolCalls"] == 4
         assert inserted[-1].provider_data["_matoloop"]["scriptParent"] == "reused"
+        assert json.loads(inserted[0].content)["scriptSteps"] == [
+            {"tool": "write_file", "messageId": str(inserted[-1].id), "status": "error",
+             "errorCode": "tool.executionInterrupted"},
+            {"tool": "read", "messageId": str(records[-1].id), "status": "completed"},
+        ]
 
 
 def test_run_timing_sums_active_segments_and_excludes_user_waits() -> None:

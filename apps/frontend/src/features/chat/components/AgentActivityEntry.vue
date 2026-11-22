@@ -189,7 +189,7 @@ import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import ShellToolOutput from 'src/features/chat/components/ShellToolOutput.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
-import { parseToolResult, shellCommand, toolIdentity, toolPresentation, toolStatus } from 'src/features/chat/tool-display'
+import { parseToolResult, shellCommand, TOOL_SCRIPT, toolIdentity, toolPresentation, toolStatus } from 'src/features/chat/tool-display'
 
 defineOptions({ name: 'AgentActivityEntry' })
 
@@ -231,7 +231,9 @@ const resultMessage = computed(() => hydratedResult.value && hydratedResult.valu
   ? hydratedResult.value : props.entry.result)
 const result = computed(() => isTool.value ? parseToolResult(resultMessage.value?.content, props.entry.tool.name, resultMessage.value) : {})
 const toolInfo = computed(() => isTool.value ? toolPresentation(tool.value, props.entry.approval?.details?.displayItems) : null)
-const summary = computed(() => isTool.value ? result.value.summary || toolInfo.value.summary : reasoningSummary.value ? '' : props.entry.presentation?.summary)
+const summary = computed(() => isTool.value
+  ? (tool.value.name === TOOL_SCRIPT ? result.value.errorMessage : result.value.summary) || toolInfo.value.summary
+  : reasoningSummary.value ? '' : props.entry.presentation?.summary)
 const shellCommandText = computed(() => isTool.value ? shellCommand(tool.value) : '')
 const status = computed(() => {
   if (isGroup.value) {

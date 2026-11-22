@@ -40,8 +40,8 @@ async def main():
                     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
                     encode((await new AsyncFunction('callTool', '"use strict";\n' + source)(callTool)) ?? null);
                 """, timeout=float("inf"))  # The host bounds worker time, not dispatch waits.
-            except QuickJSError as exc:
-                send("error", type(exc).__name__)
+            except QuickJSError:
+                send("error", "JavaScript")
                 return
             if not isinstance(value, str) or len(value) > 16_000:
                 send("error", "OutputLimit")

@@ -1,5 +1,5 @@
 import { reasoningBlocks, reasoningHistoryPresentation, reasoningStatusLabel } from 'src/features/chat/reasoning-display'
-import { toolActivityLabel, toolSummary } from 'src/features/chat/tool-display'
+import { hiddenToolScript, parseToolResult, TOOL_SCRIPT, toolActivityLabel, toolSummary } from 'src/features/chat/tool-display'
 
 const LABELS = {
   submitting: 'Verarbeite Anfrage',
@@ -50,6 +50,9 @@ export function runWarningEntries(warnings = [], keyPrefix = 'warning', live = f
 }
 
 export function agentActivityLabel(activity) {
+  if (activity?.tool === TOOL_SCRIPT && ['preparing_context', 'processing_tool', 'waiting_model'].includes(activity.phase)) {
+    return 'Verarbeite Anfrage'
+  }
   const suppliedLabel = typeof activity?.activityLabel === 'string' ? activity.activityLabel.trim() : ''
   if (suppliedLabel) return activity.activityLabel
   if (['preparing_context', 'waiting_model'].includes(activity?.phase)) {
@@ -124,7 +127,7 @@ export function agentRunPresentation({
   const entries = (transcript?.messages || []).flatMap((message) => (
     message.workHistory?.entries || message.toolCalls || []
   ))
-  const toolItems = entries.filter((entry) => entry.tool && (!runId || !entry.runId || entry.runId === runId))
+  const toolItems = entries.filter((entry) => entry.tool && (!runId || !entry.runId || entry.runId === runId) && !hiddenToolScript(entry))
   const belongsToRun = (request) => request && (!runId || request.runId === runId)
   const approval = toolItems.find((item) => belongsToRun(item.approval))?.approval
     || transcript?.unmatchedApprovals?.find(belongsToRun)
@@ -146,19 +149,27 @@ export function agentRunPresentation({
     && (streamReasoning || suppliedReasoningLabel)
     ? suppliedReasoningLabel || reasoningStatusLabel(streamReasoning) || 'Nachdenken'
     : ''
-  const selectedTool = activity?.phase === 'processing_tool'
+  const phaseTool = activity?.phase === 'processing_tool'
     ? toolItems.find((item) => activity.toolCallId ? item.tool.id === activity.toolCallId : item.active)
     : ['preparing_context', 'waiting_model'].includes(activity?.phase) && !reasoningSummary && !streamContextSummary?.content
       ? activity.toolCallId
         ? toolItems.find((item) => item.tool.id === activity.toolCallId)
         : toolItems.findLast((item) => item.current !== false && (item.result || item.completed))
       : null
+  // A script completes without another processing phase after its last child.
+  const scriptParent = phaseTool?.tool.scriptParent
+  const selectedTool = (scriptParent && toolItems.find((item) => (
+    item.completed && item.result && item.batchId === phaseTool.batchId
+      && item.tool.name === TOOL_SCRIPT && item.tool.id === scriptParent
+  ))) || phaseTool
   const argumentsRejected = hiddenToolRepair(selectedTool, running)
   const presentationTool = argumentsRejected ? null : selectedTool?.tool || (
-    ['preparing_context', 'processing_tool', 'waiting_model'].includes(activity?.phase) && activity.tool && !reasoningSummary && !streamContextSummary?.content
+    ['preparing_context', 'processing_tool', 'waiting_model'].includes(activity?.phase) && activity.tool && activity.tool !== TOOL_SCRIPT && !reasoningSummary && !streamContextSummary?.content
       ? { id: activity.toolCallId, name: activity.tool, arguments: {}, toolDisplay: activity.toolDisplay }
       : null
   )
+  const scriptResult = presentationTool?.name === TOOL_SCRIPT ? selectedTool?.result : null
+  const scriptError = scriptResult && parseToolResult(scriptResult.content, TOOL_SCRIPT, scriptResult).errorMessage
   const label = stopping
     ? 'Anfrage abbrechen'
     : approval
@@ -171,6 +182,7 @@ export function agentRunPresentation({
     : approval?.title
       || question?.questions?.[0]?.question
       || (reasoningSummary && reasoningSummary !== 'Nachdenken' ? reasoningSummary : '')
+      || scriptError
       || (presentationTool ? toolSummary(presentationTool) : '')
       || ''
   let announcement = label
@@ -182,8 +194,10 @@ export function agentRunPresentation({
     announcement = 'Antwort erforderlich'
   } else if (reasoningSummary) {
     announcement = 'Nachdenken'
+  } else if (scriptError && !stopping) {
+    announcement = scriptError
   }
-  const active = !stopping && !approval && !question && !['waiting_approval', 'waiting_input'].includes(activity?.phase)
+  const active = !stopping && !approval && !question && !scriptError && !['waiting_approval', 'waiting_input'].includes(activity?.phase)
   let entry = toolItems.find((item) => (approval && item.approval === approval) || (question && item.question === question))
   if (!entry && !stopping) {
     if (presentationTool) entry = selectedTool || { key: `activity-tool-${activity.toolCallId}`, type: 'tool', tool: presentationTool, runId }
