@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import getpass
 import logging
 import os
 import sys
+from asyncio import sleep
 from collections.abc import Coroutine
 from pathlib import Path
 
@@ -135,14 +135,14 @@ async def _execute(
             if not waiting:
                 logging.getLogger(__name__).info("MatoLoop Agent is waiting for pairing")
                 waiting = True
-            await asyncio.sleep(1)
+            await sleep(1)
         except PairingTemporaryError:
             if command != "run":
                 raise
             logging.getLogger(__name__).warning(
                 "MatoLoop Agent pairing is temporarily unavailable; retrying"
             )
-            await asyncio.sleep(30)
+            await sleep(30)
 
     if command == "pair":
         print("MatoLoop Agent paired successfully")

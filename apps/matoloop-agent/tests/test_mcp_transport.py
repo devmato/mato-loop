@@ -146,10 +146,15 @@ class McpTransportTests(unittest.IsolatedAsyncioTestCase):
         )
         message = await self.consume(code)
         pid = message.message.root.result["pid"]
+        status = Path(f"/proc/{pid}/stat")
         try:
             for _ in range(100):
-                status = Path(f"/proc/{pid}/stat")
-                if not status.exists() or status.read_text().split()[2] == "Z":
+                try:
+                    state = status.read_text().split()[2]
+                except (FileNotFoundError, ProcessLookupError):
+                    # The kernel can reap the child while /proc is being read.
+                    return
+                if state == "Z":
                     return
                 await asyncio.sleep(0.01)
             self.fail("MCP descendant survived server shutdown")

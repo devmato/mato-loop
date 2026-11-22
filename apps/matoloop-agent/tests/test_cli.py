@@ -57,7 +57,7 @@ class CliTests(unittest.IsolatedAsyncioTestCase):
                     ]
                 ),
             ) as resolve,
-            patch("matoloop_agent.__main__.asyncio.sleep", new=AsyncMock()) as sleep,
+            patch("matoloop_agent.__main__.sleep", new=AsyncMock()) as sleep,
             patch("matoloop_agent.__main__.MatoLoopAgent") as agent,
         ):
             agent.return_value.run_forever = run_forever
@@ -80,7 +80,7 @@ class CliTests(unittest.IsolatedAsyncioTestCase):
                     ]
                 ),
             ) as resolve,
-            patch("matoloop_agent.__main__.asyncio.sleep", new=AsyncMock()) as sleep,
+            patch("matoloop_agent.__main__.sleep", new=AsyncMock()) as sleep,
             patch("matoloop_agent.__main__.MatoLoopAgent") as agent,
         ):
             agent.return_value.run_forever = run_forever

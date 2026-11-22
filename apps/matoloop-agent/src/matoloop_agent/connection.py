@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from asyncio import sleep
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext, suppress
 from typing import Any
@@ -580,14 +581,14 @@ class MatoLoopAgent:
                             self.transfer.set_access_key(self._access_key)
                         await self._connect_once(connected)
                         delay = 1.0
-                        await asyncio.sleep(delay)
+                        await sleep(delay)
                     except asyncio.CancelledError:
                         raise
                     except Exception:
                         if connected.is_set():
                             delay = 1.0
                         logger.warning("MatoLoop Agent connection failed; retrying")
-                        await asyncio.sleep(delay)
+                        await sleep(delay)
                         delay = min(delay * 2, 30.0)
         finally:
             self._sleep_inhibitor.close()
@@ -695,7 +696,7 @@ class MatoLoopAgent:
 
             async def report_maintenance() -> None:
                 while True:
-                    await asyncio.sleep(30)
+                    await sleep(30)
                     await replay_maintenance_results(self.config, self._access_key)
 
             reporter = asyncio.create_task(report_maintenance())

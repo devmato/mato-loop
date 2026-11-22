@@ -200,7 +200,7 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
                     patch.object(agent.terminal, "close_all", new=AsyncMock()) as terminal,
                     patch.object(agent, "_connect_once", new=AsyncMock(side_effect=OSError)),
                     patch(
-                        "matoloop_agent.connection.asyncio.sleep",
+                        "matoloop_agent.connection.sleep",
                         side_effect=asyncio.CancelledError,
                     ),
                 ):

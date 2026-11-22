@@ -205,7 +205,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                 agent = MatoLoopAgent(config, "key")
                 save_result(REQUEST_ID)
                 with (
-                    patch("matoloop_agent.connection.asyncio.sleep", new=fast_sleep),
+                    patch("matoloop_agent.connection.sleep", new=fast_sleep),
                     patch(
                         "matoloop_agent.maintenance_results.httpx.AsyncClient",
                         side_effect=lambda **kwargs: client(
@@ -659,7 +659,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                     "_connect_once",
                     new=AsyncMock(side_effect=[RuntimeError(), asyncio.CancelledError()]),
                 ),
-                patch("matoloop_agent.connection.asyncio.sleep", new=AsyncMock()),
+                patch("matoloop_agent.connection.sleep", new=AsyncMock()),
                 self.assertRaises(asyncio.CancelledError),
             ):
                 await agent.run_forever(loader)
@@ -682,7 +682,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
 
             with (
                 patch.object(agent, "_connect_once", side_effect=connect),
-                patch("matoloop_agent.connection.asyncio.sleep", new=AsyncMock()) as sleep,
+                patch("matoloop_agent.connection.sleep", new=AsyncMock()) as sleep,
                 self.assertRaises(asyncio.CancelledError),
             ):
                 await agent.run_forever()
