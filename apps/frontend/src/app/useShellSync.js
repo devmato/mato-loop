@@ -53,15 +53,6 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     typeof route.query.session === 'string' ? route.query.session : null
   ))
   const terminalContextState = computed(() => terminalControlCenterState(chat.current, executionAgents))
-  const visualViewportHeight = ref(null)
-  const visualViewportOffsetTop = ref(0)
-  const visualViewportStyle = computed(() => {
-    if (route.name !== 'chat' || visualViewportHeight.value === null) return null
-    return {
-      '--app-visual-viewport-height': `${visualViewportHeight.value}px`,
-      '--app-visual-viewport-offset-top': `${visualViewportOffsetTop.value}px`
-    }
-  })
   let presenceTimer = null
   let changeSource = null
   let heartbeatTimer = null
@@ -81,14 +72,6 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
       ? chat.current.id : null
   ))
   let presenceRequest = Promise.resolve()
-
-  function updateVisualViewport() {
-    const viewport = window.visualViewport
-    const height = viewport?.height || window.innerHeight
-    const offsetTop = viewport?.offsetTop || 0
-    if (Number.isFinite(height) && height > 0) visualViewportHeight.value = height
-    visualViewportOffsetTop.value = Number.isFinite(offsetTop) ? Math.max(0, offsetTop) : 0
-  }
 
   function handleSearchShortcut(event) {
     const action = searchShortcutAction(event, search.dialogOpen)
@@ -327,10 +310,6 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   }, { immediate: true, flush: 'post' })
 
   onMounted(async () => {
-    updateVisualViewport()
-    window.visualViewport?.addEventListener('resize', updateVisualViewport)
-    window.visualViewport?.addEventListener('scroll', updateVisualViewport)
-    window.addEventListener('resize', updateVisualViewport)
     window.addEventListener('keydown', handleSearchShortcut)
     window.addEventListener('focus', refreshAppPresence)
     window.addEventListener('focus', refreshWorkspaceOnFocus)
@@ -360,9 +339,6 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     window.clearTimeout(heartbeatTimer)
     window.clearTimeout(refreshTimer)
     applyBranding(appearance)
-    window.visualViewport?.removeEventListener('resize', updateVisualViewport)
-    window.visualViewport?.removeEventListener('scroll', updateVisualViewport)
-    window.removeEventListener('resize', updateVisualViewport)
     window.removeEventListener('keydown', handleSearchShortcut)
     window.removeEventListener('focus', refreshAppPresence)
     window.removeEventListener('focus', refreshWorkspaceOnFocus)
@@ -383,6 +359,4 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     window.navigator.serviceWorker?.removeEventListener('message', handlePushMessage)
     window.clearInterval(presenceTimer)
   })
-
-  return { visualViewportStyle }
 }

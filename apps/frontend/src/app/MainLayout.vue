@@ -4,12 +4,11 @@
     class="app-shell"
     :class="{
       'app-shell--chat': route.name === 'chat',
-      'app-shell--fixed-chat': route.name === 'chat' && $q.platform.is.ios,
       'app-shell--top-session-tabs': route.name === 'chat' && preferences.sessionTabsEnabled && preferences.sessionTabsPosition === 'top' && !$q.screen.lt.sm && sessionTabs.items.length > 0,
       'app-shell--navigation-overlay': showFloatingNavigation,
       'app-shell--floating-chat-controls': route.name === 'chat' && showFloatingControls
     }"
-    :style="visualViewportStyle"
+    :style="route.name === 'chat' ? { minHeight: 0 } : undefined"
   >
     <AppNavigation ref="navigation" v-model="drawerOpen" :confirm-discarded-edit="confirmDiscardedEdit" />
 
@@ -112,7 +111,7 @@ const showFloatingControls = computed(() => (
 const controlCenterLabel = computed(() => notifications.unreadCount
   ? `Benachrichtigungen im Control Center öffnen, ${notifications.unreadCount} ungelesen`
   : 'Control Center öffnen')
-const { visualViewportStyle } = useShellSync({ drawerOpen, controlCenterVisible })
+useShellSync({ drawerOpen, controlCenterVisible })
 provide('confirmDiscardedEdit', confirmDiscardedEdit)
 
 function openNavigation() {

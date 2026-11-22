@@ -6,6 +6,8 @@ Beim Öffnen aus der Sessionliste oder von der Startseite erscheint zuerst der j
 
 Chatnachrichten verwenden kompakte Zeilen-, Absatz- und Nachrichtenabstände. Auf dem Desktop mit Maus ist auch die Seitenleiste dichter; auf Touch-Geräten bleiben ihre größeren Bedienflächen erhalten. Die Einstellung **Nachrichtengröße > Klein** reduziert zusätzlich die Schriftgröße und die Nachrichtenabstände.
 
+Tippe auf einem Touch-Gerät ins Eingabefeld, um die Bildschirmtastatur zu öffnen. Beim Öffnen einer Session oder Wischen im Verlauf wird das Feld nicht automatisch fokussiert.
+
 Unter **Einstellungen > Grundeinstellungen > Position der Sessions** wählst du, ob der Bereich **Sessions** über oder unter den Projekten erscheint. Standard ist **Unter den Projekten**. Speichere die Auswahl; sie gilt für dein Konto auf allen Geräten. Sessions innerhalb eines Projekts bleiben beim jeweiligen Projekt.
 
 Mit **Einstellungen > Grundeinstellungen > Sessions pro Ladeschritt** legst du fest, wie viele Sessions die Seitenleiste zuerst und bei **Mehr anzeigen** lädt (1–100, Standard 8). Der Wert gilt für dein Konto auch innerhalb von Projekten. Änderungen wirken beim nächsten Laden; bereits nachgeladene Sessions bleiben bei Aktualisierungen sichtbar. Die Anzahl geladener Chatnachrichten ändert sich nicht.

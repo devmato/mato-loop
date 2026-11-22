@@ -63,7 +63,7 @@ export function useChatNavigation({ chat, route, router, composer, controlCenter
       try { await controlCenter.openApp(route.query.controlCenter) } catch { /* Central API toast. */ }
     }
     await nextTick()
-    if (current() && !routeMessageId.value && (id || newSessionRequested.value)) composer.value?.focus()
+    if (current() && !routeMessageId.value && (id || newSessionRequested.value)) composer.value?.focus({ automatic: true })
   }
 
   watch(destination, (_, previous) => {

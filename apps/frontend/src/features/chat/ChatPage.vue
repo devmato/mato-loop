@@ -1,5 +1,5 @@
 <template>
-  <q-page :style-fn="chatPageStyle" class="chat-page column no-wrap">
+  <q-page class="chat-page column no-wrap" style="min-height: 0">
     <q-splitter
       v-model="splitPosition"
       class="chat-workspace-splitter col"
@@ -819,18 +819,10 @@ function addAttachmentFiles(files, done, options) {
   done?.(result)
 }
 
-function chatPageStyle(offset, height) {
-  return {
-    minHeight: '0px',
-    height: `calc(var(--app-visual-viewport-height, ${height}px) - ${offset}px)`,
-    transform: 'translateY(var(--app-visual-viewport-offset-top, 0px))'
-  }
-}
-
 watch([newSessionRequested, routeProjectId], async ([requested]) => {
   if (!requested || !isNewConversation.value) return
   await nextTick()
-  composer.value?.focus()
+  composer.value?.focus({ automatic: true })
 })
 watch(showHome, async (shown) => {
   if (!shown) return
@@ -856,7 +848,7 @@ watch(
   async ([question, running], [previousQuestion, wasRunning]) => {
     if (question || running || (!previousQuestion && !wasRunning)) return
     await nextTick()
-    composer.value?.focus()
+    composer.value?.focus({ automatic: true })
   }
 )
 watch(

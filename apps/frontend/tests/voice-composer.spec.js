@@ -4,9 +4,9 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ notify: vi.fn(), copyToClipboard: vi.fn(), api: { post: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() }, recorder: null, mobile: false, resetMessageSizes: vi.fn() }))
+const mocks = vi.hoisted(() => ({ notify: vi.fn(), copyToClipboard: vi.fn(), api: { post: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() }, recorder: null, mobile: false, touch: false, resetMessageSizes: vi.fn() }))
 vi.mock('src/boot/axios', () => ({ api: mocks.api }))
-vi.mock('quasar', () => ({ Screen: { lt: { get md() { return mocks.mobile } } }, copyToClipboard: mocks.copyToClipboard, useQuasar: () => ({ notify: mocks.notify, platform: { is: { mobile: mocks.mobile } }, screen: { gt: { xs: !mocks.mobile, sm: !mocks.mobile }, lt: { sm: mocks.mobile } } }) }))
+vi.mock('quasar', () => ({ Screen: { lt: { get md() { return mocks.mobile } } }, copyToClipboard: mocks.copyToClipboard, useQuasar: () => ({ notify: mocks.notify, platform: { is: { mobile: mocks.mobile }, has: { get touch() { return mocks.touch } } }, screen: { gt: { xs: !mocks.mobile, sm: !mocks.mobile }, lt: { sm: mocks.mobile } } }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
 vi.mock('src/features/chat/audio-recorder', () => ({
   useAudioRecorder: (options) => { mocks.onAutoStopped = options.onAutoStopped; return mocks.recorder },
@@ -74,6 +74,7 @@ async function click(label) {
 
 beforeEach(async () => {
   mocks.mobile = false
+  mocks.touch = false
   mocks.scrollTarget = null
   setActivePinia(createPinia())
   chat = useChatStore()
@@ -222,8 +223,16 @@ describe('voice attachment composer', () => {
   })
 
   it('focuses the message input when pressing the card padding', () => {
-    root.querySelector('.chat-composer__card').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    const event = new MouseEvent('pointerdown', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'pointerType', { value: 'mouse' })
+    root.querySelector('.chat-composer__card').dispatchEvent(event)
     expect(document.activeElement).toBe(root.querySelector('.chat-composer__input'))
+  })
+
+  it('leaves the composer unfocused when the page requests automatic focus on a touch device', () => {
+    mocks.touch = true
+    composer.value.focus({ automatic: true })
+    expect(document.activeElement).not.toBe(root.querySelector('.chat-composer__input'))
   })
 
   it('shows the message hint only in an entirely empty composer', async () => {
@@ -775,7 +784,8 @@ describe('voice attachment composer', () => {
     expect(chat.activeAgentProfileId).toBe('interactive')
   })
 
-  it('returns focus to the composer after selecting an agent or send mode', async () => {
+  it.each([false, true])('returns focus to the composer after selecting an agent or send mode (touch=%s)', async (touch) => {
+    mocks.touch = touch
     chat.selectedSessionId = 'session-1'
     chat.current.agentProfileId = 'agent-a'
     chat.running = true

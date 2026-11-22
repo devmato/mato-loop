@@ -11,7 +11,7 @@
     <q-card
       flat
       class="app-surface chat-composer__card"
-      @mousedown="focusInputFromBackground"
+      @pointerdown="focusInputFromBackground"
       @dragenter="handleDragEnter"
       @dragover="handleDragOver"
       @dragleave="handleDragLeave"
@@ -27,7 +27,7 @@
           :key="session?.sessionProfile?.messageSize || 'standard'"
           ref="input"
           :model-value="draftText"
-          borderless dense autogrow :autofocus="autofocus" type="textarea" rows="1"
+          borderless dense autogrow :autofocus="autofocus && !$q.platform.has?.touch" type="textarea" rows="1"
           class="chat-composer__input"
           :class="{ 'chat-composer__input--small': session?.sessionProfile?.messageSize === 'small' }"
           :placeholder="draftHasContent ? undefined : inputPlaceholder"
@@ -408,12 +408,12 @@ function removeQuote(index) {
   updateDraft(draftText.value, draftQuotes.value.filter((_, position) => position !== index))
 }
 
-function focusInput() {
-  input.value?.focus()
+function focusInput({ automatic = false } = {}) {
+  if (!automatic || !$q.platform.has?.touch) input.value?.focus()
 }
 
 function focusInputFromBackground(event) {
-  if (event.button !== 0 || voice.active) return
+  if (event.pointerType !== 'mouse' || event.button !== 0 || voice.active) return
   if (event.target !== event.currentTarget
     && (!input.value?.$el.contains(event.target) || event.target.tagName === 'TEXTAREA')) return
   event.preventDefault()
