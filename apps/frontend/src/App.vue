@@ -1,5 +1,4 @@
 <template>
-  <div v-if="isAppleStandalone" class="pwa-status-bar-background" aria-hidden="true" />
   <div v-if="!auth.statusLoaded" class="startup-view column items-center justify-center">
     <AppLogo :size="56" />
     <div class="text-h6 text-weight-bold q-mt-md">{{ appearance.appName }}</div>
@@ -36,7 +35,6 @@
 </template>
 
 <script setup>
-import { Platform } from 'quasar'
 import { defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useChangelogStore } from 'src/features/changelog/store'
@@ -58,8 +56,6 @@ const auth = useAuthStore()
 const appearance = useAppearanceStore()
 const changelog = useChangelogStore()
 const route = useRoute()
-const isAppleStandalone = navigator.standalone === true
-  || (Platform.is.ios && window.matchMedia('(display-mode: standalone)').matches)
 const ChangelogDialog = defineAsyncComponent(() => import('src/features/changelog/ChangelogDialog.vue'))
 const showChanges = ref(true)
 const startupSlow = ref(false)
@@ -132,17 +128,6 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* WebKit samples the color of fixed bands taller than 10px. Clip the paint so the band does not cover the tabs. */
-.pwa-status-bar-background {
-  position: fixed;
-  z-index: 3001;
-  inset: 0 0 auto;
-  height: 11px;
-  background-color: var(--app-shell-bg);
-  background-clip: text;
-  pointer-events: none;
-}
-
 .startup-view {
   min-height: 100dvh;
   background: var(--app-shell-bg);
