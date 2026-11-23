@@ -3,6 +3,15 @@ import { hiddenToolScript, TOOL_SCRIPT } from 'src/features/chat/tool-display'
 import { toolFileActions, toolOpenFileActions } from 'src/features/files/attachments'
 import { apiErrorMessage } from 'src/utils/api-errors'
 
+// Read reactive text only in the rendered row, not during transcript projection.
+export function chatMessageText(message) {
+  return message.liveText ? `${message.content || ''}${message.liveText()}` : message.content
+}
+
+function hasMessageText(message) {
+  return Boolean(message.content || message.liveText)
+}
+
 export function retryAvailableForMessage(message, messages = [], running = false) {
   return message?.kind === 'runtime_error'
     && message.retryAvailable === true
@@ -84,7 +93,7 @@ export function buildChatTranscript(
     toolExecutionActive = running,
     activeToolCallId = null,
     completedToolCallId = null,
-    processOutputs = {},
+    readProcessOutput = null,
     questions = [],
     contextSummaries = [],
     liveMessage = null
@@ -171,7 +180,7 @@ export function buildChatTranscript(
           current: currentRound,
           active,
           completed: currentRound && tool.id === completedToolCallId,
-          ...(processOutputs[tool.id] ? { processOutput: processOutputs[tool.id] } : {})
+          ...(readProcessOutput ? { readProcessOutput } : {})
         }
       }),
       workHistory: null
@@ -236,17 +245,17 @@ export function buildChatTranscript(
     const liveHistory = live ? liveMessage.workHistory : null
     const reversedSection = [...assistantSection].reverse()
     const modelResponses = reversedSection.filter((message) => message.kind !== 'runtime_error')
-    const lastResponse = modelResponses.find((message) => message.content || message.toolCalls.length)
+    const lastResponse = modelResponses.find((message) => hasMessageText(message) || message.toolCalls.length)
     const manuallyStopped = reversedSection.some((message) => (
       message.generationStatus === 'interrupted' && !message.redirected
     ))
     const finalAnswer = manuallyStopped
-      ? modelResponses.find((message) => message.content) || null
-      : lastResponse?.content && !lastResponse.toolCalls.length ? lastResponse : null
+      ? modelResponses.find(hasMessageText) || null
+      : lastResponse && hasMessageText(lastResponse) && !lastResponse.toolCalls.length ? lastResponse : null
     if (finalAnswer && !finalAnswer.continuationSegment) {
       const partial = assistantSection.filter((message) => message.continuationSegment && message.content)
       if (partial.length) {
-        finalAnswer.content = `${partial.map((message) => message.content).join('\n\n')}\n\n${finalAnswer.content}`
+        finalAnswer.content = `${partial.map((message) => message.content).join('\n\n')}\n\n${finalAnswer.content || ''}`
       }
     }
     const workEntries = assistantSection.flatMap((message) => [
@@ -255,7 +264,7 @@ export function buildChatTranscript(
         ? [{ key: `reasoning-${message.id || message._sourceIndex}`, type: 'reasoning', reasoning: message.reasoning }]
         : []),
       ...runWarningEntries(message.warnings, message.id || message._sourceIndex),
-      ...(message.content && message.kind !== 'runtime_error' && message !== finalAnswer && !message.continuationSegment
+      ...(hasMessageText(message) && message.kind !== 'runtime_error' && message !== finalAnswer && !message.continuationSegment
         ? [{
             key: `commentary-${message.id || message._sourceIndex}`,
             type: 'commentary',
@@ -263,6 +272,7 @@ export function buildChatTranscript(
             message: {
               id: message.id,
               content: message.content,
+              ...(message.liveText ? { liveText: message.liveText } : {}),
               research: message.research,
               streaming: message.streaming,
               attachments: message.attachments
@@ -309,11 +319,12 @@ export function buildChatTranscript(
       ? 'private'
       : trustLevels.includes('public') ? 'public' : null
     const finalModelName = reversedSection.find((message) => message.modelName)?.modelName || null
-    const hasContent = assistantSection.some((message) => Boolean(message.content))
+    const hasContent = assistantSection.some(hasMessageText)
 
     for (const message of assistantSection) {
       if (message !== finalAnswer && message.kind !== 'runtime_error') {
         message.content = ''
+        delete message.liveText
         message.attachments = []
       }
       message.toolCalls = []
@@ -329,7 +340,7 @@ export function buildChatTranscript(
       && workEntries.every((entry) => entry.type === 'reasoning')
     const visibleMessages = (redirectedEmpty ? [] : assistantSection).filter((message) => (
       message.kind === 'runtime_error'
-      || message.content
+      || hasMessageText(message)
       || message.generationStatus === 'interrupted'
       || message.attachments?.length
       || message.workHistory

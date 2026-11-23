@@ -193,7 +193,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     if (sessionsChanged) {
       if (route.name === 'chat' && routeSessionId.value
         && (!chat.running || (voice.active && voice.sessionId === routeSessionId.value))
-        && (all || !sessionIds.size || sessionIds.has(routeSessionId.value))) {
+        && (refreshAllLists || changedSessionIds.includes(routeSessionId.value))) {
         reload('messages', chat.refreshSession(routeSessionId.value, config), routeSessionId.value)
       }
       if (refreshAllLists) reload('sessions', chat.invalidateSessionLists(config))

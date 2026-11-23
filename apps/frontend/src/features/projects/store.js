@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { queueRefresh } from 'src/utils/queued-refresh'
+import { reconcileApiRows } from 'src/utils/api-snapshot'
 
 const pendingSummaryIds = new WeakMap()
 
@@ -41,7 +42,7 @@ export const useProjectStore = defineStore('projects', {
         try {
           const { data } = await api.get('/projects', { timeout: 30_000, ...config })
           if (revision !== this.revision) return
-          this.items = data.items
+          this.items = reconcileApiRows(this.items, data.items)
           this.loaded = true
           pendingSummaryIds.get(this)?.clear()
         } catch (error) {
@@ -74,10 +75,11 @@ export const useProjectStore = defineStore('projects', {
         }
         const targets = new Set(projectIds)
         const existing = new Set(this.items.map(item => item.id))
-        this.items = this.items
+        const next = this.items
           .filter(item => !targets.has(item.id) || summaries.has(item.id))
           .map(item => targets.has(item.id) ? summaries.get(item.id) : item)
-        this.items.push(...[...summaries.values()].filter(item => targets.has(item.id) && !existing.has(item.id)))
+        next.push(...[...summaries.values()].filter(item => !existing.has(item.id)))
+        this.items = reconcileApiRows(this.items, next)
         projectIds.forEach(id => pending.delete(id))
       })
     },

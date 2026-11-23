@@ -41,6 +41,15 @@ describe('projects store', () => {
     await refresh
   })
 
+  it('keeps the same project list after an unchanged targeted response', async () => {
+    api.get.mockImplementation(async () => ({ data: { items: [{ ...project }] } }))
+    const store = useProjectStore()
+    await store.fetchAll()
+    const previous = store.items
+    await store.refreshSummaries([project.id])
+    expect(store.items).toBe(previous)
+  })
+
   it('ignores stale reads', async () => {
     let resolveFirst
     api.get

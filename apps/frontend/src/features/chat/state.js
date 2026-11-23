@@ -1,3 +1,5 @@
+import { equalJson } from 'src/utils/api-snapshot'
+
 const DRAFT_STORAGE_KEY = 'matoLoopChatDrafts'
 
 export function defaultSessionOptions() {
@@ -169,20 +171,10 @@ export function compareSessions(left, right) {
   return rightActivityAt - leftActivityAt || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0)
 }
 
-// Session summaries are JSON; separate responses allocate fresh objects even for unchanged fields.
-export function equalSessionSummaryValue(left, right) {
-  if (left === right) return true
-  if (!left || !right || typeof left !== 'object' || typeof right !== 'object'
-    || Array.isArray(left) !== Array.isArray(right)) return false
-  const keys = Object.keys(right)
-  return Object.keys(left).length === keys.length
-    && keys.every(key => Object.hasOwn(left, key) && equalSessionSummaryValue(left[key], right[key]))
-}
-
 export function mergeSessionSummary(previous, summary) {
   let next = previous
   for (const key of Object.keys(summary)) {
-    if (equalSessionSummaryValue(previous[key], summary[key])) continue
+    if (equalJson(previous[key], summary[key])) continue
     if (next === previous) next = { ...previous }
     next[key] = summary[key]
   }

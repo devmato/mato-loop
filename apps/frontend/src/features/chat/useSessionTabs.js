@@ -49,15 +49,15 @@ export function useSessionTabs({ chat, route }) {
     }
     tabs.visit(context.value, { keep })
   }
+  const hasDraft = computed(() => Boolean(chat.activeDraft) || chat.activeAttachmentDraft.length > 0)
   watch([
     enabled, () => tabs.loaded, () => chat.loading, () => chat.current?.id, () => chat.current?.title,
-    () => chat.current?.projectId, () => route.query.session, () => route.fullPath, () => chat.activeDraft,
-    () => chat.activeAttachmentDraft.length, () => chat.running
+    () => chat.current?.projectId, () => route.query.session, () => route.fullPath, hasDraft, () => chat.running
   ], () => {
-    visit(Boolean(chat.activeDraft || chat.activeAttachmentDraft.length || chat.running))
+    visit(hasDraft.value || chat.running)
   }, { immediate: true })
-  watch([() => chat.activeDraft, () => chat.activeAttachmentDraft.length], () => {
-    if (chat.activeDraft || chat.activeAttachmentDraft.length) visit(true)
+  watch(hasDraft, (present) => {
+    if (present) visit(true)
   }, { flush: 'sync' })
   return { ...navigation, activeKey }
 }

@@ -69,9 +69,9 @@
                   @trust-image-origin="trustImageOrigin"
                 >
                   <MessageContent
-                    v-if="message.content && message.role === 'assistant'"
+                    v-if="(message.content || message.liveText) && message.role === 'assistant'"
                     class="chat-message__content"
-                    :content="message.content"
+                    :content="chatMessageText(message)"
                     :research-sources="message.research?.linkedSources || []"
                     :streaming="message.streaming"
                     :trusted-image-origins="trustedImageOrigins"
@@ -108,10 +108,11 @@ import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import { useSubagentStore, subagentStatus } from 'stores/subagents'
 import { useApprovalStore } from 'stores/approvals'
 import { useQuestionStore } from 'stores/questions'
-import { buildChatTranscript } from 'src/features/chat/transcript'
+import { buildChatTranscript, chatMessageText } from 'src/features/chat/transcript'
 import { agentRunPresentation } from 'src/features/chat/agent-activity'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
+import { reuseList } from 'src/utils/api-snapshot'
 
 const props = defineProps({ parentId: { type: String, required: true }, childId: { type: String, required: true } })
 const route = useRoute()
@@ -129,29 +130,34 @@ const parentRoute = computed(() => {
   return { name: 'chat', query }
 })
 const child = computed(() => inspector.children.find((item) => item.id === props.childId))
-const pendingApprovals = computed(() => approvals.forSession(props.parentId).filter((item) => item.payload?.subagentSessionId === props.childId))
-const pendingQuestions = computed(() => questions.forSession(props.parentId).filter((item) => item.payload?.subagentSessionId === props.childId))
+const pendingApprovals = computed(previous => reuseList(previous, approvals.forSession(props.parentId)
+  .filter(item => item.payload?.subagentSessionId === props.childId)))
+const pendingQuestions = computed(previous => reuseList(previous, questions.forSession(props.parentId)
+  .filter(item => item.payload?.subagentSessionId === props.childId)))
 const waiting = computed(() => ['waiting_approval', 'waiting_input'].includes(inspector.run?.status))
+const hasStreamText = computed(() => Boolean(inspector.streamContent))
+const readStreamText = () => inspector.streamContent
+const readProcessOutput = toolCallId => inspector.processOutputs[toolCallId]
 const transcript = computed(() => buildChatTranscript(inspector.current?.messages, pendingApprovals.value, {
   running: inspector.running,
   runId: inspector.run?.id,
   toolExecutionActive: inspector.activity.phase === 'processing_tool',
   activeToolCallId: inspector.activity.toolCallId,
   completedToolCallId: inspector.completedToolCallId,
-  processOutputs: inspector.processOutputs,
+  readProcessOutput,
   questions: pendingQuestions.value,
   contextSummaries: inspector.current?.contextSummaries,
   liveMessage: inspector.running ? {
-    id: `live-${props.childId}`, role: 'assistant', content: inspector.streamContent,
+    id: `live-${props.childId}`, role: 'assistant', liveText: hasStreamText.value ? readStreamText : null,
     userMessageId: inspector.streamUserMessageId,
     research: { linkedSources: inspector.streamResearchSources },
     agentProfileId: inspector.run?.agentProfileId || null,
-    streaming: Boolean(inspector.streamContent), workHistory: { entries: [] }
+    streaming: hasStreamText.value, workHistory: { entries: [] }
   } : null
 }))
 const presentation = computed(() => agentRunPresentation({
   runId: inspector.run?.id,
-  running: inspector.running, activity: inspector.activity, streamContent: inspector.streamContent,
+  running: inspector.running, activity: inspector.activity, streamContent: hasStreamText.value,
   streamReasoning: inspector.streamReasoning, streamContextSummary: inspector.streamContextSummary,
   transcript: transcript.value
 }))

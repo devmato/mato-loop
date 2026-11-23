@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { queueRefresh } from 'src/utils/queued-refresh'
+import { reconcileApiRows } from 'src/utils/api-snapshot'
 import { errorDescriptor } from 'src/utils/api-errors'
 
 const TERMINAL_ANSWER_ERRORS = new Set([
@@ -30,7 +31,7 @@ export const useQuestionStore = defineStore('questions', {
         try {
           const { data } = await api.get('/questions/pending', { timeout: 30_000, ...config })
           if (revision !== this.revision || !Array.isArray(data)) return
-          this.pending = data
+          this.pending = reconcileApiRows(this.pending, data)
           this.loaded = true
           const pendingIds = new Set(this.pending.map((item) => item.id))
           for (const id of Object.keys(this.drafts)) {

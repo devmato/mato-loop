@@ -123,6 +123,17 @@ describe('chat drafts', () => {
     expect(write.mock.calls.map(([, value]) => JSON.parse(value).newSession.message)).toEqual(['ab'])
   })
 
+  it('does not repeatedly persist while typing but still saves during a long burst', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const chat = useChatStore()
+    const write = vi.spyOn(window.localStorage, 'setItem')
+    for (let character = 1; character <= 10; character++) {
+      chat.setDraft('a'.repeat(character), { defer: true })
+      await vi.advanceTimersByTimeAsync(200)
+    }
+    expect(write.mock.calls.map(([, value]) => JSON.parse(value).newSession.message)).toEqual(['aaaaaaaaaa'])
+  })
+
   it('opens the fork even when the original session refreshes during copying', async () => {
     const chat = useChatStore()
     chat.current = { id: 'source', projectId: 'project', messages: [] }
@@ -2012,8 +2023,10 @@ describe('chat drafts', () => {
     const source = EventSourceMock.instances[0]
 
     source.emit('process.output', { toolCallId: 'call-1', stdout: 'eins', stderr: '' })
+    const outputs = chat.processOutputs
     source.emit('process.output', { toolCallId: 'call-1', stdout: 'eins\nzwei', stderr: 'warnung' })
 
+    expect(chat.processOutputs).toBe(outputs)
     expect(chat.processOutputs['call-1']).toEqual({
       stdout: 'eins\nzwei',
       stderr: 'warnung'

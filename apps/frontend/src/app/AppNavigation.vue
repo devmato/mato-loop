@@ -494,10 +494,12 @@ watch(selectedProjectId, (projectId, previousProjectId) => {
 watch(() => drawerOpen.value ? [
   ...(sessionsSectionOpen.value ? ['standalone'] : []),
   ...(projectsSectionOpen.value ? projects.items.filter((project) => expandedProjects[project.id]).map((project) => project.id) : [])
-] : [], (scopes) => {
+].sort().join(',') : '', (scopeKey, previousKey) => {
+  const scopes = scopeKey ? scopeKey.split(',') : []
+  const previous = new Set(previousKey?.split(','))
   chat.visibleSessionScopes = scopes
   for (const scope of scopes) {
-    void chat.reconcileSessionList(scope === 'standalone' ? null : scope).catch(() => {})
+    if (!previous.has(scope)) void chat.reconcileSessionList(scope === 'standalone' ? null : scope).catch(() => {})
   }
 }, { immediate: true })
 

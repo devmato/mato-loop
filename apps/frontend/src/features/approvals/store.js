@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { queueRefresh } from 'src/utils/queued-refresh'
+import { reconcileApiRows } from 'src/utils/api-snapshot'
 import { errorDescriptor } from 'src/utils/api-errors'
 import { validRelativePath } from 'src/features/files/attachments'
 
@@ -61,7 +62,7 @@ export const useApprovalStore = defineStore('approvals', {
         try {
           const { data } = await api.get('/approvals/pending', { timeout: 30_000, ...config })
           if (revision !== this.revision || !Array.isArray(data)) return
-          this.pending = data
+          this.pending = reconcileApiRows(this.pending, data)
           this.loaded = true
         } catch (error) {
           if (revision === this.revision) this.loadFailed = true

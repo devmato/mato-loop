@@ -52,9 +52,11 @@ export const sessionsActions = {
       const owner = this.draftOwnerUserId
       sync.promise = Promise.resolve().then(async () => {
         while (sync.pending.size && owner === this.draftOwnerUserId) {
+          await Promise.all(Object.values(this.sessionLists).flatMap((list) => [list.loadRequest, list.pageRequest, list.refreshRequest]).filter(Boolean).map((request) => request.catch(() => {})))
+          if (owner !== this.draftOwnerUserId) return
+          // Include hints received while waiting for the current pages, before starting the GET.
           const requested = [...sync.pending]
           sync.pending.clear()
-          await Promise.all(Object.values(this.sessionLists).flatMap((list) => [list.loadRequest, list.pageRequest, list.refreshRequest]).filter(Boolean).map((request) => request.catch(() => {})))
           const summaries = []
           for (let offset = 0; offset < requested.length; offset += 100) {
             const params = new URLSearchParams({ pageSize: '100', includeArchived: 'true' })

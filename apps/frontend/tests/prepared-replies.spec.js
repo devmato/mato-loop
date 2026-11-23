@@ -15,6 +15,17 @@ afterEach(() => {
 })
 
 describe('prepared Markdown replies', () => {
+  it('notifies scroll consumers after the streamed Markdown reaches the DOM', async () => {
+    const content = ref('First paragraph')
+    const rendered = vi.fn(() => root.querySelector('p:last-child')?.textContent)
+    root = document.createElement('div')
+    app = createApp({ render: () => h(MessageContent, { content: content.value, streaming: true, onRendered: rendered }) })
+    app.use(Quasar, { components: { QCard, QDialog } })
+    app.mount(root)
+    content.value += '\n\nSecond paragraph'
+    await vi.waitFor(() => expect(rendered).toHaveLastReturnedWith('Second paragraph'))
+  })
+
   it('ignores equivalent file actions but renders changed filenames', async () => {
     const fileActions = ref([{ filename: 'Support-Meeting-Protokoll.md' }])
     const rendered = vi.fn()

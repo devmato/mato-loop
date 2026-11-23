@@ -132,7 +132,7 @@
                 :message="message"
                 :subagents="childrenByMessage.get(message.id) || emptyItems"
                 :show-active-subagents="message.id === latestAssistantMessageId"
-                :run-presentation="runPresentation"
+                :run-presentation="message.currentTurn ? runPresentation : null"
                 :trusted-image-origins="trustedImageOrigins"
                 :work-history-expanded="expandedWorkHistoryIds.has(message.workHistory?.id || message.id)"
                 :highlighted="highlightedMessageId === message.id"
@@ -271,7 +271,7 @@
           ref="composer"
           :autofocus="!chat.loading && !showHome"
           :session="chat.loading ? null : chat.activeContext"
-          :draft="chat.loading || pendingDraft ? '' : chat.activeDraft"
+          :read-draft="readComposerDraft"
           :disabled="chat.loading || changingDraftProject || !chat.outboxLoaded
             || chat.outboxSaving
             || chat.historyActionPending || Boolean(chat.queueUndoId)
@@ -380,6 +380,7 @@ import {
   withQueuedTranscriptMessages
 } from 'src/features/chat/transcript'
 import { apiErrorMessage } from 'src/utils/api-errors'
+import { reuseList } from 'src/utils/api-snapshot'
 import { notifyError } from 'src/utils/notifications'
 
 defineOptions({ name: 'ChatPage' })
@@ -462,6 +463,7 @@ async function setTodosCollapsed(collapsed) {
 const trustedImageOriginsBySession = ref(new Map())
 const expandedWorkHistoryIds = ref(new Set())
 const pendingDraft = computed(() => chat.activePendingMessage && !chat.activePendingMessage.preserveDraft)
+const readComposerDraft = () => chat.loading || pendingDraft.value ? '' : chat.activeDraft
 const canQuote = computed(() => Boolean(composer.value) && !composer.value?.quoteEditing && !chat.loading && !pendingDraft.value
   && !changingDraftProject.value && chat.outboxLoaded && !chat.outboxSaving && !chat.historyActionPending)
 const sendingMessageId = computed(() => chat.queueSendingEntryId || (
@@ -504,11 +506,14 @@ const draftProjectDisabled = computed(() => changingDraftProject.value || !isNew
   || routeProjectId.value !== chat.sessionsProjectId || !chat.outboxLoaded
   || chat.running || chat.outboxSaving
   || chat.activeQueuedMessages.length > 0 || Boolean(chat.emptySessionPromise || chat.queueDrainPromise))
-const sessionApprovals = computed(() => !chat.loading && chat.current?.id === routeSessionId.value
-  ? approvals.forSession(chat.current.id) : [])
-const sessionQuestions = computed(() => !chat.loading && chat.current?.id === routeSessionId.value
-  ? questions.forSession(chat.current.id) : [])
+const sessionApprovals = computed(previous => !chat.loading && chat.current?.id === routeSessionId.value
+  ? reuseList(previous, approvals.forSession(chat.current.id)) : emptyItems)
+const sessionQuestions = computed(previous => !chat.loading && chat.current?.id === routeSessionId.value
+  ? reuseList(previous, questions.forSession(chat.current.id)) : emptyItems)
 const activeQuestion = computed(() => sessionQuestions.value[0] || null)
+const hasStreamText = computed(() => Boolean(chat.streamContent))
+const readStreamText = () => chat.streamContent
+const readProcessOutput = toolCallId => chat.processOutputs[toolCallId]
 const transcript = computed(() => buildChatTranscript(
   chat.current?.messages,
   sessionApprovals.value,
@@ -518,18 +523,18 @@ const transcript = computed(() => buildChatTranscript(
     toolExecutionActive: chat.activity.phase === 'processing_tool',
     activeToolCallId: chat.activity.toolCallId,
     completedToolCallId: chat.completedToolCallId,
-    processOutputs: chat.processOutputs,
+    readProcessOutput,
     questions: sessionQuestions.value,
     contextSummaries: chat.current?.contextSummaries,
     liveMessage: chat.running && chat.activity.phase !== 'submitting' ? {
       id: `live-${chat.runId}`,
       role: 'assistant',
       userMessageId: chat.streamUserMessageId,
-      content: chat.streamContent,
+      liveText: hasStreamText.value ? readStreamText : null,
       modelName: chat.streamModelName,
       research: { linkedSources: chat.streamResearchSources },
       agentProfileId: chat.runAgentProfileId || chat.current?.activeRun?.agentProfileId || null,
-      streaming: Boolean(chat.streamContent),
+      streaming: hasStreamText.value,
       workHistory: liveWorkHistory.value
     } : null
   }
@@ -568,7 +573,7 @@ const runPresentation = computed(() => agentRunPresentation({
   activity: chat.activity,
   streamReasoning: chat.streamReasoning,
   streamContextSummary: chat.streamContextSummary,
-  streamContent: chat.streamContent,
+  streamContent: hasStreamText.value,
   transcript: transcript.value
 }))
 const trustedImageOrigins = computed(() => (

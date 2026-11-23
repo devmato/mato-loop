@@ -1,12 +1,29 @@
+import { computed, ref } from 'vue'
 import { describe, expect, it } from 'vitest'
 
 import {
   buildChatTranscript,
+  chatMessageText,
   groupWorkHistoryEntries,
   retryAvailableForMessage
 } from '../src/features/chat/transcript'
 
 describe('chat transcript', () => {
+  it('updates the live reply including its continuation prefix without rebuilding the transcript', () => {
+    const text = ref('First chunk')
+    const hasText = computed(() => Boolean(text.value))
+    const transcript = computed(() => buildChatTranscript([
+      { id: 'user', role: 'user', content: 'Start' },
+      { id: 'partial', role: 'assistant', content: 'Prefix', continuationSegment: true }
+    ], [], { running: true, liveMessage: {
+      id: 'live', role: 'assistant', liveText: hasText.value ? () => text.value : null
+    } }))
+    const original = transcript.value
+    text.value += ' and more'
+    expect([transcript.value === original, chatMessageText(transcript.value.messages.at(-1))])
+      .toEqual([true, 'Prefix\n\nFirst chunk and more'])
+  })
+
   it('does not give a new run result to an unanswered earlier call with the same id', () => {
     const transcript = buildChatTranscript([
       { id: 'user-1', role: 'user', content: 'First request' },

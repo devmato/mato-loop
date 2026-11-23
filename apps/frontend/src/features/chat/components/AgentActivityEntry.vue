@@ -115,7 +115,7 @@
           <q-btn flat dense label="Erneut laden" @click="loadFullResult" />
         </div>
         <p v-else-if="tool.argumentsTruncated" role="status">Tool-Argumente sind noch nicht vollständig geladen.</p>
-        <ShellToolOutput v-if="shellCommandText" :command="shellCommandText" :output="typeof result.stdout === 'string' ? result : entry.processOutput || {}" />
+        <ShellToolOutput v-if="shellCommandText" :command="shellCommandText" :output="shellOutput" />
         <div v-for="(item, index) in toolDetails" :key="index" class="q-mb-sm">
           <div class="text-weight-medium">{{ item.label }}</div>
           <ul v-if="item.format === 'list'" class="q-my-none q-pl-md"><li v-for="(value, i) in item.value" :key="i">{{ value }}</li></ul>
@@ -148,7 +148,7 @@
   </q-item>
   <div v-else-if="entry.type === 'commentary'" class="q-pt-sm" :class="{ 'activity-shimmer': entry.active }">
     <MessageContent
-      :content="entry.message.content"
+      :content="chatMessageText(entry.message)"
       :research-sources="entry.message.research?.linkedSources || []"
       :streaming="entry.message.streaming"
       :trusted-image-origins="trustedImageOrigins"
@@ -190,6 +190,7 @@ import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import ShellToolOutput from 'src/features/chat/components/ShellToolOutput.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
 import { parseToolResult, shellCommand, TOOL_SCRIPT, toolIdentity, toolPresentation, toolStatus } from 'src/features/chat/tool-display'
+import { chatMessageText } from 'src/features/chat/transcript'
 
 defineOptions({ name: 'AgentActivityEntry' })
 
@@ -235,6 +236,9 @@ const summary = computed(() => isTool.value
   ? (tool.value.name === TOOL_SCRIPT ? result.value.errorMessage : result.value.summary) || toolInfo.value.summary
   : reasoningSummary.value ? '' : props.entry.presentation?.summary)
 const shellCommandText = computed(() => isTool.value ? shellCommand(tool.value) : '')
+const emptyShellOutput = Object.freeze({})
+const shellOutput = computed(() => typeof result.value.stdout === 'string' ? result.value
+  : props.entry.readProcessOutput?.(props.entry.tool.id) || props.entry.processOutput || emptyShellOutput)
 const status = computed(() => {
   if (isGroup.value) {
     const statuses = props.entry.items.map(toolStatus)

@@ -321,6 +321,24 @@ it.each([
   } finally { summaries.mockRestore(); visibility.mockRestore() }
 })
 
+it('does not refresh the visible transcript for a background message and an unrelated current-session hint', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  const route = useRoute()
+  const previous = { name: route.name, query: route.query }
+  Object.assign(route, { name: 'chat', query: { session: 'standalone' } })
+  try {
+    EventSource.instances[0].emit([
+      { resource: 'messages', sessionId: 'project-session' },
+      { resource: 'message_queue', sessionId: 'standalone' }
+    ])
+    await vi.advanceTimersByTimeAsync(100)
+    expect(chat.refreshSession).not.toHaveBeenCalled()
+  } finally {
+    Object.assign(route, previous)
+    visibility.mockRestore()
+  }
+})
+
 it('coalesces targeted summary updates and retains their IDs when retrying', async () => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
   chat.syncSessionSummaries.mockRejectedValueOnce(new Error('offline'))

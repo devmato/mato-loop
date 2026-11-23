@@ -1,4 +1,4 @@
-import { markRaw } from 'vue'
+import { markRaw, toRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { attachmentKind, attachmentPreviewUrl, MAX_ATTACHMENT_DRAFT_BYTES, normalizedMimeType, releaseAttachmentDrafts } from 'src/features/chat/attachments'
@@ -9,12 +9,13 @@ import { gitFinishEntry } from 'src/features/coding/git-actions-store'
 import { useSessionTabsStore } from './session-tabs-store'
 
 const pendingDraftWrites = new WeakMap()
-const DRAFT_WRITE_INTERVAL_MS = 400
+const DRAFT_WRITE_IDLE_MS = 400
+const DRAFT_WRITE_MAX_MS = 2000
 
 function cancelDraftWrite(state) {
-  const timer = pendingDraftWrites.get(state)
-  if (timer === undefined) return
-  clearTimeout(timer)
+  const pending = pendingDraftWrites.get(state)
+  if (!pending) return
+  clearTimeout(pending.timer)
   pendingDraftWrites.delete(state)
 }
 
@@ -33,7 +34,7 @@ export const draftActions = {
       if (!this.draftOwnerUserId || typeof window === 'undefined') return
       try {
         this.drafts.newSessions[sessionScopeKey(this.sessionsProjectId)] = this.drafts.newSession
-        persistDrafts(this.draftOwnerUserId, this.drafts)
+        persistDrafts(this.draftOwnerUserId, toRaw(this.drafts))
       } catch {
         // Chat remains usable when local storage is blocked or full.
       }
@@ -189,9 +190,13 @@ export const draftActions = {
       if (this.current) this.drafts.sessionMessages[this.current.id] = message
       else this.drafts.newSession.message = message
       if (!defer) this.persistDrafts()
-      else if (this.draftOwnerUserId && !pendingDraftWrites.has(this.$state)) {
+      else if (this.draftOwnerUserId) {
         // Devtools may wrap `this` per action; the state keeps the same identity.
-        pendingDraftWrites.set(this.$state, setTimeout(() => this.flushDraftWrite(), DRAFT_WRITE_INTERVAL_MS))
+        const now = performance.now()
+        const pending = pendingDraftWrites.get(this.$state) || { deadline: now + DRAFT_WRITE_MAX_MS }
+        clearTimeout(pending.timer)
+        pending.timer = setTimeout(() => this.flushDraftWrite(), Math.min(DRAFT_WRITE_IDLE_MS, Math.max(0, pending.deadline - now)))
+        pendingDraftWrites.set(this.$state, pending)
       }
     },
     flushDraftWrite() {

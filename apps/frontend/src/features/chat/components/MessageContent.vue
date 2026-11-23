@@ -103,7 +103,11 @@ function renderContent() {
     trustedImageOrigins: props.trustedImageOrigins
   })
   syncImageVerifications()
-  if (!props.streaming) hydrateMermaid(version)
+  if (props.streaming) {
+    void nextTick(() => {
+      if (version === renderVersion && contentRoot.value) emit('rendered')
+    })
+  } else hydrateMermaid(version)
 }
 
 async function hydrateMermaid(version) {

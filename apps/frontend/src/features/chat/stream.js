@@ -251,7 +251,8 @@ export const streamActions = {
         const incoming = payload.output && typeof payload.output === 'object'
           ? payload.output
           : payload
-        const previous = this.processOutputs[toolCallId] || { stdout: '', stderr: '' }
+        const existing = Object.hasOwn(this.processOutputs, toolCallId) ? this.processOutputs[toolCallId] : null
+        const previous = existing || { stdout: '', stderr: '' }
         const next = { ...previous }
         if (typeof incoming.stdout === 'string') next.stdout = incoming.stdout
         if (typeof incoming.stderr === 'string') next.stderr = incoming.stderr
@@ -263,7 +264,10 @@ export const streamActions = {
         }
         if (typeof incoming.truncated === 'boolean') next.truncated = incoming.truncated
         if (typeof incoming.outputTruncated === 'boolean') next.truncated = incoming.outputTruncated
-        this.processOutputs = { ...this.processOutputs, [toolCallId]: next }
+        if (toolCallId === '__proto__') this.processOutputs = { ...this.processOutputs, [toolCallId]: next }
+        else if (!existing || Object.keys(next).some(key => next[key] !== previous[key])) {
+          this.processOutputs[toolCallId] = next
+        }
       })
       const promoteStreamedMessage = (message) => {
         if (message && this.current?.id === sessionId) {

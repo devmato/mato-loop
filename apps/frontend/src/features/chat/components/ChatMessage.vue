@@ -15,7 +15,7 @@
     <span v-if="message.role === 'user'" class="app-sr-only">Benutzernachricht</span>
     <span v-else-if="message.showAgentLabel" class="app-sr-only">Assistentenantwort</span>
     <AgentActivityPanel
-      v-if="message.content || message.workHistory || message.generationStatus === 'interrupted'"
+      v-if="content || message.workHistory || message.generationStatus === 'interrupted'"
       hide-provided-files
       :history="message.workHistory"
       :subagents="subagents"
@@ -43,9 +43,9 @@
         @prepared-reply="emit('prepared-reply', $event)"
       />
       <MessageContent
-        v-if="message.content && message.role === 'assistant'"
+        v-if="content && message.role === 'assistant'"
         class="chat-message__content"
-        :content="message.content"
+        :content="content"
         :role="message.error ? 'alert' : undefined"
         :file-actions="message.fileActions"
         :research-sources="message.research?.linkedSources || emptyItems"
@@ -168,7 +168,7 @@
         <q-tooltip>Erneut versuchen</q-tooltip>
       </q-btn>
       <q-btn
-        v-if="message.role === 'assistant' && message.content"
+        v-if="message.role === 'assistant' && content"
         flat round dense size="xs" icon="content_copy"
         class="chat-message__meta-action chat-message__meta-action--hover q-ml-auto"
         aria-label="Antwort kopieren"
@@ -183,7 +183,7 @@ import { computed } from 'vue'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useChatStore } from 'src/features/chat/store'
-import { retryAvailableForMessage } from 'src/features/chat/transcript'
+import { chatMessageText, retryAvailableForMessage } from 'src/features/chat/transcript'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
 import AgentActivityPanel from './AgentActivityPanel.vue'
 import ChatFiles from './ChatFiles.vue'
@@ -214,6 +214,7 @@ const chat = useChatStore()
 const agentProfiles = useAgentProfileStore()
 const $q = useQuasar()
 const messageSize = computed(() => chat.activeContext.sessionProfile?.messageSize)
+const content = computed(() => chatMessageText(props.message))
 const metadata = computed(() => {
   const message = props.message
   const labels = []
@@ -222,7 +223,7 @@ const metadata = computed(() => {
     labels.push({ kind: 'agent', text: agentProfiles.byId(message.agentProfileId)?.name || 'Allgemein' })
   }
   if (message.origin === 'host' || (message.role === 'assistant'
-    && Boolean(message.hasAssistantContent || message.content) && Boolean(message.modelName))) {
+    && Boolean(message.hasAssistantContent || content.value) && Boolean(message.modelName))) {
     const text = message.origin === 'host' ? 'Host' : message.modelName
     labels.push({ kind: 'model', text, title: text })
   }
@@ -254,7 +255,7 @@ const metadata = computed(() => {
 
 async function copyAnswer() {
   try {
-    await copyToClipboard(props.message.content)
+    await copyToClipboard(content.value)
     $q.notify({ type: 'positive', message: 'Antwort kopiert' })
   } catch {
     $q.notify({ type: 'negative', message: 'Die Antwort konnte nicht kopiert werden.' })

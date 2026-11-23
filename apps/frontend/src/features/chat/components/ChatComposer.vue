@@ -257,6 +257,7 @@ const props = defineProps({
   autofocus: { type: Boolean, default: true },
   session: { type: Object, default: null },
   draft: { type: String, default: '' },
+  readDraft: { type: Function, default: null },
   disabled: Boolean,
   running: Boolean,
   stopping: Boolean,
@@ -284,7 +285,8 @@ const commandList = ref(null)
 const commandMenu = ref(null)
 const composerWidth = ref(0)
 const paletteId = useId()
-const draftBlocks = computed(() => parseQuotedMessage(props.draft))
+const draft = computed(() => props.readDraft ? props.readDraft() : props.draft)
+const draftBlocks = computed(() => parseQuotedMessage(draft.value))
 const draftText = computed(() => draftBlocks.value.filter(block => block.type === 'text' && block.text).map(block => block.text).join('\n\n'))
 const draftQuotes = computed(() => draftBlocks.value.filter(block => block.type === 'quote'))
 const messageContent = computed(() => quotedMessage([{ type: 'text', text: draftText.value }, ...draftQuotes.value]))
@@ -294,7 +296,7 @@ const slashDismissed = ref(false)
 const slashQuery = computed(() => /^\/[a-z0-9_-]*$/iu.test(draftText.value) ? draftText.value : null)
 const paletteOpen = computed(() => !inputDisabled.value && !voiceActivity.value
   && !slashDismissed.value && slashQuery.value !== null)
-watch(() => props.draft, () => { slashDismissed.value = false })
+watch(draft, () => { slashDismissed.value = false })
 watch([() => props.session?.id, () => chat.sessionsProjectId], dismissCommands)
 const sendingRecording = ref(false)
 const { confirm } = useConfirm()
@@ -352,7 +354,7 @@ const attachmentsDisabled = computed(() => inputDisabled.value || starting.value
 watch([attachmentsDisabled, () => props.session?.id, () => chat.sessionsProjectId, () => chat.draftOwnerUserId], () => {
   fileDragDepth.value = 0
 })
-const draftHasContent = computed(() => Boolean(props.draft.trim() || props.attachments.length))
+const draftHasContent = computed(() => Boolean(draft.value.trim() || props.attachments.length))
 const inputPlaceholder = computed(() => `Eine Nachricht an ${identity.displayName} senden`)
 const voiceActivity = computed(() => starting.value || recording.value || finalizing.value || sendingRecording.value)
 const showVoiceStart = computed(() => !providers.loading && providers.lastLoadComplete
@@ -373,7 +375,7 @@ const sendDisabled = computed(() => (
   || finalizing.value
   || sendingRecording.value
   || !modelSupportsTools.value
-  || (!props.draft.trim() && !props.attachments.length)
+  || !draftHasContent.value
 ))
 const canSendDuringRun = computed(() => props.running && (voiceActivity.value || (
   props.queueMode && draftHasContent.value && !sendDisabled.value
