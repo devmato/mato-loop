@@ -7,6 +7,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     ValidationError,
     field_validator,
 )
@@ -38,6 +39,9 @@ from mato_loop_backend.settings import (
     load_agent_profile,
     load_effective_agent_identity,
 )
+from mato_loop_backend.settings.effective import personal_skills_allowed
+from mato_loop_backend.skill_packages import SkillError
+from mato_loop_backend.skills import SkillService
 from mato_loop_backend.tools.actions import _PERSONAL_SETTINGS_READ, _PERSONAL_SETTINGS_WRITE
 from mato_loop_backend.tools.arguments import (
     PersonalSettingsArguments,
@@ -66,6 +70,13 @@ _SCALAR_SETTINGS = {
     ),
 }
 _PROFILE_FIELDS = frozenset(UserProfileSettings.model_fields)
+
+
+class SkillChanges(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: UUID
+    enabled: StrictBool
 
 
 class VariableChanges(BaseModel):
@@ -104,7 +115,7 @@ def _policy(context: ToolContext, capability: str) -> ToolExecutionPolicy:
 async def _authorize(
     context: ToolContext, action: str, area: str, *,
     fields: tuple[str, ...] = (), integration_id: UUID | None = None,
-    changes: dict[str, Any] | None = None,
+    changes: dict[str, Any] | None = None, skill_id: UUID | None = None,
 ) -> ToolResult | None:
     capability = "settings.personal.read" if action == "get" else "settings.personal.update"
     context.tool_settings = await tools_access.profile_tool_settings(context)
@@ -116,7 +127,7 @@ async def _authorize(
         approved = await tools_access.allow(
             context, personal_settings_permission(
                 context.session.user_id, area, action,
-                fields=fields, integration_id=integration_id, changes=changes,
+                fields=fields, integration_id=integration_id, changes=changes, skill_id=skill_id,
             ),
         )
         if not approved:
@@ -174,6 +185,7 @@ async def _personal_settings(
             "variables": ["name", "secret", "description", "value_ref"],
             "integrations": adapters,
             "integrationOptions": ["caldav_defaults"],
+            "skills": ["skill_id", "enabled"],
         }
         result = {"areas": {area: areas[area]} if area else areas}
         if area in {None, "agent_identity"}:
@@ -188,6 +200,40 @@ async def _personal_settings(
         return ToolResult.json(result)
 
     assert area is not None
+    if area == "skills":
+        user_id = context.session.user_id
+        try:
+            if action == "get":
+                denied = await _authorize(context, action, area)
+                if denied:
+                    return denied
+                if not await personal_skills_allowed(context.db, user_id):
+                    return ToolResult.error("skill.personalDisabled")
+                skills = await SkillService.list_scoped(context.db, user_id, "personal")
+                return ToolResult.json({"skills": [
+                    {"id": str(skill.id), "name": skill.name, "enabled": skill.enabled} for skill in skills
+                ]})
+            changes = SkillChanges.model_validate(arguments.changes)
+            skill = await SkillService.get(context.db, user_id, changes.skill_id, "personal")
+            denied = await _authorize(
+                context, action, area, skill_id=skill.id,
+                changes={"Skill": skill.name, "Aktiviert": "Ja" if changes.enabled else "Nein"},
+            )
+            if denied:
+                return denied
+            skill = await SkillService.set_enabled(context.db, user_id, skill.id, changes.enabled, "personal")
+        except ValidationError as exc:
+            return argument_error(exc, arguments.changes, prefix="changes")
+        except SkillError as exc:
+            return ToolResult.error(exc.code)
+        await context.db.commit()
+        context.skill_state.active.pop(skill.id, None)
+        if skill.enabled:
+            context.skill_state.catalog[skill.id] = skill
+        else:
+            context.skill_state.catalog.pop(skill.id, None)
+        return ToolResult.json({"id": str(skill.id), "name": skill.name, "enabled": skill.enabled})
+
     if area == "integrations":
         return await manage_integrations(arguments, context, _authorize)
     if area == "variables":
@@ -389,7 +435,9 @@ CUSTOMIZE_MATOLOOP = ToolDefinition(
     "Never put secret values in changes. "
     "Use action=list to discover supported areas and fields; area is an optional filter. "
     "Use action=get to read saved values. SonoBin takes base_url and builds its MCP endpoint automatically. "
-    "Changes apply from the next run. "
+    "For skills, use area=skills and action=get to find personal or bundled skills, including disabled ones. "
+    "Use action=update with changes.skill_id and changes.enabled to change personal availability. "
+    "To use a newly enabled skill, call load_skill separately. Other settings changes apply from the next run. "
     "MCP supports no authentication, Bearer tokens, and OAuth. Interactive OAuth setup requires "
     "Settings > MCP servers.",
     PersonalSettingsArguments,

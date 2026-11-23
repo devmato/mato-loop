@@ -1189,7 +1189,7 @@ class UpdateUserProfileArguments(ToolArguments):
 
 class PersonalSettingsArguments(ToolArguments):
     action: Literal["list", "get", "update", "create", "delete"]
-    area: Literal["memory", "user_profile", "agent_identity", "integrations", "variables"] | None = None
+    area: Literal["memory", "user_profile", "agent_identity", "integrations", "variables", "skills"] | None = None
     changes: dict[str, Any] | None = Field(default=None, max_length=20)
     model_scope: Literal[
         "current_model", "private_models", "public_models", "both_models"

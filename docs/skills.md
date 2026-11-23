@@ -116,6 +116,12 @@ archive entries are rejected. The library uses no-follow directory walks.
 
 ## Runtime and connected computers
 
+On explicit request, `customize_matoloop` can change the enabled state of a
+personal or bundled skill for the current user. It uses the existing personal
+settings permission and personal-skill gate. After the change is saved, only
+that entry changes in the current run's catalog. This intentionally changes the
+catalog prefix; `load_skill` still checks its own permission before loading.
+
 `load_skill` loads a named or clearly relevant catalog entry before its first use.
 The model sees its instructions on the original tool result, not in the system
 prompt. In a main chat, the latest load of each skill can carry over if the owner,

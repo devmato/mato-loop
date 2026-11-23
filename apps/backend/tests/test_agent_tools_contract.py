@@ -103,7 +103,7 @@ from mato_loop_backend.settings import (
     UserIntegrationSettings,
     UserProfileSettings,
 )
-from mato_loop_backend.settings.models import ModelConfig
+from mato_loop_backend.settings.models import GITHUB_REPO_OPS_SKILL_ID, ModelConfig
 from mato_loop_backend.skill_packages import (
     MAX_SKILL_BYTES,
     SkillFile,
@@ -3185,7 +3185,7 @@ async def test_personal_calendar_default_requires_discovered_owned_resource(monk
     assert save.await_args.kwargs["user_id"] == context.session.user_id
 
 
-@pytest.mark.parametrize("area", ["memory"])
+@pytest.mark.parametrize("area", ["memory", "skills"])
 async def test_personal_settings_permissions_bind_to_session_owner(tmp_path, area) -> None:
     call = ToolCall("settings", "customize_matoloop", {"action": "get", "area": area})
     context = _context(tmp_path, call)
@@ -3553,6 +3553,45 @@ async def test_edit_skill_rejects_parallel_target_change(monkeypatch, tmp_path, 
     assert result.metadata["errorCode"] == "skill.changed"
     assert (await SkillService.get(context.db, context.session.user_id, existing.id, "personal")).description == "Parallel geändert."
     save.assert_not_awaited()
+
+
+async def test_customize_skill_respects_approval_and_updates_current_catalog(
+    monkeypatch, tmp_path, skill_library
+) -> None:
+    skill_id = GITHUB_REPO_OPS_SKILL_ID
+    update = ToolCall("enable", "customize_matoloop", {
+        "action": "update", "area": "skills", "changes": {"skill_id": str(skill_id), "enabled": True},
+    })
+    context = _context(tmp_path, update, decision=PermissionDecision.DENY)
+    context.tool_settings.private_permissions.policies["settings.personal.update"] = "ask"
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    instance, personal = InstanceSkillsSettings(), SkillsSettings()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(
+        side_effect=lambda _db, kind, **_kw: {InstanceSkillsSettings: instance, SkillsSettings: personal}[kind]
+    ))
+    monkeypatch.setattr(SettingsStore, "load_optional", SettingsStore.load)
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+    get = ToolCall("list-skills", "customize_matoloop", {"action": "get", "area": "skills"})
+    context.tool_settings.private_permissions.policies["settings.personal.read"] = "auto"
+    listed = json.loads((await tool_registry.execute(get, context)).content)["skills"]
+    assert {"id": str(skill_id), "name": "github-repo-ops", "enabled": False} in listed
+
+    denied = await tool_registry.execute(update, context)
+    assert denied.metadata["errorCode"] == "permission.denied"
+    save.assert_not_awaited()
+    assert skill_id not in context.skill_state.catalog
+
+    context.ask_handler.return_value = PermissionDecision.ALLOW
+    assert not (await tool_registry.execute(update, context)).is_error
+    assert save.await_args.kwargs["user_id"] == context.session.user_id
+    assert not next(skill for skill in instance.skills if skill.id == skill_id).enabled
+    load = ToolCall("load-skill", "load_skill", {"skill_id": str(skill_id)})
+    assert json.loads((await tool_registry.execute(load, context)).content)["loaded"] is True
+
+    update.arguments["changes"]["enabled"] = False
+    assert not (await tool_registry.execute(update, context)).is_error
+    assert (await tool_registry.execute(load, context)).metadata["errorCode"] == "skill.notFound"
 
 
 async def test_load_skill_activates_snapshot_without_returning_instructions(

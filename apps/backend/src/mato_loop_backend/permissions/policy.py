@@ -995,14 +995,16 @@ def user_profile_permission(
 def personal_settings_permission(
     user_id: UUID, area: str, action: str, *, fields: tuple[str, ...] = (),
     integration_id: UUID | None = None, changes: dict[str, Any] | None = None,
+    skill_id: UUID | None = None,
 ) -> PermissionRequest:
     verbs = {"get": "lesen", "create": "anlegen", "update": "ändern", "delete": "entfernen"}
-    labels = {"memory": "Memory", "user_profile": "persönliches Profil", "agent_identity": "Agent-Persona", "integrations": "Integrationen", "variables": "persönliche Variablen"}
+    labels = {"memory": "Memory", "user_profile": "persönliches Profil", "agent_identity": "Agent-Persona", "integrations": "Integrationen", "variables": "persönliche Variablen", "skills": "persönliche Skill-Einstellungen"}
     return PermissionRequest(
         capability="settings.personal.read" if action == "get" else "settings.personal.update",
         resource_type="personal_settings",
         resource_scope=json.dumps(
-            {"userId": str(user_id), "area": area, "integrationId": str(integration_id) if integration_id else None},
+            {"userId": str(user_id), "area": area, "integrationId": str(integration_id) if integration_id else None,
+             **({"skillId": str(skill_id)} if skill_id is not None else {})},
             separators=(",", ":"), sort_keys=True,
         ),
         action_kind=f"personal_settings_{action}",
@@ -1595,17 +1597,19 @@ class PermissionPolicy:
                 scope = json.loads(request.resource_scope)
                 owner_id = UUID(scope["userId"])
                 integration_id = scope["integrationId"]
+                scoped_skill = scope["area"] == "skills" and request.capability == "settings.personal.update"
                 if (
-                    set(scope) != {"userId", "area", "integrationId"}
+                    set(scope) != ({"userId", "area", "integrationId", "skillId"} if scoped_skill else {"userId", "area", "integrationId"})
                     or str(owner_id) != scope["userId"]
                     or owner_id != chat_session.user_id
-                    or scope["area"] not in {"memory", "user_profile", "agent_identity", "integrations", "variables"}
+                    or scope["area"] not in {"memory", "user_profile", "agent_identity", "integrations", "variables", "skills"}
+                    or (scoped_skill and str(UUID(scope["skillId"])) != scope["skillId"])
                     or (integration_id is not None and (scope["area"] != "integrations" or str(UUID(integration_id)) != integration_id))
                     or json.dumps(scope, separators=(",", ":"), sort_keys=True) != request.resource_scope
                     or request.capability not in {"settings.personal.read", "settings.personal.update"}
                 ):
                     return PermissionDecision.DENY
-            except (ValueError, KeyError, TypeError):
+            except (ValueError, KeyError, TypeError, AttributeError):
                 return PermissionDecision.DENY
 
         if request.resource_type == "personal_variable_collection":
