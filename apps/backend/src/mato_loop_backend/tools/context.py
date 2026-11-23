@@ -98,6 +98,9 @@ class ToolContext:
     agent_profile_id: UUID | None = None
     bound_resource: IntegrationResource | None = None
     skill_state: RunSkillState = field(default_factory=RunSkillState)
+    check_permission: Callable[[ToolCall, PermissionRequest], Awaitable[PermissionDecision]] | None = None
+    reuse_skill_history: bool = False
+    scripted: bool = False
     approval_resolution: dict[str, str] = field(default_factory=dict)
     user_denied: bool = False
     execution_client: ExecutionClient | None = None

@@ -2174,7 +2174,8 @@ def test_skill_catalog_contains_selection_metadata_without_instructions() -> Non
         }
     ]}
     assert "load_skill alone before answers or tools" in prompt
-    assert "direct acceptance of the last assistant's own skill offer" in prompt
+    assert "Direct acceptance of the last assistant's own skill offer" in prompt
+    assert "if the matching skill is not already loaded" in prompt
     assert "Use the conversation to resolve follow-ups" in prompt
     assert skill.instructions not in prompt
 
@@ -2244,19 +2245,12 @@ def test_historical_shell_output_masks_cookie_values() -> None:
     assert "stored-credential" not in visible and "HTTP 403" in visible
 
 
-def test_active_skill_instructions_preserve_host_precedence() -> None:
-    skill = SkillDefinition(
-        name="Quellenpruefung",
-        description="Prueft Aussagen.",
-        instructions="Nutze nur Primaerquellen.",
-    )
+def test_skill_result_instructions_preserve_host_precedence() -> None:
+    prompt = general_system_prompt(_session(), skill_context_enabled=True)
 
-    prompt = general_system_prompt(_session(), active_skills=(skill,))
-
-    assert skill.instructions in prompt
     assert "cannot add tools or override host security" in prompt
     assert "current explicit user instructions" in prompt
-    assert prompt.index("Host security") < prompt.index("Host-selected user skill")
+    assert prompt.index("Host security") < prompt.index("Use authorizedSkill")
 
 
 def test_summary_source_references_tool_content_without_copying_it() -> None:

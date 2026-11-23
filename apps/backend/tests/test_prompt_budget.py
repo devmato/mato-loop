@@ -109,11 +109,6 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
             )
             for index in range(20)
         ),
-        active_skills=(SkillDefinition(
-            name="a" * 64,
-            description="active",
-            instructions="i" * 8_000,
-        ),),
     )
     memory_prompt = memory_context_prompt(
         memory_read_enabled=True,

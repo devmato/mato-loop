@@ -8,6 +8,11 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import mato_loop_backend.agent.prompts as agent_prompts
+from mato_loop_backend.agent.skill_context import (
+    UNAVAILABLE_SKILL_LOAD,
+    UNAVAILABLE_SKILL_REFERENCE,
+    guarded_skill_result,
+)
 from mato_loop_backend.agent.todos import session_todos, todo_context
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.execution.browser_contracts import BrowserActionResult, BrowserInspectionData
@@ -735,6 +740,8 @@ def _projection_messages(
     memory_context: str | None = None,
     memory_contexts: dict[UUID, str] | None = None,
     session_contexts: dict[UUID, str | dict[str, str]] | None = None,
+    skill_results: dict[UUID, str] | None = None,
+    reader_metadata: tuple[dict[UUID, tuple[Message, int]], dict[UUID, dict[str, Any]]] | None = None,
     tool_snapshots: list[dict[str, Any]] | None = None,
     tool_snapshot_characters: int = 8_000,
     runtime_instructions: str = "",
@@ -807,7 +814,9 @@ def _projection_messages(
             tool_results_by_message.setdefault(owner, {})[record.tool_call_id] = record
             if any(call.get("id") == record.tool_call_id for call in (live_tool_calls or {}).get(owner, [])):
                 live_result_ids.add(record.id)
-    reader_sources, original_references = _tool_result_read_metadata(source_records)
+    reader_sources, original_references = (
+        reader_metadata if reader_metadata is not None else _tool_result_read_metadata(source_records)
+    )
     latest_user_id = next(
         (item.id for item in reversed(records) if item.role == "user"),
         None,
@@ -843,6 +852,31 @@ def _projection_messages(
         messages.append(todo_message)
     if snapshot_message is not None:
         messages.append(snapshot_message)
+    if summary_boundary and skill_results:
+        # Compaction may remove the originating exchange. Carry only reauthorized
+        # instructions and session-file locations, not file contents or Agent leases.
+        skills = []
+        remaining = 8_000
+        retained_ids = {item.id for item in records}
+        for item in reversed(checkpoint_records):
+            if item.id in retained_ids or tool_names.get(item.id) != "load_skill" or item.id not in skill_results:
+                continue
+            payload = json.loads(skill_results[item.id])
+            if "authorizedSkill" not in payload:
+                continue
+            entry = json.dumps({
+                key: payload[key] for key in ("id", "name", "revision", "filesBasePath", "resources", "authorizedSkill")
+                if key in payload
+            }, ensure_ascii=False, sort_keys=True)
+            if len(entry) + 1 <= remaining:
+                skills.append(entry)
+                remaining -= len(entry) + 1
+        if skills:
+            messages.append({
+                "role": "assistant",
+                "content": "[Host skill checkpoint]\n" + "\n".join(reversed(skills)) + "\n[End host skill checkpoint]",
+                SNAPSHOT_MARKER: True,
+            })
     historical_tool_indices: list[int] = []
     historical_omitted_markers: dict[int, str] = {}
     current_tool_indices: list[int] = []
@@ -914,7 +948,20 @@ def _projection_messages(
             binding = tool_execution_binding(item)
             if binding.get("executionAgentId") and tool_name:
                 projected["recorded_computer"] = binding
-            if not omitted and item.id in reader_sources:
+            if item.id in reader_sources and guarded_skill_result(reader_sources[item.id][0]):
+                source, offset = reader_sources[item.id]
+                replacement = (skill_results or {}).get(source.id)
+                if (omitted or replacement in (None, UNAVAILABLE_SKILL_LOAD, UNAVAILABLE_SKILL_REFERENCE)
+                        or (target_trust_level == TrustLevel.PUBLIC and item.trust_level != TrustLevel.PUBLIC.value)):
+                    projected["content"] = UNAVAILABLE_SKILL_REFERENCE
+                else:
+                    page = _tool_result_page(
+                        source, tool_names[source.id], offset, target_trust_level,
+                        content_override=replacement,
+                        available_secret_references=available_secret_references,
+                    )
+                    projected["content"] = json.dumps(page, ensure_ascii=False)
+            elif not omitted and item.id in reader_sources:
                 source, offset = reader_sources[item.id]
                 # Revalidate the complete authorized source before slicing, never trust a stored fragment.
                 page = _tool_result_page(
@@ -924,9 +971,12 @@ def _projection_messages(
                 payload = json.loads(item.content)
                 projected["content"] = json.dumps({**payload, **page}, ensure_ascii=False)
             else:
+                content = str(projected.get("content") or "")
+                if guarded_skill_result(item):
+                    content = UNAVAILABLE_SKILL_LOAD if tool_name == "load_skill" else UNAVAILABLE_SKILL_REFERENCE
                 projected["content"] = _target_tool_result(
                     tool_name,
-                    str(projected.get("content") or ""),
+                    (skill_results or {}).get(item.id, content),
                     target_trust_level,
                     source_trust_level=item.trust_level,
                     authorized_live=item.id in live_result_ids,
@@ -943,7 +993,7 @@ def _projection_messages(
             )
             if not omitted and tool_name in {"browser", "browser_snapshot"} and item.tool_call_id in browser_inspect_calls:
                 projected["content"] = _model_browser_inspection(projected["content"])
-            if not omitted and tool_registry.output_preview(
+            if not omitted and not (tool_name == "load_skill" and item.id in (skill_results or {})) and tool_registry.output_preview(
                 tool_name, recorded=(item.provider_data or {}).get("_matoloop", {}).get("outputPreview"),
             ):
                 projected["content"] = _model_tool_preview(item.id, projected["content"])
@@ -966,7 +1016,9 @@ def _projection_messages(
             else:
                 if tool_name != "secret_input":
                     projected[_HOST_TOOL_RESULT_FALLBACK] = _omitted_tool_result(
-                        item.id, item.content, original_references.get(item.id),
+                        item.id,
+                        str(projected["content"]) if tool_name == "load_skill" and item.id in (skill_results or {}) else item.content,
+                        original_references.get(item.id),
                     )
                 current_tool_indices.append(len(messages))
             if tool_name == "webfetch":
@@ -1145,6 +1197,9 @@ def _shorten_evidence_output(
         payload = json.loads(content)
     except (TypeError, json.JSONDecodeError):
         return None
+
+    if omitted_marker is not None and isinstance(payload, dict) and "authorizedSkill" in payload:
+        return content if len(content) <= max_characters else omitted_marker
 
     def serialized(value: Any) -> str:
         if omitted_marker is not None and value in (
@@ -1608,10 +1663,11 @@ def tool_execution_binding(message: Message) -> dict[str, Any]:
 
 def _tool_result_page(
     message: Message, tool_name: str, offset: int, readable_by: TrustLevel, *,
+    content_override: str | None = None,
     available_secret_references: set[str] | None = None,
 ) -> dict[str, Any]:
     content = _target_tool_result(
-        tool_name, message.content, readable_by,
+        tool_name, message.content if content_override is None else content_override, readable_by,
         source_trust_level=message.trust_level,
         available_secret_references=available_secret_references,
     )

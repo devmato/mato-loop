@@ -351,6 +351,14 @@ def _exchange(
     )
 
 
+def _loaded_skill_exchange(skill: SkillDefinition) -> tuple[dict[str, Any], ...]:
+    return _exchange("load_skill", {"skill_id": str(skill.id)}, json.dumps({
+        "id": str(skill.id), "name": skill.name, "loaded": True,
+        "filesBasePath": skill.files_path, "resources": skill.resource_paths,
+        "authorizedSkill": {"description": skill.description, "instructions": skill.instructions},
+    }, ensure_ascii=False))
+
+
 def _direct_message(content: str) -> str:
     return command_message_content(Message(
         role="user", content=content,
@@ -1726,7 +1734,8 @@ CASES = (
             "für Projekt Kupferstern wäre ein Snapshot vor dem Update sinnvoll. "
             "Viele Grüße, Nora Fichtenau."
         ),
-        system_options={"active_skills": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_dump(),)},
+        history=_loaded_skill_exchange(DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID]),
+        system_options={"skill_context_enabled": True},
         expected_no_tools=True,
         content_contains=("Snapshot",),
         content_excludes=("Silberhain", "Kupferstern", "Fichtenau"),
@@ -1741,7 +1750,8 @@ CASES = (
             "Silberhain, für Projekt Kupferstern wäre ein Snapshot vor dem Update sinnvoll. "
             "Viele Grüße, Nora Fichtenau."
         ),
-        system_options={"active_skills": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_dump(),)},
+        history=_loaded_skill_exchange(DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID]),
+        system_options={"skill_context_enabled": True},
         expected_no_tools=True,
         content_contains=("Nora Fichtenau", "Snapshot"),
         content_excludes=("Silberhain", "Kupferstern"),
@@ -1755,7 +1765,8 @@ CASES = (
             "einen Snapshot zu erstellen. Viele Grüße! Ohne Werkzeuge."
         ),
         tools=("edit_skill", "save_skill"),
-        system_options={"active_skills": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_dump(),)},
+        history=_loaded_skill_exchange(DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID]),
+        system_options={"skill_context_enabled": True},
         expected_no_tools=True,
         content_contains_any=(
             ("Samstag", "samstag"),
@@ -1768,10 +1779,11 @@ CASES = (
         kind="general",
         user="Schreibe eine Terminabsage in meinem gespeicherten Schreibstil.",
         tools=("read",),
-        system_options={"active_skills": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_copy(update={
+        history=_loaded_skill_exchange(DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_copy(update={
             "files_path": "skills/writing-style",
             "resource_paths": ["SKILL.md", "references/writing-examples.md"],
-        }).model_dump(),)},
+        })),
+        system_options={"skill_context_enabled": True},
         expected_tool="read",
         expected_arguments={"root": "files", "path": "skills/writing-style/references/writing-examples.md"},
         expected_tool_call_count=1,
@@ -6850,8 +6862,6 @@ def _general_case(
             SkillDefinition.model_validate(skill)
             for skill in system_options["skill_catalog"]
         )
-    if "active_skills" in system_options:
-        system_options["active_skills"] = tuple(SkillDefinition.model_validate(skill) for skill in system_options["active_skills"])
     if effective.prompt_fragments:
         system_options["tool_instructions"] = (
             *system_options.get("tool_instructions", ()),

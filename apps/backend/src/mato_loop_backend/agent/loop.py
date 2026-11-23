@@ -41,6 +41,7 @@ from mato_loop_backend.agent.script_tools import SCRIPT_TOOL
 from mato_loop_backend.agent.session_context import prepare_session_contexts
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.session_settings import apply_run_session_settings
+from mato_loop_backend.agent.skill_context import prepare_skill_context
 from mato_loop_backend.agent.subagents import (
     apply_delegation_ceiling,
     delegation_snapshot,
@@ -513,6 +514,16 @@ async def execute_loop_body(
         tool_schema_tokens = turn_tools.schema_tokens
         inactive_capability_groups = turn_tools.inactive_groups
         search_pending = turn_tools.search_pending
+        load_skill_results = partial(
+            prepare_skill_context,
+            db, records, run_id=run.id, user_id=chat_session.user_id, root_files=root_files,
+            state=skill_state, trust=model_trust_level,
+            authorize=partial(cls._authorize, db, run, chat_session, root_files=root_files, check_only=True),
+            can_load="load_skill" in turn_tools.available_names,
+            can_read="read" in turn_tools.available_names,
+            reuse_history=not delegated and chat_session.session_type == "chat" and not run.automation_origin,
+            computer_id=selected_execution_agent.id if selected_execution_agent is not None else None,
+        )
         context_timings["toolSelectionMs"] = round((time.monotonic() - tools_started) * 1000)
         repository_context_loader = None
         repository_entries = None
@@ -588,7 +599,7 @@ async def execute_loop_body(
                 and {"load_skill", "edit_skill"} & effective_toolset.tools.keys()
                 else ()
             ),
-            active_skills=tuple(skill_state.active.values()),
+            skill_context_enabled="load_skill" in turn_tools.available_names,
             execution_agent_id=run.execution_agent_id,
             execution_agent_name=(
                 selected_execution_agent.display_name if selected_execution_agent else None
@@ -677,6 +688,7 @@ async def execute_loop_body(
                 pdf_context=pdf_context,
                 runtime_instructions=profile_instructions,
                 session_contexts=session_contexts,
+                load_skill_results=load_skill_results,
                 runtime_context="\n\n".join(part for part in (review_context, tool_budget_prompt(
                     None if tool_call_limit is None else max(0, tool_call_limit - tool_calls_used),
                 ), finalization_context) if part) or None,

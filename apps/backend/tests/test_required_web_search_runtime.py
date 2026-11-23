@@ -1433,6 +1433,14 @@ async def test_required_search_loads_matching_skill_before_search(monkeypatch) -
 
     tool_registry._execute_definition.side_effect = execute
 
+    records = AgentRuntime._records.return_value
+
+    def persist(item):
+        if isinstance(item, Message):
+            item.id = item.id or uuid4()
+            records.append(item)
+
+    db.add.side_effect = persist
     await AgentRuntime._execute_loop(db, run)
 
     assert {tool["name"] for tool in requests[0]["tools"]} == {
@@ -1442,7 +1450,9 @@ async def test_required_search_loads_matching_skill_before_search(monkeypatch) -
     }
     assert [tool["name"] for tool in requests[1]["tools"]] == ["web_search"]
     assert skill.instructions not in projections[0]["system_prompt"]
-    assert skill.instructions in projections[1]["system_prompt"]
+    assert skill.instructions not in projections[1]["system_prompt"]
+    results = await projections[1]["load_skill_results"](set())
+    assert any(skill.instructions in result for result in results.values())
 
 
 async def test_repeated_skill_loads_do_not_satisfy_required_search(

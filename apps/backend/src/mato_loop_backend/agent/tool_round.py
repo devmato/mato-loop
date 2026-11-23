@@ -108,7 +108,8 @@ async def persist_tool_result(
     tool_message = Message(
         session_id=session.id,
         role="tool",
-        content=content,
+        content=(json.dumps({**json.loads(content), "content": ""}, ensure_ascii=False)
+                 if call.name == "session_tool_result_read" and metadata.get("guardedSkillPage") else content),
         tool_call_id=call.id,
         trust_level=trust_level.value,
         provider_data={
@@ -125,6 +126,10 @@ async def persist_tool_result(
                 **({"repositoryInstructionsDeferred": True} if metadata.get("repositoryInstructionsDeferred") is True else {}),
                 **({"toolRepair": metadata["toolRepair"]} if "toolRepair" in metadata else {}),
                 **({"toolSnapshot": metadata["toolSnapshot"]} if isinstance(metadata.get("toolSnapshot"), dict) else {}),
+                **({"skillLoad": metadata["skillLoad"]} if call.name == "load_skill"
+                   and not metadata.get("errorCode") and isinstance(metadata.get("skillLoad"), dict) else {}),
+                **({"skillReferenceRead": metadata["skillReferenceRead"]} if call.name == "read"
+                   and not metadata.get("errorCode") and isinstance(metadata.get("skillReferenceRead"), dict) else {}),
                 **({"toolDiscovery": metadata["toolDiscovery"]}
                    if call.name == "search_tools" and not metadata.get("errorCode")
                    and isinstance(metadata.get("toolDiscovery"), dict) else {}),
@@ -594,6 +599,9 @@ async def execute_tool_batch(
                 model_id=model.id, model_trust_level=trust_level,
                 agent_persona_id=identity.persona.id, agent_profile_id=agent_profile_id,
                 skill_state=skill_state,
+                check_permission=partial(runtime._authorize, db, run, session, root_files=root_files, check_only=True),
+                reuse_skill_history=not delegated and session.session_type == "chat" and not run.automation_origin,
+                scripted=script_parent is not None,
                 approval_resolution=approval_resolution, execution_client=execution_client,
                 session_read_cursors=session_read_cursors, one_time_secrets=one_time_secrets,
                 run_secret_refs=run_secret_refs,

@@ -168,12 +168,16 @@ async def _load_skill(arguments: LoadSkillArguments, context: ToolContext) -> To
     if current_policy == ToolExecutionPolicy.DISABLED or (current_policy == ToolExecutionPolicy.ASK and not approved):
         return ToolResult.error("tool.unavailable")
     try:
-        # Ownership/enablement is live; the selected content revision remains fixed.
-        available = await SkillService.list(context.db, context.session.user_id)
-        if not any(item.id == skill.id and item.owner_id == skill.owner_id for item in available):
+        # Resolve the current revision after any approval wait.
+        references, _ = await SkillService.effective_references(context.db, context.session.user_id)
+        reference = next((item for item, owner in references if item.id == skill.id and owner == skill.owner_id), None)
+        if reference is None:
             return ToolResult.error("skill.notFound")
-        package = await SkillService.package(skill)
+        if reference.revision != skill.revision:
+            skill = await SkillService._definition(reference, skill.owner_id)
         loaded = skill.model_copy(deep=True)
+        if loaded.files_path is None or arguments.on_computer:
+            package = await SkillService.package(skill)
         if loaded.files_path is None:
             loaded.files_path = await asyncio.to_thread(materialize, session_files(context), package, session_package_path(context.run_id, package))
         if arguments.on_computer:
@@ -185,6 +189,8 @@ async def _load_skill(arguments: LoadSkillArguments, context: ToolContext) -> To
                 return ToolResult.error("executionAgent.unavailable")
             loaded.computer_path = await prepare_computer(client, run, package)
             loaded.computer_id = client.agent_id
+        if context.skill_state.catalog[loaded.id].revision != loaded.revision:
+            context.skill_state.catalog[loaded.id] = skill
         context.skill_state.active[loaded.id] = loaded
     except (SkillError, RootFileError, ExecutionClientError) as exc:
         return ToolResult.error(exc.code)
@@ -193,7 +199,7 @@ async def _load_skill(arguments: LoadSkillArguments, context: ToolContext) -> To
         "revision": loaded.revision, "filesBasePath": loaded.files_path,
         "computerBasePath": loaded.computer_path if context.execution_client and loaded.computer_id == context.execution_client.agent_id else None,
         "resources": loaded.resource_paths, "effectiveFrom": "next_model_request",
-    })
+    }, metadata={"skillLoad": {"ownerId": str(loaded.owner_id) if loaded.owner_id else None}})
 
 
 LOAD_SKILL = ToolDefinition(

@@ -90,13 +90,18 @@ class SkillService:
         return skills
 
     @staticmethod
-    async def list(db: AsyncSession, user_id: UUID) -> list[SkillDefinition]:
+    async def effective_references(db: AsyncSession, user_id: UUID) -> tuple[list[tuple[SkillReference, UUID | None]], bool]:
         instance = await SettingsStore.load_optional(db, InstanceSkillsSettings) or InstanceSkillsSettings()
         allowed = await personal_skills_allowed(db, user_id)
         personal = await SettingsStore.load(db, SkillsSettings, user_id=user_id) if allowed else SkillsSettings()
         overrides = {skill.id for skill in personal.skills}
         references = [(item, None) for item in instance.skills if item.id not in overrides] + [(item, user_id) for item in personal.skills]
-        skills = [await SkillService._definition(item, owner_id) for item, owner_id in references if item.enabled]
+        return [(item, owner_id) for item, owner_id in references if item.enabled], allowed
+
+    @staticmethod
+    async def list(db: AsyncSession, user_id: UUID) -> list[SkillDefinition]:
+        references, allowed = await SkillService.effective_references(db, user_id)
+        skills = [await SkillService._definition(item, owner_id) for item, owner_id in references]
         user = await db.get(UserAccount, user_id)
         for skill in skills:
             skill.editable = bool(isinstance(user, UserAccount) and user.is_admin) if skill.owner_id is None else allowed

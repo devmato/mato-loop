@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import run_support
-from mato_loop_backend.agent.context import ContextManager
+from mato_loop_backend.agent.context import ContextManager, SkillResultsLoader
 from mato_loop_backend.agent.memory_context import MemoryTurn, memory_context_snapshot
 from mato_loop_backend.agent.projection import (
     ContextError,
@@ -55,6 +55,7 @@ async def build_turn_context(
     pdf_context: dict[str, dict] | None = None,
     runtime_context: str | None = None,
     session_contexts: dict[UUID, str | dict[str, str]] | None = None,
+    load_skill_results: SkillResultsLoader | None = None,
     available_secret_references: set[str] | None = None,
 ) -> tuple[ContextProjection, int, int]:
     async def summarize(source: str, output_tokens: int) -> SummaryResult:
@@ -161,6 +162,7 @@ async def build_turn_context(
                     memory_context=memory_context,
                     memory_contexts=memory_turn.historical_contexts,
                     session_contexts=session_contexts,
+                    load_skill_results=load_skill_results,
                     tool_snapshots=tool_snapshots,
                     tool_schemas=schemas,
                     model=model,

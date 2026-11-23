@@ -13,6 +13,7 @@ from sqlalchemy import and_, select
 import mato_loop_backend.files.access as files_access
 import mato_loop_backend.tools.access as tools_access
 import mato_loop_backend.tools.administrator as administrator
+from mato_loop_backend.agent.skill_context import is_skill_copy_path
 from mato_loop_backend.execution import (
     ExecutionClientError,
     WorkspaceDeleteResult,
@@ -260,6 +261,9 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             limit=arguments.limit,
         )
     tool_result = _read_text_result(arguments, target_session_id, result)
+    if (arguments.root == "session" and target_session_id == context.session.id
+            and is_skill_copy_path(normalized_path) and result.sha256):
+        tool_result.metadata["skillReferenceRead"] = {"path": normalized_path, "sha256": result.sha256}
     if arguments.root == "workspace":
         client = files_access.workspace_client(context)
         tool_result.metadata["computerRead"] = {

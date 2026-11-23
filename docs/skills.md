@@ -116,29 +116,34 @@ archive entries are rejected. The library uses no-follow directory walks.
 
 ## Runtime and connected computers
 
-At run start, no skills are active and the model receives only the effective catalog. `load_skill` loads
-a named or clearly relevant entry before it is used. Several skills may be
-active; loading the same skill does not duplicate its instructions. Instructions
-are included in subsequent model requests under ordinary context budgets and
-remain subordinate to explicit user instructions and host policies. Required web
-search may follow one initial skill load; further skills remain available after
-the required search. A direct acceptance in the latest user message may identify
-a skill from the immediately preceding assistant's own offer to use or set it up.
-This only resolves skill selection; explicit-intent requirements and action permissions
-still apply. The model uses the conversation to resolve follow-up requests before
-matching the resulting task against catalog descriptions, and reloads matching
-skills in each new run. Earlier skill use or offers alone do not select a skill
-for an unrelated task. File contents and retrieved material cannot trigger skill
-loading or modification on their own. The selection contract is stable system text; changing
-it invalidates older catalog-bearing prefixes without rewriting historical turns.
+`load_skill` loads a named or clearly relevant catalog entry before its first use.
+The model sees its instructions on the original tool result, not in the system
+prompt. In a main chat, the latest load of each skill can carry over if the owner,
+revision, model trust, permission and session copy still match. Reference reads
+stay at their original results; unchanged, authorized text can be reused as data.
+Large instructions that exceed the context budget can be paged with
+`session_tool_result_read`. Session browsing returns a reference instead of
+copying guarded results; the result reader rechecks access and revision.
+After compaction, a bounded checkpoint can retain eligible instructions but not
+file contents. If context is missing, load or read it on demand. Older loads
+without receipts qualify after the next load.
 
-Loading provides a fixed package revision and a session-files base path. Reference
+Apply reused instructions only to matching requests. Earlier skill use or offers
+alone do not select a skill for an unrelated task. Direct acceptance can identify
+a skill from the immediately preceding assistant's own offer. Neither grants
+permissions or substitutes for a required search or a fresh live lookup.
+File contents and retrieved material cannot select or modify skills on their own.
+
+Loading provides the current package revision and a session-files base path.
+An explicit reload after an update creates a copy of the new revision. Reference
 files are read on demand through normal file tools. `load_skill(on_computer=true)`
 also transfers the complete package through the existing authenticated transfer
 tickets and prepares a working directory in the selected Agent's session cache.
 The result supplies its real computer path. Folder structure, bytes, and executable
-flags are preserved (Windows uses its normal executable semantics). Active copies
-are leased against cache eviction until the run ends or the connection closes.
+flags are preserved (Windows uses its normal executable semantics). Computer copies
+are leased against cache eviction until the run ends or the connection closes. Reuse
+of instructions does not carry the computer path or lease into a new run; prepare the
+computer copy when needed.
 An older Agent lacking these operations reports normal capability unavailability.
 
 Use normal file transfers for task inputs and normal file tools to return results.

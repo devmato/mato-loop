@@ -3581,7 +3581,26 @@ async def test_load_skill_activates_snapshot_without_returning_instructions(
     assert context.skill_state.active[skill.id].instructions == skill.instructions
     assert context.skill_state.active[skill.id] is not skill
     assert skill.instructions not in result.content
+    assert result.metadata["skillLoad"] == {"ownerId": str(context.session.user_id)}
     context.ask_handler.assert_not_awaited()
+
+
+async def test_load_skill_reloads_changed_revision_in_same_run(monkeypatch, tmp_path, skill_library):
+    skill = SkillDefinition(name="api-research", description="Query an API.", instructions="Old instructions.")
+    call = ToolCall("load-skill", "load_skill", {"skill_id": str(skill.id)})
+    context = _context(tmp_path, call)
+    personal = SkillsSettings(skills=[store_skill(skill, context.session.user_id)])
+    context.skill_state.catalog[skill.id] = skill
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(
+        side_effect=lambda _db, kind, **_kw: personal if kind is SkillsSettings else kind(),
+    ))
+    first = json.loads((await tool_registry.execute(call, context)).content)
+    updated = skill.model_copy(update={"instructions": "Use the new API."})
+    personal.skills[:] = [store_skill(updated, context.session.user_id)]
+    second = json.loads((await tool_registry.execute(call, context)).content)
+    assert second["revision"] == updated.revision
+    assert first["filesBasePath"] != second["filesBasePath"]
+    assert "Use the new API." in context.root_files.read_file("session", second["filesBasePath"] + "/SKILL.md").content
 
 
 async def test_load_skill_auto_to_ask_policy_transition_blocks(

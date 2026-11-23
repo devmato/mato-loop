@@ -21,6 +21,12 @@ from mato_loop_backend.agent.projection import (
     command_message_content,
     tool_execution_binding,
 )
+from mato_loop_backend.agent.skill_context import (
+    UNAVAILABLE_SKILL_LOAD,
+    UNAVAILABLE_SKILL_REFERENCE,
+    guarded_skill_result,
+    prepare_skill_context,
+)
 from mato_loop_backend.media.attachments import model_attachments
 from mato_loop_backend.models import AgentRun, ChatSession, Message
 from mato_loop_backend.permissions.policy import (
@@ -78,8 +84,14 @@ def _message_item(
     content_limit = min(SESSION_TOOL_RESULT_CHUNK_CHARACTERS, max(0, remaining))
     content = command_message_content(message)
     if message.role == "tool":
+        host = (message.provider_data or {}).get("_matoloop", {})
+        original = message.content
+        if guarded_skill_result(message):
+            # Transcript browsing does not grant access to the source. Retrieve it
+            # through the scoped result reader instead of persisting a second copy.
+            original = UNAVAILABLE_SKILL_LOAD if host.get("skillLoad") is not None else UNAVAILABLE_SKILL_REFERENCE
         content = _target_tool_result(
-            tool_names.get(message.id), message.content, target_trust_level,
+            tool_names.get(message.id), original, target_trust_level,
             source_trust_level=message.trust_level,
             available_secret_references=available_secret_references or set(),
         )
@@ -107,6 +119,8 @@ def _message_item(
         item["truncated"] = True
         if message.role == "tool" and reference_tool_results:
             item["toolResultReference"] = _tool_result_reference(message.id, full_content)
+    if reference_tool_results and guarded_skill_result(message):
+        item["toolResultReference"] = _tool_result_reference(message.id, message.content)
     if message.tool_call_id:
         item["toolCallId"] = message.tool_call_id
         if tool_name := tool_names.get(message.id):
@@ -147,15 +161,30 @@ async def _session_tool_result_read(
     tool_name = _tool_names_by_message_id(records).get(message.id)
     if tool_name is None:
         return ToolResult.error("session.messageNotFound")
+    guarded = guarded_skill_result(message)
+    replacement = None
+    if guarded:
+        if context.check_permission is None or context.scripted:
+            return ToolResult.error("permission.denied")
+        results = await prepare_skill_context(
+            context.db, records, run_id=context.run_id, user_id=context.session.user_id,
+            root_files=context.root_files, state=context.skill_state, trust=context.model_trust_level,
+            authorize=context.check_permission, can_load=True, can_read=True,
+            reuse_history=context.reuse_skill_history, computer_id=None, reference_ids={message.id},
+        )
+        replacement = results.get(message.id)
+        if replacement in (None, UNAVAILABLE_SKILL_REFERENCE, UNAVAILABLE_SKILL_LOAD):
+            return ToolResult.error("permission.denied")
     payload = _tool_result_page(
         message, tool_name, arguments.offset, context.memory_trust_level,
+        content_override=replacement,
         available_secret_references=await available_secret_references(
             context.db, context.session, context.one_time_secrets,
         ),
     )
     if attachments := _attachment_items(message):
         payload["attachments"] = attachments
-    return ToolResult.json(payload)
+    return ToolResult.json(payload, metadata={"guardedSkillPage": True} if guarded else None)
 
 
 async def _session_read(arguments: SessionReadArguments, context: ToolContext) -> ToolResult:

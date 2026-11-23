@@ -33,6 +33,7 @@ SummaryCallback = Callable[[str, int], Awaitable[SummaryResult]]
 
 
 EstimateCallback = Callable[[list[dict[str, Any]]], Awaitable[int]]
+SkillResultsLoader = Callable[[set[UUID]], Awaitable[dict[UUID, str]]]
 
 
 async def load_missing_attachments(db: AsyncSession, records: list[Message]) -> None:
@@ -87,6 +88,8 @@ class ContextManager:
         memory_context: str | None = None,
         memory_contexts: dict[UUID, str] | None = None,
         session_contexts: dict[UUID, str | dict[str, str]] | None = None,
+        skill_results: dict[UUID, str] | None = None,
+        load_skill_results: SkillResultsLoader | None = None,
         runtime_instructions: str = "",
         runtime_context: str | None = None,
         live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
@@ -144,6 +147,8 @@ class ContextManager:
         # Only the projection view crosses the thread boundary; originals stay
         # attached to this session for updating omissions and compaction state.
         projection_records = {item.id: _projection_record(item) for item in records}
+        reader_metadata = (agent_projection._tool_result_read_metadata(list(projection_records.values()))
+                           if load_skill_results else None)
 
         async def persist_omissions() -> None:
             for item in active_records:
@@ -159,12 +164,23 @@ class ContextManager:
         async def project(
             summary: ContextSummary | None, selected: list[Message]
         ) -> tuple[list[dict[str, Any]], int]:
+            nonlocal skill_results
             # Coverage stays contiguous. The current request is a projection-only anchor, never
             # added back to active_records or summarized a second time after reload.
             current_user = next((item for item in reversed(records) if item.role == "user"), None)
             if current_user is not None and all(item.id != current_user.id for item in selected):
                 selected = [current_user, *selected]
             selected_records = [projection_records[item.id] for item in selected]
+            if load_skill_results is not None:
+                references = {
+                    item.id for item in selected if item.role == "tool"
+                    and item.id not in omitted_tool_result_ids
+                    and not (item.provider_data or {}).get("_matoloop", {}).get("contextOutputOmitted")
+                }
+                assert reader_metadata is not None
+                readers, _ = reader_metadata
+                references.update(readers[item][0].id for item in list(references) if item in readers)
+                skill_results = await load_skill_results(references)
             projected_summary = (SimpleNamespace(content=summary.content,
                                  covered_through_message_id=summary.covered_through_message_id) if summary else None)
             attachment_characters = agent_projection.MAX_ATTACHMENT_EXCERPT_CHARACTERS
@@ -178,6 +194,8 @@ class ContextManager:
                     memory_context=memory_context,
                     memory_contexts=memory_contexts,
                     session_contexts=session_contexts,
+                    skill_results=skill_results,
+                    reader_metadata=reader_metadata,
                     tool_snapshots=tool_snapshots,
                     tool_snapshot_characters=int(input_budget * 0.05 * characters_per_token),
                     runtime_instructions=runtime_instructions,
@@ -255,6 +273,8 @@ class ContextManager:
         omitted_tool_result_ids.update(
             item.id for item in prefix if item.role == "tool"
             and prefix_tool_names.get(item.id) != "todo_write"
+            and not (prefix_tool_names.get(item.id) == "load_skill"
+                     and '"authorizedSkill"' in (skill_results or {}).get(item.id, ""))
             and not (item.provider_data or {}).get("_matoloop", {}).get("contextOutputOmitted")
         )
         if omitted_tool_result_ids:
