@@ -25,6 +25,9 @@ function normalizeProfile(value) {
         : null
     }
   }
+  result.phoneNumbers = Array.isArray(value?.phoneNumbers)
+    ? value.phoneNumbers.map(({ label, number }) => ({ label, number }))
+    : []
   return result
 }
 

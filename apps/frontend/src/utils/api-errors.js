@@ -42,6 +42,7 @@ const fieldLabels = {
   pronouns: 'Die Pronomen',
   primaryLanguage: 'Die bevorzugte Sprache',
   primaryResidence: 'Der Hauptwohnsitz',
+  phoneNumbers: 'Die Telefonnummern',
   runAt: 'Der Ausführungszeitpunkt',
   preferredExecutionAgentId: 'Der Computer',
   homeDirectory: 'Der aktuelle Ordner',

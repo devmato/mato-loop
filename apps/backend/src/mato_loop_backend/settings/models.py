@@ -1521,6 +1521,13 @@ class UserProfileFact(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
+class UserProfilePhoneNumber(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    label: Literal["mobile", "home", "work", "other"]
+    number: str = Field(max_length=64, pattern=r"^\+?[0-9(). /-]*[0-9][0-9(). /-]*$")
+
+
 class UserProfileSettings(SettingsDocument):
     settings_key = "user-profile"
     settings_scope = SettingsScope.USER
@@ -1536,6 +1543,7 @@ class UserProfileSettings(SettingsDocument):
     pronouns: UserProfileFact = Field(default_factory=UserProfileFact)
     primary_language: UserProfileFact = Field(default_factory=UserProfileFact)
     primary_residence: UserProfileFact = Field(default_factory=UserProfileFact)
+    phone_numbers: list[UserProfilePhoneNumber] = Field(default_factory=list)
 
 
 class AgentIdentitySettings(SettingsDocument):

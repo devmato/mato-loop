@@ -18,7 +18,9 @@ Provider- und Modelleinstellungen können den zulässigen Umgang mit öffentlich
 
 Unter **Einstellungen > Personalisierung > Über mich** fügst du Angaben aus einem festen Katalog hinzu und pflegst dort vollständigen und bevorzugten Namen, Anrede, Pronomen, Hauptsprache und Hauptwohnsitz. Diese Angaben sind kein Memory: Sie gelten unabhängig vom Memory-Modus und werden weder durchsucht noch extrahiert. Der Agent kann sie nur auf deine ausdrückliche Bitte über ein eigenes Tool ändern oder entfernen; die Tool-Richtlinie bestimmt, ob du die Änderung einzeln freigeben musst.
 
-Für jede Angabe kannst du zwischen privaten und öffentlichen Modellen umschalten. Mit **Auch für öffentliche Modelle verwenden** übernimmt das öffentliche Feld den privaten Wert; andernfalls pflegst du beide Werte getrennt. Eine aktuelle direkte Aussage im Chat hat weiterhin Vorrang vor dem gepflegten Profil; das Profil hat Vorrang vor älteren Erinnerungen und Sessions.
+Für diese Profilangaben kannst du zwischen privaten und öffentlichen Modellen umschalten. Mit **Auch für öffentliche Modelle verwenden** übernimmt das öffentliche Feld den privaten Wert; andernfalls pflegst du beide Werte getrennt. Eine aktuelle direkte Aussage im Chat hat weiterhin Vorrang vor dem gepflegten Profil; das Profil hat Vorrang vor älteren Erinnerungen und Sessions.
+
+Über **Telefonnummer hinzufügen** kannst du eine oder mehrere Nummern mit einem Label wie **Mobil** oder **Arbeit** hinterlegen. Änderungen übernimmst du mit **Speichern**. Gespeicherte Telefonnummern werden nicht an Modelle weitergegeben.
 
 ## Sitzungsübergreifender Abruf
 

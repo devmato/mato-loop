@@ -23,7 +23,7 @@
               <q-badge v-if="dirty" color="warning" text-color="black" label="Ungespeichert" />
             </div>
             <p class="text-body2 app-muted q-mb-none q-mt-xs">
-              Persönliche Angaben für passendere Antworten. Benutzername und Kontodaten bleiben unverändert.
+              Angaben für passendere Antworten und deine Telefonnummern. Benutzername und Kontodaten bleiben unverändert.
             </p>
           </div>
           <q-btn
@@ -51,7 +51,7 @@
           <div class="text-subtitle1 text-weight-bold">Sichtbarkeit bewusst wählen</div>
           <div class="text-body2 app-muted q-mt-xs">
             Angaben für öffentliche Modelle können an externe Modellanbieter übertragen werden.
-            „Privat“ bedeutet nicht automatisch lokale Verarbeitung. Speichere hier keine Passwörter,
+            „Privat“ bedeutet nicht automatisch lokale Verarbeitung. Hinterlege in Modellangaben keine Passwörter,
             Schlüssel oder anderen vertraulichen Daten.
           </div>
         </q-banner>
@@ -102,6 +102,56 @@
                 @click="addFieldDialogOpen = true"
               />
               <button type="submit" class="hidden" aria-hidden="true" tabindex="-1" />
+            </q-form>
+          </q-card-section>
+        </q-card>
+
+        <q-card flat class="app-surface q-mt-md">
+          <q-card-section>
+            <h3 class="text-subtitle1 text-weight-bold q-my-none">Telefonnummern</h3>
+            <p class="text-body2 app-muted q-mt-xs">Gespeicherte Nummern werden nicht an Modelle weitergegeben.</p>
+            <q-form ref="phoneForm" class="q-gutter-y-md" @submit.prevent="save">
+              <div v-for="(entry, index) in phoneNumbers" :key="entry.id" class="row q-col-gutter-sm items-start">
+                <q-select
+                  v-model="entry.label"
+                  class="col-12 col-sm-4"
+                  dense
+                  outlined
+                  emit-value
+                  map-options
+                  :options="phoneLabels"
+                  label="Label"
+                  :disable="profileDisabled"
+                />
+                <q-input
+                  v-model="entry.number"
+                  class="col"
+                  dense
+                  outlined
+                  hide-bottom-space
+                  type="tel"
+                  maxlength="64"
+                  label="Telefonnummer"
+                  :rules="phoneRules"
+                  lazy-rules="ondemand"
+                  :disable="profileDisabled"
+                />
+                <div class="col-auto">
+                  <q-btn
+                    flat
+                    round
+                    dense
+                    class="q-mt-xs"
+                    color="negative"
+                    icon="delete_outline"
+                    :aria-label="`Telefonnummer ${index + 1} entfernen`"
+                    :disable="profileDisabled"
+                    @click="removePhoneNumber(entry)"
+                  />
+                </div>
+              </div>
+              <q-btn outline no-caps color="primary" icon="add" label="Telefonnummer hinzufügen"
+                :disable="profileDisabled" @click="addPhoneNumber" />
             </q-form>
           </q-card-section>
         </q-card>
@@ -201,6 +251,20 @@ const draft = reactive(Object.fromEntries(
 const savedDraft = reactive(Object.fromEntries(
   userProfileFields.map((field) => [field, profileFactDraft()])
 ))
+const phoneForm = ref(null)
+const phoneNumbers = ref([])
+const savedPhoneNumbers = ref([])
+let nextPhoneId = 0
+const profileDisabled = computed(() => profile.loading || profile.saving || !profile.loaded)
+const phoneLabels = [
+  { label: 'Mobil', value: 'mobile' },
+  { label: 'Privat', value: 'home' },
+  { label: 'Arbeit', value: 'work' },
+  { label: 'Sonstige', value: 'other' }
+]
+const phoneRules = [
+  (value) => /^\+?[0-9(). /-]*[0-9][0-9(). /-]*$/.test(value.trim()) || 'Gib eine gültige Telefonnummer ein.'
+]
 
 const fields = [
   { name: 'fullName', icon: 'badge', label: 'Vollständiger Name', description: 'Dein vollständiger Name für persönlichen Kontext.' },
@@ -230,6 +294,8 @@ const changes = computed(() => {
     ) continue
     result[field] = profileFactPayload(draft[field])
   }
+  const numbers = phoneNumbers.value.map(({ label, number }) => ({ label, number: number.trim() }))
+  if (JSON.stringify(numbers) !== JSON.stringify(savedPhoneNumbers.value)) result.phoneNumbers = numbers
   return result
 })
 const dirty = computed(() => Object.keys(changes.value).length > 0)
@@ -240,6 +306,8 @@ function assignDraft(value) {
     Object.assign(draft[field], next)
     Object.assign(savedDraft[field], next)
   }
+  savedPhoneNumbers.value = value.phoneNumbers
+  phoneNumbers.value = value.phoneNumbers.map((entry) => ({ ...entry, id: nextPhoneId++ }))
   activeFieldNames.value = fields
     .filter((field) => Object.values(value[field.name] || {}).some((item) => item != null))
     .map((field) => field.name)
@@ -248,6 +316,19 @@ function assignDraft(value) {
 function addField(field) {
   if (!activeFieldNames.value.includes(field)) activeFieldNames.value.push(field)
   addFieldDialogOpen.value = false
+}
+
+function addPhoneNumber() {
+  phoneNumbers.value.push({ label: 'mobile', number: '', id: nextPhoneId++ })
+}
+
+async function removePhoneNumber(entry) {
+  if (entry.number.trim() && !await confirm(
+    'Soll diese Telefonnummer aus deinem Profil entfernt werden?',
+    'Telefonnummer entfernen?',
+    { okLabel: 'Entfernen' }
+  )) return
+  phoneNumbers.value = phoneNumbers.value.filter(({ id }) => id !== entry.id)
 }
 
 async function removeField(field) {
@@ -295,7 +376,9 @@ async function load() {
 }
 
 async function save() {
-  if (!profile.loaded || !dirty.value) return
+  if (profileDisabled.value || !dirty.value) return
+  if (changes.value.phoneNumbers && !await phoneForm.value.validate()) return
+  if (profile.saving) return
   try {
     assignDraft(await profile.saveProfile(changes.value))
     $q.notify({ type: 'positive', message: 'Persönliches Profil gespeichert' })

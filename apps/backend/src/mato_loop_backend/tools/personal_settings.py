@@ -58,7 +58,7 @@ from mato_loop_backend.tools.personal_integrations import (
 )
 from mato_loop_backend.tools.secrets import resolve_secret_refs
 from mato_loop_backend.tools.validation import argument_error
-from mato_loop_backend.user_profile import user_profile_runtime_payload
+from mato_loop_backend.user_profile import PROFILE_FIELDS, user_profile_runtime_payload
 
 # ponytail: expose only scalar, non-policy settings; add fields when their owner checks are defined.
 _SCALAR_SETTINGS = {
@@ -69,7 +69,7 @@ _SCALAR_SETTINGS = {
          "recent_session_snippet_limit", "automatic_context_max_tokens"),
     ),
 }
-_PROFILE_FIELDS = frozenset(UserProfileSettings.model_fields)
+_PROFILE_FIELDS = frozenset(field for field, _ in PROFILE_FIELDS)
 
 
 class SkillChanges(BaseModel):

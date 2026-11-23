@@ -10,7 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import require_user
-from mato_loop_backend.settings import SettingsStore, UserProfileFact, UserProfileSettings
+from mato_loop_backend.settings import (
+    SettingsStore,
+    UserProfileFact,
+    UserProfilePhoneNumber,
+    UserProfileSettings,
+)
 from mato_loop_backend.user_profile import PROFILE_FIELDS
 
 router = APIRouter(prefix="/user-profile", dependencies=[Depends(require_user)])
@@ -29,6 +34,7 @@ class UserProfileChanges(BaseModel):
     pronouns: UserProfileFact | None = None
     primary_language: UserProfileFact | None = None
     primary_residence: UserProfileFact | None = None
+    phone_numbers: list[UserProfilePhoneNumber] | None = None
 
     @model_validator(mode="after")
     def require_change(self) -> Self:
@@ -37,7 +43,8 @@ class UserProfileChanges(BaseModel):
         if any(
             (fact := getattr(self, field_name)) is not None
             and not fact.model_fields_set
-            for field_name in self.model_fields_set
+            for field_name, _ in PROFILE_FIELDS
+            if field_name in self.model_fields_set
         ):
             raise ValueError("a profile fact must include at least one audience")
         return self
@@ -66,6 +73,8 @@ async def update_user_profile(
         db, UserProfileSettings, user_id=user.id, for_update=True
     )
     values = current.model_dump()
+    if "phone_numbers" in changes.model_fields_set:
+        values["phone_numbers"] = changes.phone_numbers or []
     for field_name, _ in PROFILE_FIELDS:
         if field_name not in changes.model_fields_set:
             continue

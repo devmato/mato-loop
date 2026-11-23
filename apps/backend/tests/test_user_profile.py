@@ -135,3 +135,55 @@ def test_user_profile_defaults_full_name_for_existing_documents() -> None:
     profile = UserProfileSettings.model_validate({"preferredName": {"both": "Ada"}})
 
     assert profile.full_name == UserProfileFact()
+    assert profile.phone_numbers == []
+
+
+async def test_user_profile_phone_numbers_are_saved_separately_from_model_facts(monkeypatch) -> None:
+    user = _user()
+    db = AsyncMock(spec=AsyncSession)
+    current = UserProfileSettings(preferred_name={"both": "Ada"})
+    stored = current.model_dump(mode="json")
+    load = AsyncMock(side_effect=lambda *_args, **_kwargs: UserProfileSettings.model_validate(stored))
+
+    def persist(_db, settings, *, user_id):
+        assert user_id == user.id
+        stored.update(settings.model_dump(mode="json"))
+
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock(side_effect=persist))
+
+    numbers = [
+        {"label": "mobile", "number": " +49 (30) " + "0000-12 "},
+        {"label": "mobile", "number": " 030/0000-12 "},
+    ]
+    expected = [{**entry, "number": entry["number"].strip()} for entry in numbers]
+    result = await update_user_profile(UserProfileChanges(phone_numbers=numbers), user, db)
+    assert result["phoneNumbers"] == expected
+    assert result["preferredName"]["both"] == "Ada"
+
+    updated = await update_user_profile(
+        UserProfileChanges(preferred_name={"both": "Grace"}), user, db
+    )
+    assert updated["phoneNumbers"] == expected
+    assert (await get_user_profile(user, db))["phoneNumbers"] == expected
+
+    saved = UserProfileSettings.model_validate(stored)
+    for trust_level in (TrustLevel.PRIVATE, TrustLevel.PUBLIC):
+        assert "phoneNumbers" not in user_profile_runtime_payload(saved, trust_level)
+
+    cleared = await update_user_profile(UserProfileChanges(phone_numbers=[]), user, db)
+    assert cleared["phoneNumbers"] == []
+    assert cleared["preferredName"]["both"] == "Grace"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"label": "mobile", "number": "( ) -"},
+        {"label": "mobile", "number": "not a number"},
+        {"label": "invalid", "number": "030/0000-12"},
+    ],
+)
+def test_user_profile_rejects_invalid_phone_entries(entry) -> None:
+    with pytest.raises(ValidationError):
+        UserProfileChanges.model_validate({"phoneNumbers": [entry]})
