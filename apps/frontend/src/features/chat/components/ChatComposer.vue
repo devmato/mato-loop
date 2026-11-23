@@ -158,7 +158,7 @@
               aria-label="Agent-Anfrage stoppen"
               type="button"
               :loading="stopping"
-              :disable="stopping"
+              :disable="stopping || stopLocked"
               @click="$emit('stop')"
             />
             <q-btn
@@ -216,10 +216,10 @@
               :color="queueSend ? 'secondary' : 'primary'"
               :icon="queueSend ? 'schedule_send' : 'arrow_upward'"
               :aria-label="voiceActivity ? voiceSendLabel : queueSend ? 'Nachricht vormerken' : 'Nachricht senden'"
-              :type="voiceActivity ? 'button' : 'submit'"
+              type="button"
               :loading="sendingRecording || starting || finalizing"
               :disable="voiceActivity ? !canFinishAndSend : sendDisabled"
-              @click="voiceActivity && submit()"
+              @click="submit($event, true)"
             />
           </div>
         </div>
@@ -265,10 +265,17 @@ const props = defineProps({
   attachments: { type: Array, default: () => [] }
 })
 const emit = defineEmits(['add-attachments', 'remove-attachment', 'send', 'stop', 'update', 'update:draft'])
+const stopLocked = ref(false)
+let stopLockTimer
 const $q = useQuasar()
 const identity = useAgentIdentityStore()
 const agentProfiles = useAgentProfileStore()
 const chat = useChatStore()
+watch(() => chat.loading, (loading) => {
+  if (!loading) return
+  clearTimeout(stopLockTimer)
+  stopLocked.value = false
+})
 const voice = useVoiceStore()
 const voicePanel = ref(null)
 const providers = useProviderStore()
@@ -429,15 +436,23 @@ async function insertQuote(quote) {
   focusInput()
 }
 
-function submit(event) {
+function lockStopAfterSend() {
+  if (props.running) return
+  clearTimeout(stopLockTimer)
+  stopLocked.value = true
+  stopLockTimer = setTimeout(() => { stopLocked.value = false }, 500)
+}
+
+function submit(event, fromSendButton = false) {
   if (event?.isComposing) return
   if (paletteOpen.value && (commandList.value?.select() || commandList.value?.pending)) return
   if (recording.value) {
-    void finishAndSendRecording()
+    void finishAndSendRecording(fromSendButton)
     return
   }
   const content = messageContent.value.trim()
   if (sendDisabled.value) return
+  if (fromSendButton) lockStopAfterSend()
   emit('send', content, { interrupt: props.running && !queueSend.value })
 }
 
@@ -486,7 +501,7 @@ function handleComposerKeydown(event) {
   event.stopPropagation()
 }
 
-async function finishAndSendRecording() {
+async function finishAndSendRecording(fromSendButton) {
   if (!canFinishAndSend.value || !recordingScope) return
   const scope = recordingScope
   const content = messageContent.value.trim()
@@ -501,6 +516,7 @@ async function finishAndSendRecording() {
       || scope.projectId !== chat.sessionsProjectId
       || !chat.activeAttachmentDraft.some((attachment) => attachment.file === recordedFile && attachment.voiceMessage)
     ) return
+    if (fromSendButton) lockStopAfterSend()
     emit('send', content, { interrupt })
   } finally {
     sendingRecording.value = false
@@ -658,6 +674,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   unmounted = true
+  clearTimeout(stopLockTimer)
   window.removeEventListener('keydown', updateQueueModifier, true)
   window.removeEventListener('keyup', updateQueueModifier, true)
   window.removeEventListener('blur', resetQueueModifier)

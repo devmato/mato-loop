@@ -96,7 +96,7 @@ Mit **Nachricht rückgängig machen** holst du Text und Anhänge bereits währen
 
 **Versand unbestätigt** heißt, dass der Browser keine verlässliche Antwort erhalten hat. Die Nachricht bleibt lokal gespeichert und pausiert. Prüfe nach dem Wiederverbinden mit **Nachricht rückgängig machen** erneut, ob sie schon angekommen ist. Kopiere den Text nicht in eine neue Nachricht, solange unklar ist, ob der ursprüngliche Auftrag bereits läuft.
 
-Der Stoppknopf beendet den Agentenlauf. Ein Browserdisconnect beendet ihn nicht; beim Wiederverbinden lädt MatoLoop den gespeicherten Zustand nach.
+Der Stoppknopf beendet den Agentenlauf. Direkt nach dem Absenden über den Sendeknopf ignoriert Stopp weitere Tipps für eine halbe Sekunde, damit ein Doppeltipp den Lauf nicht versehentlich abbricht. Ein Browserdisconnect beendet den Lauf nicht; beim Wiederverbinden lädt MatoLoop den gespeicherten Zustand nach.
 
 Eine verfügbare Reasoning-Zusammenfassung ersetzt die Bezeichnung **Nachdenken**. Die Zeile lässt sich nur aufklappen, wenn zusätzlicher Reasoning-Text vorhanden ist. Zusammenfassungen zeigen Modellangaben, keine garantiert vollständigen internen Gedankengänge.
 

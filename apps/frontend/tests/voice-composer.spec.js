@@ -804,6 +804,22 @@ describe('voice attachment composer', () => {
     expect(root.querySelector('button[aria-label="Nachricht vormerken"]')).toBeTruthy()
   })
 
+  it('ignores a second tap on Stop immediately after tapping Send', async () => {
+    vi.useFakeTimers()
+    chat.setDraft('Neue Anfrage')
+    await nextTick()
+    await click('Nachricht senden')
+    chat.running = true
+    await nextTick()
+
+    await vi.advanceTimersByTimeAsync(499)
+    await click('Agent-Anfrage stoppen')
+    const beforeUnlock = stoppedCount
+    await vi.advanceTimersByTimeAsync(1)
+    await click('Agent-Anfrage stoppen')
+    expect([beforeUnlock, stoppedCount]).toEqual([0, 1])
+  })
+
   it('keeps Stop available alongside sending text or attachment drafts', async () => {
     chat.selectedSessionId = 'session-1'
     chat.running = true
