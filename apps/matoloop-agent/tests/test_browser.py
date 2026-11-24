@@ -69,7 +69,8 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.manager.close)
 
     def test_expired_tab_checkpoint_is_pruned_without_a_worker(self):
-        root = self.manager.runtime_root(self.manager.storage(self.owner_id))
+        root = self.manager.storage(self.owner_id) / "browser"
+        root.mkdir()
         expired = tab_checkpoint(root, str(uuid4()))
         recent = tab_checkpoint(root, str(uuid4()))
         for path in (expired, recent):
@@ -79,7 +80,8 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         old = time() - TAB_RETENTION_SECONDS - 1
         os.utime(expired, (old, old))
         os.utime(interrupted, (old, old))
-        self.manager.prune_tab_checkpoints()
+        with patch.object(self.manager, "runtime_root", return_value=root):
+            self.manager.prune_tab_checkpoints()
         self.assertEqual(list(root.glob("tabs-*.json")), [recent])
         self.assertFalse(interrupted.exists())
 
