@@ -160,6 +160,26 @@ the old computer base path is no longer offered in the active prompt. Preparing
 a package does not grant filesystem, external-directory, shell, or credential
 access. Working-copy changes do not modify the central library.
 
+## Select saved credentials
+
+For a skill that uses saved secrets, specify a base name in `SKILL.md` and look it up
+with `variable_read(prefix=...)`. This returns personal secrets whose names match the base
+exactly or start with the base followed by `_`, ignoring case. For example, `API_TOKEN`
+finds both `API_TOKEN` and `API_TOKEN_WORK`. Exact `name` lookup and unfiltered listing
+remain available separately. The tool returns descriptions and references, not secret values.
+
+Determine the target from the request or other verified context before looking up secrets.
+For services with multiple instances, require an exact base URL match, recorded as a line
+such as `URL: https://git.example.org` in the description. Then check the account, resource,
+and operation against any stated scope, even if only one secret matches by name. For a fixed
+target, a single base-name secret without a description can still be used. If the choice is
+unclear, ask which saved entry to use by name, not for its value. Do not give the base name
+priority, fall back after a failed attempt, or use a secret outside its described scope.
+
+Descriptions help the model select a reference. They do not authorize actions, change the
+destination, or enforce a restriction on the reference. Use normal secret and action permissions;
+never put secret values in the skill package.
+
 ## Chat authoring and approval
 
 `save_skill` defaults to personal, including for administrators. `scope=instance`

@@ -1,4 +1,6 @@
-from unittest.mock import AsyncMock
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -11,9 +13,11 @@ from mato_loop_backend.personal_variables import (
     normalize_personal_variable_description,
     personal_variable_payload,
 )
+from mato_loop_backend.tools import interaction
 from mato_loop_backend.tools.arguments import (
     ProtectedQuestionArguments,
     ShellRunArguments,
+    VariableReadArguments,
     validate_protected_question_answers,
 )
 
@@ -48,6 +52,38 @@ def test_personal_variable_description_is_optional_and_normalized() -> None:
     )
     with pytest.raises(PersonalVariableError):
         normalize_personal_variable_description("x" * 501)
+
+
+@pytest.mark.parametrize("variants", [(), ("API_TOKEN_WORK",)])
+async def test_variable_read_prefix_returns_only_secret_family_with_descriptions(monkeypatch, variants):
+    user_id = uuid4()
+    names = ("api_token", *variants)
+    variables = [
+        Credential(
+            id=uuid4(), user_id=user_id, label=name,
+            metadata_json={"secret": name != "API_TOKEN_PLAIN", "description": f"Scope for {name}"},
+        )
+        for name in (*names, "API_TOKENS", "APIFTOKEN_WORK", "API_TOKEN_PLAIN")
+    ]
+    db = AsyncMock()
+    db.scalars.return_value = Mock(all=Mock(return_value=variables))
+    context = SimpleNamespace(db=db, session=SimpleNamespace(user_id=user_id))
+    monkeypatch.setattr(interaction.tools_access, "allow", AsyncMock(return_value=True))
+    read = Mock(side_effect=AssertionError("credential value read during prefix search"))
+    monkeypatch.setattr(personal_variables, "read_credential", read)
+
+    result = await interaction._variable_read(VariableReadArguments(prefix="API_TOKEN"), context)
+
+    assert json.loads(result.content)["variables"] == [
+        {"id": str(variable.id), "valueRef": str(variable.id), "name": variable.label,
+         "description": f"Scope for {variable.label}", "secret": True}
+        for variable in variables[:len(names)]
+    ]
+
+
+def test_variable_read_rejects_combining_name_and_prefix():
+    with pytest.raises(ValidationError, match="Use either name or prefix, not both"):
+        VariableReadArguments(name="API_TOKEN_WORK", prefix="API_TOKEN")
 
 
 @pytest.mark.parametrize("stored_secret", [False, True])

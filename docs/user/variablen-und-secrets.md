@@ -12,6 +12,12 @@ Normale Variablen zeigen ihren Wert an; Secrets sind nach dem Speichern ausgeble
 
 Beim Bearbeiten eines Secrets kannst du **Neuer Wert (optional)** leer lassen, um den gespeicherten Wert zu erhalten. Für einen Austausch gibst du einen neuen Wert ein. Löschen benötigt eine Bestätigung und kann spätere davon abhängige Tool-Aufrufe verhindern; bereits erfolgte externe Verwendung lässt sich dadurch nicht rückgängig machen.
 
+## Mehrere Zugangsdaten für Skills verwenden
+
+Wenn ein Skill einen Basisnamen für Secrets vorgibt, kannst du den Namen direkt verwenden oder ihn um einen Unterstrich und einen Zusatz erweitern. So passen etwa `API_TOKEN` und `API_TOKEN_ARBEIT` beide zum Basisnamen `API_TOKEN`.
+
+Beschreibe, für welches Konto, welche Ressourcen und welche Aufgaben der Eintrag gedacht ist, etwa „CI-Logs für `firma/app`, nur lesen“. Bei einem Dienst mit mehreren Instanzen gib die genaue Basis-URL auf einer eigenen Zeile an, etwa `URL: https://git.firma.example`. Der Agent berücksichtigt die Beschreibung auch bei einem einzigen Treffer und fragt bei unklarer Auswahl nach dem **Namen**, nicht nach dem Wert. Die Beschreibung schränkt die tatsächlichen Rechte des Tokens nicht ein.
+
 ## Geschützte Rückfragen
 
 Benötigt ein Tool ein Passwort oder einen Token, kann MatoLoop eine geschützte Rückfrage anzeigen. Der Wert wird im Backend aufgelöst; der Agent erhält eine undurchsichtige Referenz für ausdrücklich dafür geeignete Tool-Felder, etwa eine Prozessumgebung oder Verbindungskonfiguration. Die Referenz selbst ersetzt keine Aktionsfreigabe.

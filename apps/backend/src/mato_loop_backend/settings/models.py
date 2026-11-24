@@ -1843,13 +1843,15 @@ A number alone is not unique. If needed, use `git remote get-url origin` as a re
 do not assume all remotes point to GitHub. No checkout is required. Do not implicitly clone, fetch,
 push, commit, create or delete branches, or modify the checkout. This skill grants no permissions.
 
-Use `variable_read` with `name="GITHUB_TOKEN"`. Use the returned `valueRef` only if the entry is
-a secret and its described scope, if specified, covers the target. Pass it as
+Use `variable_read` with `prefix="GITHUB_TOKEN"` to find `GITHUB_TOKEN` and `GITHUB_TOKEN_*` secrets.
+Check each description against the requested account, repository and operation, even if there is
+only one entry. A single `GITHUB_TOKEN` without a description still works for GitHub.com. If
+several entries could apply or the fit is unclear, ask which saved entry to use. The base name has
+no priority. If none fits, direct the user to **Variablen & Secrets** to set up a suitable
+fine-grained personal access token. Pass the selected `valueRef` as
 `shell_run.environment={"GITHUB_TOKEN": "<valueRef>"}` on a selected computer with curl.
-If the secret is missing or is an ordinary variable, direct the user to **Variablen & Secrets** to
-set up a fine-grained personal access token as a secret. Do not ask for a token in chat, use other
-credentials as a fallback, install software, or bypass a denied action. Report missing tools or
-access. Use a token scoped to the intended repositories and only the permissions needed.
+Do not ask for a token in chat, retry with other credentials, install software, or bypass denied
+actions. Report missing tools or access. Use only the repository scope and permissions needed.
 
 ## REST requests
 

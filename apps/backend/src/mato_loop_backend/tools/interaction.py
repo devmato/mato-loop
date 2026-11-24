@@ -86,6 +86,13 @@ async def _variable_read(
         variables = [variable]
     else:
         variables = await list_personal_variables(context.db, context.session.user_id)
+        if arguments.prefix is not None:
+            base = arguments.prefix.lower()
+            variables = [
+                variable for variable in variables
+                if variable.metadata_json.get("secret") is True
+                and (variable.label.lower() == base or variable.label.lower().startswith(f"{base}_"))
+            ]
     return ToolResult.json(
         {
             "variables": [
@@ -360,7 +367,10 @@ TODO_WRITE = ToolDefinition(
 
 VARIABLE_READ = ToolDefinition(
             "variable_read",
-            "List personal variables or read one by name. Secret values are never returned; use valueRef "
+            "List personal variables, read one by exact name, or find secrets by a skill's base name using prefix. "
+            "Check descriptions for account, scope, and purpose even for a single match. For services with multiple "
+            "instances, require an exact match to the independently verified base URL. Ask which saved entry to use "
+            "if unclear; do not guess or try other secrets. Secret values are never returned; use valueRef "
             "with shell_run.environment to provide a value directly to an isolated process.",
             VariableReadArguments,
             _variable_read,

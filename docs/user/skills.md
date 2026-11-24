@@ -24,6 +24,8 @@ Für Skripte und lokale Ressourcen stellt MatoLoop eine Arbeitskopie auf dem aus
 
 Aktiviere den mitgelieferten Skill **github-repo-ops** unter **Skills** oder bitte den Agenten ausdrücklich im Chat darum. Die Aktivierung im Chat gilt nur für dein Konto und folgt den Freigaben für persönliche Einstellungen. Lege unter [Variablen & Secrets](variablen-und-secrets.md) ein persönliches Secret namens `GITHUB_TOKEN` mit einem fein abgestuften GitHub-PAT an. Begrenze den Token auf die benötigten Repositories und Rechte: Für CI-Logs genügt **Actions: Read**; zum Neustart fehlgeschlagener Jobs brauchst du **Actions: Write**. [Permissions required for fine-grained personal access tokens](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
 
+Wenn du mehrere GitHub-Tokens nutzt, ergänze Namen wie `GITHUB_TOKEN_ARBEIT` und beschreibe ihren [Einsatzbereich](variablen-und-secrets.md#mehrere-zugangsdaten-fur-skills-verwenden). Ein einzelnes `GITHUB_TOKEN` reicht weiterhin.
+
 Wähle einen verbundenen Computer mit `curl` und gib dem Agenten zum Beispiel den GitHub-Link zu einem PR: „Lies das Log vom fehlgeschlagenen CI-Job.“ Der Skill nutzt die vorhandenen Secret- und Shell-Freigaben. Merges und CI-Neustarts erfolgen nur auf ausdrücklichen Auftrag. Git-Pushes und Merges von gestapelten PRs übernimmt der Skill nicht.
 
 ## Deinen Schreibstil hinterlegen

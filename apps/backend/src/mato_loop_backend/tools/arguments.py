@@ -625,6 +625,17 @@ class VariableReadArguments(ToolArguments):
     name: str | None = Field(
         default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,119}$"
     )
+    prefix: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,119}$",
+        description="Secret base name, e.g. API_TOKEN. Matches API_TOKEN and API_TOKEN_* case-insensitively. Omit name.",
+    )
+
+    @model_validator(mode="after")
+    def exclusive_name_and_prefix(self) -> VariableReadArguments:
+        if self.name is not None and self.prefix is not None:
+            raise invalid_argument("Use either name or prefix, not both.", field="prefix")
+        return self
 
 
 class VariableWriteArguments(ToolArguments):
