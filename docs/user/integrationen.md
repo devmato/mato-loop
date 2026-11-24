@@ -279,11 +279,17 @@ Prüfe nach dem Speichern den erkannten Tool-Katalog und dessen Rechte. Ein fehl
 
 ### Ein lokales Programm über stdio verbinden
 
+Wähle den verbundenen Computer im Chat und bitte ausdrücklich um die Einrichtung, etwa „Richte SolidCraft MCP auf diesem Computer ein“. Der Agent sucht zuerst nach einer bestehenden Verbindung. Für eine neue Verbindung muss das Programm bereits installiert sein. Prüfe und bestätige Computer, Programm, Argumente und Arbeitsverzeichnis in der Freigabe: Zur Tool-Erkennung wird das Programm mit den Betriebssystemrechten des Agents gestartet. Nach erfolgreicher Erkennung stehen die Tools ab der nächsten Nachricht im selben Chat zur Verfügung, sofern die Berechtigungen passen. Zum Ändern oder Löschen einer Verbindung nutze **Einstellungen > MCP-Server**. Schlägt die Erkennung fehl, bleibt die Verbindung gespeichert; prüfe dort die Angaben und wähle **Tools aktualisieren**.
+
+Alternativ richtest du die Verbindung in den Einstellungen ein:
+
 1. Lege einen MCP-Server an und wähle als Verbindung **Auf Computer (stdio)** sowie deinen verbundenen Computer.
 2. Trage den absoluten Pfad zur ausführbaren Datei und ein absolutes Arbeitsverzeichnis auf diesem Computer ein. Das Programm muss dort bereits installiert sein.
 3. Gib Argumente als JSON-Liste von Zeichenketten an, etwa `["--mode", "stdio"]`; ohne Argumente verwende `[]`. Hinterlege normale Umgebungsvariablen getrennt von geheimen Werten. Geheimnisse werden verschlüsselt gespeichert; schreibe sie nicht in die Argumentliste.
 4. Speichere die Verbindung. Das startet noch keinen Prozess. Wähle anschließend **Tools aktualisieren**, um den Katalog einzulesen. Dafür läuft ein eigener kurzlebiger Prozess, der nach Abschluss oder Fehler beendet wird. Aktualisiere den Katalog nach Änderungen an der Programmkonfiguration erneut.
 5. Wähle im Chat denselben Computer und prüfe Tool-Verfügbarkeit und Berechtigungen. Erst ein erlaubter Tool-Aufruf startet den Chat-Prozess; weitere Aufrufe derselben Verbindung im selben Chat verwenden ihn weiter. Andere Chats haben eigenen Prozesszustand.
+
+Bitte im Chat direkt um die gewünschte Aktion, etwa „Erstelle mit SolidCraft ein Modell“. Der Agent soll das passende MCP-Tool nutzen oder zuerst im Tool-Katalog suchen. Fehlt der Zugriff, meldet er den Blocker, statt den Server selbst per Shell zu starten. Eine ausdrücklich angeforderte CLI-Nutzung hat eigene Berechtigungen.
 
 Der Leerlauf-Timeout beträgt standardmäßig **30 Minuten**. Er beendet wartende Prozesse, nicht laufende Tool-Aufrufe; für Aufrufe gelten eigene Zeitlimits. Pro Computer sind höchstens **vier MCP-Prozesse** gleichzeitig möglich, einschließlich der Katalogabfrage. Unter **Aktive Sitzungen** kannst du nicht mehr benötigte Prozesse schließen, solange keine Aufrufe laufen.
 

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Any
 from uuid import UUID
 
@@ -17,8 +20,9 @@ from pydantic import (
 )
 from pydantic_core import PydanticCustomError
 
+from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import AsyncSessionFactory
-from mato_loop_backend.execution.client import ExecutionClientError
+from mato_loop_backend.execution.client import ExecutionClientError, WorkspaceStatResult
 from mato_loop_backend.integrations.arcane.service import ArcaneIntegrationService
 from mato_loop_backend.integrations.bookstack.service import BookStackIntegrationService
 from mato_loop_backend.integrations.browser.adapter import BrowserIntegrationService
@@ -31,6 +35,17 @@ from mato_loop_backend.integrations.caldav.service import (
 from mato_loop_backend.integrations.mail.service import MailIntegrationService
 from mato_loop_backend.integrations.mcp.client import McpClientError
 from mato_loop_backend.integrations.mcp.service import McpIntegrationService
+from mato_loop_backend.integrations.mcp.stdio import (
+    McpStdioBinding,
+    McpStdioConfig,
+    validate_environment,
+)
+from mato_loop_backend.integrations.mcp.stdio_service import (
+    McpStdioRequest,
+    owned_agent,
+    refresh_stdio,
+    save_stdio,
+)
 from mato_loop_backend.integrations.mealie.service import MealieIntegrationService
 from mato_loop_backend.integrations.opencode.adapter import (
     OpenCodeIntegrationService,
@@ -49,6 +64,7 @@ from mato_loop_backend.integrations.sonobin.adapter import sonobin_base_url
 from mato_loop_backend.integrations.sonobin.service import SonoBinIntegrationService
 from mato_loop_backend.integrations.tbs_desk.adapter import TbsDeskIntegrationService
 from mato_loop_backend.integrations.tbs_desk.client import TbsDeskError
+from mato_loop_backend.permissions.policy import PermissionDisplayItem, personal_settings_permission
 from mato_loop_backend.settings import (
     IntegrationAdapterAvailability,
     IntegrationInstance,
@@ -79,6 +95,7 @@ _CONFIG_FIELDS = {
     "opencode": ("base_url", "username"),
     "browser": ("execution_agent_id",),
     "mcp_streamable_http": ("endpoint",),
+    "mcp_stdio": tuple(McpStdioBinding.model_fields),
 }
 _SECRETS = {
     "caldav": ("password", "username"), "imap_smtp": ("password", "username"),
@@ -116,6 +133,11 @@ class IntegrationChanges(BaseModel):
     from_address: str | None = None
     execution_agent_id: UUID | None = None
     binary_path: str | None = None
+    executable: str | None = None
+    working_directory: str | None = None
+    args: list[str] | None = None
+    environment: dict[str, str] | None = None
+    idle_timeout_seconds: int | None = Field(default=None, strict=True)
     secret_refs: dict[str, UUID | str] = Field(default_factory=dict)
     remove_credential: StrictBool = False
 
@@ -164,6 +186,15 @@ class IntegrationChanges(BaseModel):
 
 
 def _payload(item: IntegrationInstance) -> dict[str, Any]:
+    if item.adapter_type == "mcp_stdio":
+        binding = McpStdioConfig.model_validate(item.config)
+        return {
+            "id": str(item.id), "adapterType": item.adapter_type, "name": item.name,
+            "enabled": item.enabled, "executionAgentId": str(item.execution_agent_id),
+            "config": binding.model_dump(include={"executable", "working_directory", "idle_timeout_seconds"}, by_alias=False),
+            "hasCredential": item.credential_id is not None,
+            "transport": "stdio", "toolCount": len(binding.tools),
+        }
     return {
         "id": str(item.id), "adapterType": item.adapter_type, "name": item.name,
         "enabled": item.enabled, "config": {
@@ -186,6 +217,8 @@ async def _settings(context: ToolContext) -> tuple[IntegrationSettings, UserInte
     if await personal_settings_allowed(context.db, context.session.user_id, False):
         global_settings = global_settings.model_copy(deep=True)
         for adapter_type in _CONFIG_FIELDS:
+            if adapter_type == "mcp_stdio":  # Inherits the HTTP MCP gate.
+                continue
             if global_settings.availability_for(adapter_type) == IntegrationAdapterAvailability.INSTANCE_ONLY:
                 global_settings.adapter_availability[adapter_type] = IntegrationAdapterAvailability.FULL
     personal = await SettingsStore.load(
@@ -242,6 +275,51 @@ async def _caldav_defaults(
     return ToolResult.json(caldav_defaults_payload(current, resources, tools))
 
 
+async def _stdio_target(context: ToolContext, request: McpStdioRequest):
+    client = context.execution_client
+    if client is None or request.execution_agent_id != client.agent_id:
+        return ToolResult.error("executionAgent.unavailable")
+    if not {"integration.mcp.discover", "integration.mcp.call", "cache.export"} <= client.operations:
+        return ToolResult.error("executionAgent.operationUnavailable")
+    try:
+        agent = await owned_agent(context.db, context.session.user_id, client.agent_id)
+    except ApiError as exc:
+        return ToolResult.error(exc.code)
+    from mato_loop_backend.sessions.service import execution_filesystem_policy
+
+    if any(execution_filesystem_policy(agent, path) == "deny" for path in (request.executable, request.working_directory)):
+        return ToolResult.error("file.accessDenied")
+    try:
+        executable = await client.request("filesystem.stat", {"path": request.executable}, WorkspaceStatResult)
+    except ExecutionClientError as exc:
+        return ToolResult.error(exc.code)
+    if executable.path != request.executable or executable.kind != "file":
+        return ToolResult.error("file.symlinkForbidden" if executable.kind == "symlink" else "file.notAFile")
+    return agent.display_name
+
+
+def _stdio_confirmation(user_id, request, computer_name, secret_names):
+    return replace(
+        personal_settings_permission(user_id, "integrations", "create"),
+        display_items=(
+            PermissionDisplayItem("Computer", computer_name),
+            PermissionDisplayItem("Verbindung", request.name),
+            PermissionDisplayItem("Programm", request.executable, "code"),
+            PermissionDisplayItem("Argumente", json.dumps(request.args, ensure_ascii=False), "code"),
+            PermissionDisplayItem("Arbeitsverzeichnis", request.working_directory, "code"),
+            PermissionDisplayItem("Umgebung", json.dumps(request.environment, ensure_ascii=False), "code"),
+            *((PermissionDisplayItem("Geschützte Variablen", tuple(sorted(secret_names)), "list"),) if secret_names else ()),
+            PermissionDisplayItem("Ausführung", "Aktiviert: Das Programm wird zur Tool-Erkennung mit den Betriebssystemrechten des Agents gestartet."
+                                  if request.enabled else "Deaktiviert: Das Programm wird nicht gestartet."),
+            PermissionDisplayItem("Leerlauf-Timeout", f"{request.idle_timeout_seconds} Sekunden"),
+        ),
+        available_decisions=("allow_once", "deny"),
+        approval_details={"settingsTargetHash": hashlib.sha256(json.dumps(
+            request.model_dump(mode="json"), sort_keys=True,
+        ).encode()).hexdigest()},
+    )
+
+
 async def manage_integrations(
     arguments: PersonalSettingsArguments, context: ToolContext,
     authorize: Callable[..., Awaitable[ToolResult | None]],
@@ -273,9 +351,14 @@ async def manage_integrations(
     adapter_type = arguments.adapter_type or (current.adapter_type if current else None)
     if adapter_type not in _CONFIG_FIELDS or (current and current.adapter_type != adapter_type):
         return ToolResult.error("tool.invalidArguments", field="adapter_type", params={"reason": "invalid_choice", "hint": "Use a supported adapter type; an existing integration's adapter type cannot be changed."})
+    if adapter_type == "mcp_stdio" and (action != "create" or arguments.integration_id is not None):
+        return ToolResult.error("tool.invalidArguments", field="action", params={
+            "hint": "Create local MCP connections here. To change or remove one, use Settings > MCP servers.",
+        })
     if action != "delete" and global_settings.availability_for(adapter_type) != IntegrationAdapterAvailability.FULL:
         return ToolResult.error("integration.personalAdapterDisabled")
     changes = None
+    stdio = None
     if action != "delete":
         try:
             changes = IntegrationChanges.model_validate(arguments.changes)
@@ -286,13 +369,13 @@ async def manage_integrations(
             allowed.add("remove_credential")
         if changes.model_fields_set - allowed:
             return ToolResult.error("tool.invalidArguments", field=f"changes.{sorted(changes.model_fields_set - allowed)[0]}", params={"reason": "extra_field"})
-        if set(changes.secret_refs) - set(_SECRETS.get(adapter_type, ())):
+        if adapter_type != "mcp_stdio" and set(changes.secret_refs) - set(_SECRETS.get(adapter_type, ())):
             return ToolResult.error("tool.invalidArguments", field="changes.secret_refs", params={"reason": "invalid_choice", "hint": "Use only credential fields supported by the selected adapter."})
         if changes.remove_credential and adapter_type not in {"mcp_streamable_http", "opencode"}:
             return ToolResult.error("tool.invalidArguments", field="changes.remove_credential", params={"reason": "invalid_choice"})
         if adapter_type == "bookstack" and len(changes.secret_refs) == 1:
             return ToolResult.error("tool.invalidArguments", field="changes.secret_refs", params={"reason": "missing", "hint": "Provide both token_id and token_secret references."})
-        if action == "create" and (
+        if action == "create" and adapter_type != "mcp_stdio" and (
             changes.name is None or any(
                 getattr(changes, field) is None and field not in changes.secret_refs
                 for field in _CONFIG_FIELDS[adapter_type]
@@ -322,6 +405,24 @@ async def manage_integrations(
                 return argument_error(exc, {"endpoint": config.get("endpoint")}, prefix="changes")
             except (ValueError, KeyError):
                 return ToolResult.error("tool.invalidArguments", field="changes.base_url" if adapter_type == "sonobin" else "changes.endpoint", params={"reason": "invalid_format"})
+        elif adapter_type == "mcp_stdio":
+            if context.execution_client is None:
+                return ToolResult.error("executionAgent.unavailable")
+            data = {**config, "transport": "stdio", "execution_agent_id": context.execution_client.agent_id,
+                    "name": changes.name, "enabled": changes.enabled if changes.enabled is not None else True}
+            try:
+                stdio = McpStdioRequest.model_validate(data)
+            except ValidationError as exc:
+                return argument_error(exc, data, prefix="changes")
+            try:
+                validate_environment(dict.fromkeys(changes.secret_refs, ""))
+            except ValueError:
+                return ToolResult.error("tool.invalidArguments", field="changes.secret_refs")
+            if stdio.environment.keys() & changes.secret_refs.keys():
+                return ToolResult.error("mcp.configurationInvalid")
+            computer_name = await _stdio_target(context, stdio)
+            if isinstance(computer_name, ToolResult):
+                return computer_name
         elif adapter_type not in {"opencode", "browser"}:
             adapter = next((item for item in (integration_adapter(kind, adapter_type) for kind in (
                 "search", "calendar", "mail", "support", "knowledge", "recipes", "documents", "infrastructure", "openscad"
@@ -337,9 +438,15 @@ async def manage_integrations(
                     return argument_error(exc, config, prefix="changes")
                 except KeyError:
                     return ToolResult.error("tool.invalidArguments", field="changes", params={"reason": "missing"})
+    approval_kwargs = {}
+    if stdio is not None:
+        approval_kwargs["confirmation"] = _stdio_confirmation(
+            context.session.user_id, stdio, computer_name, changes.secret_refs,
+        )
     denied = await authorize(
         context, action, "integrations", integration_id=arguments.integration_id,
         fields=tuple(sorted((arguments.changes or {}).keys())), changes=arguments.changes,
+        **approval_kwargs,
     )
     if denied:
         return denied
@@ -364,6 +471,8 @@ async def manage_integrations(
         )
     ):
         return ToolResult.error("tool.invalidArguments", field="changes.secret_refs", params={"reason": "invalid_value", "hint": "Request new credentials matching the adapter's length and character requirements."})
+    if stdio is not None:
+        return await _create_personal_stdio(context, stdio, credential_values)
     if "username" in credential_values:
         if adapter_type == "opencode" and (
             len(credential_values["username"]) > 255
@@ -451,3 +560,31 @@ async def manage_integrations(
     else:
         item = next((item for item in instances if item.id == arguments.integration_id), None)
     return ToolResult.json({**_payload(item), "effectiveFrom": "next_run"}) if item else ToolResult.error("tool.executionFailed")
+
+
+async def _create_personal_stdio(context, request, credentials):
+    owner_id = context.session.user_id
+    target = await _stdio_target(context, request)
+    if isinstance(target, ToolResult):
+        return target
+    try:
+        request = McpStdioRequest.model_validate(dict(
+            request.model_dump(by_alias=False), environment_secrets=credentials,
+        ))
+    except ValidationError:
+        return ToolResult.error("mcp.configurationInvalid")
+    try:
+        async with AsyncSessionFactory() as service_db:
+            saved = await save_stdio(service_db, request, owner_id=owner_id, user_id=owner_id)
+            result = {**_payload(saved), "saved": True, "effectiveFrom": "next_run"}
+            if not request.enabled:
+                return ToolResult.json(result)
+            try:
+                refreshed = await refresh_stdio(service_db, saved, owner_id)
+            except (ApiError, IntegrationSettingsError, McpClientError, ExecutionClientError) as exc:
+                error = ToolResult.error(exc.code)
+                error.content = json.dumps({**result, **json.loads(error.content), "toolCatalogRefreshed": False})
+                return error
+            return ToolResult.json({**result, **_payload(refreshed), "toolCatalogRefreshed": True})
+    except (ApiError, IntegrationSettingsError, McpClientError, ExecutionClientError) as exc:
+        return ToolResult.error(exc.code)

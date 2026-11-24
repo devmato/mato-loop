@@ -15,6 +15,7 @@ from pydantic import (
 import mato_loop_backend.permissions.resolution as permissions_resolution
 import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.permissions.policy import (
+    PermissionRequest,
     personal_settings_permission,
     personal_variables_permission,
 )
@@ -116,6 +117,7 @@ async def _authorize(
     context: ToolContext, action: str, area: str, *,
     fields: tuple[str, ...] = (), integration_id: UUID | None = None,
     changes: dict[str, Any] | None = None, skill_id: UUID | None = None,
+    confirmation: PermissionRequest | None = None,
 ) -> ToolResult | None:
     capability = "settings.personal.read" if action == "get" else "settings.personal.update"
     context.tool_settings = await tools_access.profile_tool_settings(context)
@@ -123,9 +125,9 @@ async def _authorize(
     if policy == ToolExecutionPolicy.DISABLED or not context.tool_settings.tool_availability.get("customize_matoloop", True):
         return ToolResult.error("tool.unavailable")
     approved = False
-    if policy == ToolExecutionPolicy.ASK:
+    if policy == ToolExecutionPolicy.ASK or confirmation is not None:
         approved = await tools_access.allow(
-            context, personal_settings_permission(
+            context, confirmation or personal_settings_permission(
                 context.session.user_id, area, action,
                 fields=fields, integration_id=integration_id, changes=changes, skill_id=skill_id,
             ),
@@ -177,6 +179,15 @@ async def _personal_settings(
                     "settingsPath": "/settings/mcp",
                     "instructions": "MatoLoop supports OAuth. Start the browser login in Settings > MCP servers. This tool configures static Bearer credentials; it cannot complete interactive OAuth setup.",
                 },
+            }
+            adapters["mcp_stdio"] = {
+                "fields": ["name", "enabled", *_CONFIG_FIELDS["mcp_stdio"]],
+                "credentialFields": [],
+                "requiredOnCreate": ["name", "executable", "working_directory"],
+                "instructions": "Find existing connections with get; use create only for a new connection on the selected computer. "
+                "Change or remove existing connections in Settings > MCP servers. Provide absolute executable and working_directory paths, "
+                "args as a string array, and only nonsecret values in environment. Use secret_refs keyed by "
+                "environment variable name for protected values. Installation is a separate request.",
             }
         areas = {
             **{key: list(fields) for key, (_type, fields) in _SCALAR_SETTINGS.items()},
@@ -438,7 +449,10 @@ CUSTOMIZE_MATOLOOP = ToolDefinition(
     "For skills, use area=skills and action=get to find personal or bundled skills, including disabled ones. "
     "Use action=update with changes.skill_id and changes.enabled to change personal availability. "
     "To use a newly enabled skill, call load_skill separately. Other settings changes apply from the next run. "
-    "MCP supports no authentication, Bearer tokens, and OAuth. Interactive OAuth setup requires "
+    "For explicit local MCP setup, check for an existing connection with get before using create with "
+    "adapter_type=mcp_stdio on the selected computer. Verify the installed executable's real path and documented arguments without "
+    "launching the server. For stdio, secret_refs keys are environment variable names. HTTP MCP supports no "
+    "authentication, Bearer tokens, and OAuth. Interactive OAuth setup requires "
     "Settings > MCP servers.",
     PersonalSettingsArguments,
     _personal_settings,

@@ -13,15 +13,18 @@ import pytest
 from PIL import Image
 from pydantic import ValidationError
 from sqlalchemy import select
+from tool_helpers import _context
 
 import mato_loop_backend.execution.artifacts as artifacts
 import mato_loop_backend.integrations.mcp.service as mcp_service
 import mato_loop_backend.integrations.mcp.stdio as runtime
 import mato_loop_backend.integrations.mcp.stdio_service as service
+import mato_loop_backend.tools.access as tools_access
+import mato_loop_backend.tools.personal_integrations as personal_integrations
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import integrations as generic_routes
 from mato_loop_backend.api.routes import mcp as routes
-from mato_loop_backend.execution.client import ExecutionClientError
+from mato_loop_backend.execution.client import ExecutionClient, ExecutionClientError
 from mato_loop_backend.integrations.mcp.adapter import McpCatalogTool, mcp_resource_key
 from mato_loop_backend.integrations.mcp.client import McpClientError
 from mato_loop_backend.integrations.registry import (
@@ -29,17 +32,109 @@ from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
 )
 from mato_loop_backend.models import ExecutionAgent
+from mato_loop_backend.permissions.policy import PermissionDecision, PermissionPolicy
+from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
+    ToolExecutionPolicy,
     ToolSettings,
     UserIntegrationSettings,
 )
 from mato_loop_backend.settings.models import IntegrationPermissions
+from mato_loop_backend.tools.catalog import tool_registry
 
 TOOL = {"name": "lookup", "input_schema": {"type": "object"}}
 CONFIG = {"executable": "/usr/bin/server", "workingDirectory": "/work", "tools": [TOOL]}
+
+
+@pytest.mark.parametrize("failure", [None, "denied", "wrong_computer", "refresh", "executable_replaced"])
+async def test_chat_stdio_setup_uses_confirmed_selected_computer(monkeypatch, tmp_path, failure):
+    secret_id, computer_id = uuid4(), uuid4()
+    call = ToolCall("setup", "customize_matoloop", {
+        "action": "create", "area": "integrations", "adapter_type": "mcp_stdio",
+        "changes": {"name": "Local", "executable": "/usr/bin/server", "args": ["mcp"],
+                    "working_directory": "/work", "secret_refs": {"TOKEN": f"run-secret:{secret_id}"}},
+    })
+    context = _context(tmp_path, call)
+    if failure != "wrong_computer":
+        context.execution_client = ExecutionClient(computer_id, frozenset({
+            "integration.mcp.discover", "integration.mcp.call", "cache.export", "filesystem.stat",
+        }))
+    context.one_time_secrets[secret_id] = "protected-test-value"
+    policies = ToolSettings(private_permissions={"policies": {"settings.personal.update": "auto"}})
+    monkeypatch.setattr(tools_access, "profile_tool_settings", AsyncMock(return_value=policies))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kw: {
+        IntegrationSettings: IntegrationSettings(adapter_availability={"mcp_streamable_http": "full"}),
+        UserIntegrationSettings: UserIntegrationSettings(),
+    }[model]))
+    monkeypatch.setattr(personal_integrations, "owned_agent", AsyncMock(return_value=SimpleNamespace(
+        display_name="Test computer", home_directory="/home/user", external_filesystem_policy="ask",
+    )))
+    executable = SimpleNamespace(path="/usr/bin/server", kind="file")
+    monkeypatch.setattr(ExecutionClient, "request", AsyncMock(return_value=executable))
+    saved = instance().model_copy(update={"execution_agent_id": computer_id, "config": {**CONFIG, "tools": []}})
+    save = AsyncMock(return_value=saved)
+    refresh = AsyncMock(return_value=saved.model_copy(update={"config": CONFIG}))
+    if failure == "refresh":
+        refresh.side_effect = McpClientError("mcp.startFailed")
+    monkeypatch.setattr(personal_integrations, "save_stdio", save)
+    monkeypatch.setattr(personal_integrations, "refresh_stdio", refresh)
+
+    async def confirm(request):
+        assert await PermissionPolicy.evaluate(
+            context.db, context.session, request, context.root_files, ToolExecutionPolicy.AUTO,
+        ) == PermissionDecision.ASK
+        assert request.available_decisions == ("allow_once", "deny")
+        assert {item.label: item.value for item in request.display_items}["Argumente"] == '["mcp"]'
+        assert "protected-test-value" not in str(request)
+        save.assert_not_awaited()
+        if failure == "executable_replaced":
+            executable.kind = "symlink"
+        return PermissionDecision.DENY if failure == "denied" else PermissionDecision.ALLOW
+
+    context.ask_handler.side_effect = confirm
+    result = await tool_registry.execute(call, context)
+    if failure in {"denied", "wrong_computer", "executable_replaced"}:
+        assert result.metadata["errorCode"] == {
+            "denied": "permission.denied", "wrong_computer": "executionAgent.unavailable",
+            "executable_replaced": "file.symlinkForbidden",
+        }[failure]
+        save.assert_not_awaited()
+        refresh.assert_not_awaited()
+        return
+    context.ask_handler.assert_awaited_once()
+    request = save.await_args.args[1]
+    assert request.execution_agent_id == computer_id
+    assert request.environment_secrets["TOKEN"] == "protected-test-value"
+    assert save.await_args.kwargs["owner_id"] == context.session.user_id
+    assert refresh.await_args.args[1] is saved
+    payload = json.loads(result.content)
+    assert payload["saved"] and payload["effectiveFrom"] == "next_run"
+    assert "protected-test-value" not in result.content
+    if failure == "refresh":
+        assert payload["error"]["code"] == "mcp.startFailed"
+        assert payload["toolCatalogRefreshed"] is False
+    else:
+        assert payload["toolCount"] == 1 and not result.is_error
+
+
+@pytest.mark.parametrize("action", ["update", "delete"])
+async def test_chat_stdio_existing_connections_are_read_only(monkeypatch, tmp_path, action):
+    local = instance()
+    monkeypatch.setattr(personal_integrations, "_settings", AsyncMock(return_value=(
+        IntegrationSettings(adapter_availability={"mcp_streamable_http": "full"}),
+        UserIntegrationSettings(instances=[local]),
+    )))
+    call = ToolCall("manage", "customize_matoloop", {
+        "action": action, "area": "integrations", "integration_id": str(local.id),
+        **({"changes": {"name": "Renamed"}} if action == "update" else {}),
+    })
+    context = _context(tmp_path, call)
+    result = await tool_registry.execute(call, context)
+    assert result.metadata["errorCode"] == "tool.invalidArguments"
+    context.ask_handler.assert_not_awaited()
 
 
 def instance():

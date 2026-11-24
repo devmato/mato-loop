@@ -9,6 +9,7 @@ import pytest
 import mato_loop_backend.tools.discovery as discovery_module
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.integrations.mcp.adapter import mcp_model_tool_name
+from mato_loop_backend.integrations.registry import effective_execution_integration_settings
 from mato_loop_backend.models import ContextSummary, Message, WebSearchPolicy
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.settings.effective import integration_tool_loading
@@ -141,6 +142,41 @@ def test_deferred_browser_guidance_respects_effective_availability(available):
     )
     initial = offer([calendar(), browser], profile)
     assert ("call search_tools with query=browser_tabs" in "\n".join(initial.prompt_fragments)) is available
+
+
+async def test_computer_mcp_catalog_is_searchable_only_on_bound_computer():
+    local = IntegrationInstance(
+        name="SolidCraft", integration_type="mcp", adapter_type="mcp_stdio",
+        execution_agent_id=uuid4(), config={
+            "executable": "/usr/bin/solidcraft-cli", "workingDirectory": "/work", "args": ["mcp"],
+            "tools": [{"name": "create_model", "input_schema": {"type": "object"}}],
+        },
+    )
+    settings = IntegrationSettings(instances=[local], adapter_availability={"mcp_streamable_http": "full"})
+    operations = {"integration.mcp.call", "cache.export"}
+    profile = AgentProfile(name="Agent", instructions="Task", integration_tool_loading="on_demand")
+
+    def offer_on(computer, records=()):
+        eligible = effective_execution_integration_settings(settings, computer, operations)
+        tool_settings = ToolSettings()
+        tool_settings._agent_profile = profile
+        tools = tool_registry.effective(eligible, tool_settings=tool_settings, execution_operations=operations)
+        return offer_integration_tools(tools, eligible, profile, list(records))
+
+    initial = offer_on(local.execution_agent_id)
+    catalog = next(fragment for fragment in initial.prompt_fragments if fragment.startswith("Integration catalog"))
+    assert '"transport": "computer-stdio"' in catalog
+    context = SimpleNamespace(current_integrations=AsyncMock(return_value=settings))
+    result = await initial.tools["search_tools"].definition.handler(
+        SearchToolsArguments(query="create model", integration_id=local.id), context,
+    )
+    reloaded = offer_on(local.execution_agent_id, [discovery(result)])
+    name = mcp_model_tool_name(local.id, "create_model", local.name)
+    assert name in reloaded.tools
+    assert catalog in reloaded.prompt_fragments
+    assert reloaded.schemas()[:len(initial.tools)] == initial.schemas()
+    other = offer_on(uuid4(), [discovery(result)])
+    assert "SolidCraft" not in "\n".join(other.prompt_fragments) and name not in other.tools
 
 
 def test_context_pressure_expires_older_discoveries_not_the_latest():

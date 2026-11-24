@@ -2468,6 +2468,15 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "Copy returned links exactly" in prompt
 
 
+def test_computer_mcp_prompt_prioritizes_discovery_and_forbids_shell_workarounds() -> None:
+    prompt = general_system_prompt(
+        _session(), execution_agent_connected=True, offered_tool_names=frozenset({"search_tools", "shell_run"}),
+    )
+
+    assert "or find them with search_tools before using shell" in prompt
+    assert "report the known blocker. Do not launch the server yourself" in prompt
+
+
 def test_webfetch_browser_fallback_prompt_matches_available_tools() -> None:
     attached = general_system_prompt(
         _session(),

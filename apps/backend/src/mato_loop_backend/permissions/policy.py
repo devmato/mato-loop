@@ -1611,6 +1611,9 @@ class PermissionPolicy:
                     return PermissionDecision.DENY
             except (ValueError, KeyError, TypeError, AttributeError):
                 return PermissionDecision.DENY
+            # Action-only settings consent cannot be satisfied by AUTO or broad settings grants.
+            if "allow_session" not in request.available_decisions:
+                return PermissionDecision.DENY if policy == ToolExecutionPolicy.DISABLED else PermissionDecision.ASK
 
         if request.resource_type == "personal_variable_collection":
             try:

@@ -354,6 +354,8 @@ The automation create and edit schemas put start timing in `schedules` and per-r
 
 Integration-scoped discovery adds stable connection IDs to the catalog and an optional ID filter to `search_tools`. Readable MCP model names and source descriptions intentionally invalidate the former tool/schema and catalog prefixes once. Discovery replay resolves current eligible bindings without rewriting historical exchanges; subsequent unchanged offers retain deterministic ordering. See [tool loading](integrations.md#tool-loading).
 
+Computer-MCP routing guidance is a stable host instruction: prefer offered tools or find them in `search_tools`, and report a blocker instead of recreating that access outside the integration. The catalog marks eligible stdio connections as `computer-stdio` before and after discovery. The guidance and stdio tool descriptions intentionally change the old prefixes; the `customize_matoloop` description also identifies explicit stdio setup. Tool argument schemas and retained history are unchanged.
+
 Paperless document-link guidance intentionally changes the account/search/read tool-description prefix. Configured web roots and generated document links are returned as tool data; historical results are not enriched from current configuration.
 
 Microsoft 365 calendar-write and To Do tools, including the task-list completion filter, and signature-aware composition guidance intentionally change the offered integration schemas and inactive-tool inventory prefix. Subsequent rounds retain their stable order. Configured signatures are returned by account discovery as turn-local tool data, not embedded into changing tool schemas or reconstructed historical turns.

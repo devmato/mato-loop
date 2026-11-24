@@ -296,6 +296,7 @@ def stdio_contributions(instance):
                 tool,
                 description=(
                     f"{tool.description}\n"
+                    "Runs on the selected computer via MCP stdio. "
                     f"This connection's process idle timeout is {timeout} seconds."
                 ),
                 execution_operation="integration.mcp.call",

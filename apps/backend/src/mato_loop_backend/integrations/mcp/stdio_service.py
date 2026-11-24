@@ -57,7 +57,7 @@ async def owned_agent(db, user_id, agent_id, *, allow_revoked=False):
     if not allow_revoked:
         conditions.append(ExecutionAgent.revoked_at.is_(None))
     agent = await db.scalar(
-        select(ExecutionAgent).where(*conditions)
+        select(ExecutionAgent).where(*conditions).execution_options(populate_existing=True)
     )
     if agent is None:
         raise ApiError(404, "executionAgent.notFound")
