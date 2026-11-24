@@ -18,11 +18,11 @@ The tag policy deliberately limits mutable artifact storage:
 
 | Source | Checks | Image build | Publish |
 | --- | --- | --- | --- |
-| Pull request | Full checks and tests | All three images | Never |
-| Feature branch push | Checks and tests except the GitHub macOS ARM64 job | No | Never |
-| `develop` push | Full checks and tests | All three images | Mutable `develop` and immutable date/SHA tag |
-| `main` push | Full checks and tests | No | Never; release tags only |
-| Date/SHA release tag | Full checks and tests | All three images | Immutable date/SHA tag and `latest` |
+| Pull request | CI checks and tests | All three images | Never |
+| Feature branch push | CI checks and tests | No | Never |
+| `develop` push | CI checks and tests | All three images | Mutable `develop` and immutable date/SHA tag |
+| `main` push | CI checks and tests | No | Never; release tags only |
+| Date/SHA release tag | CI checks and tests | All three images | Immutable date/SHA tag and `latest` |
 | Manual GitHub Release | Full checks, tests, and migration round trip | All three images | Immutable date/SHA tag and `latest` |
 | Manual GitHub CI | Full checks, tests, migrations, and version validation | All three images | Never |
 
@@ -30,13 +30,13 @@ Feature branches therefore consume runner cache only, each accepted `develop` re
 
 The verification path also includes migration and source-version jobs; "checks and tests" does not mean only unit tests. Manual CI dispatch builds without publication. Use tags only from successful publication runs.
 
-Pull requests run the complete test and production-image build path, but registry login, publication, and release creation are disabled. Repository secrets must not be passed to pull request jobs. This applies to same-repository and fork pull requests.
+Pull requests run the main CI checks and production-image builds, but registry login, publication, and release creation are disabled. Repository secrets must not be passed to pull request jobs. This applies to same-repository and fork pull requests.
 
 ## Runner Requirements
 
-GitHub workflows use GitHub-hosted `ubuntu-latest` runners, plus `windows-latest` for native browser verification. The Windows job installs pinned Playwright and matching Chromium and verifies setup, automation, authenticated streaming, file staging and chat isolation. It gates image builds and publication alongside the Linux jobs. Linux native test jobs keep the same pinned toolchains and system packages as the Forgejo jobs. The migration job publishes its PostgreSQL service port and connects through `localhost`; Forgejo job containers use the `db` hostname.
+GitHub CI uses GitHub-hosted `ubuntu-latest` runners, plus `windows-latest` for the `windows-agent` job. That job tests the native Windows runtime and browser, including setup, automation, authenticated streaming, file staging, and chat isolation. It gates image builds and publication alongside the Linux jobs. Linux native test jobs keep the same pinned toolchains and system packages as the Forgejo jobs. The migration job publishes its PostgreSQL service port and connects through `localhost`; Forgejo job containers use the `db` hostname.
 
-The GitHub CI workflow uses `macos-15` for native ARM64 verification on pull requests, `develop` and `main` pushes, release tags, and manual CI runs. It gates image builds and publication in that workflow. Feature branch pushes skip this job to avoid requesting a second macOS runner for the same PR update.
+The separate **macOS Agent** workflow uses `macos-15` for native ARM64 verification. It runs on pull requests and `develop` pushes that change the agent, the shared version library, the macOS installer, or the workflow itself. It can also be run manually under **Actions > macOS Agent** once the workflow is on the default branch. Runner cancellations and test failures are reported in that workflow and do not block main CI, image builds, or publication.
 
 The GitHub Agent test step runs its installed virtual-environment Python as root, matching the development container and supporting device-node and ownership fixtures. Image builds and publication copy the caller's Docker `config.json` into a private temporary directory so existing runner authentication remains available; cleanup removes only the temporary copy. No personal Docker Hub token is required by these workflows, and Docker Hub transport or rate-limit failures can still occur.
 
