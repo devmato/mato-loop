@@ -11,13 +11,13 @@ from sqlalchemy.orm import selectinload
 import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.agent.projection import (
     SESSION_TOOL_RESULT_CHUNK_CHARACTERS,
-    _model_file_tool_result,
-    _sanitize_tool_result_reference_fields,
+    _history_projection_stamp,
+    _history_tool_result,
+    _script_result_hidden,
     _shorten_evidence_output,
-    _target_tool_result,
-    _tool_names_by_message_id,
     _tool_result_page,
     _tool_result_reference,
+    _ToolHistory,
     command_message_content,
     tool_execution_binding,
 )
@@ -51,8 +51,15 @@ from mato_loop_backend.tools.arguments import (
 from mato_loop_backend.tools.context import ToolContext as ToolContext
 from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
-from mato_loop_backend.tools.references import model_tool_references
 from mato_loop_backend.tools.secrets import available_secret_references
+
+
+def _history_result(
+    tool_name: str, payload: dict[str, Any], readable_by: TrustLevel, *, metadata: dict[str, Any] | None = None,
+) -> ToolResult:
+    result = ToolResult.json(payload, metadata=metadata, trust_level=readable_by)
+    result.metadata["liveHistoryProjection"] = _history_projection_stamp(tool_name, result.content, readable_by)
+    return result
 
 
 def _attachment_items(message: Message) -> list[dict[str, Any]]:
@@ -69,6 +76,7 @@ def _attachment_items(message: Message) -> list[dict[str, Any]]:
             "fileRevision": attachment.file_revision,
         }
         for attachment in model_attachments(message, include_pending=False)
+        if (attachment.metadata_json or {}).get("protectedInput") is not True
     ]
 
 
@@ -79,29 +87,17 @@ def _message_item(
     target_trust_level: TrustLevel,
     *,
     reference_tool_results: bool,
+    history: _ToolHistory | None = None,
     available_secret_references: set[str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     content_limit = min(SESSION_TOOL_RESULT_CHUNK_CHARACTERS, max(0, remaining))
     content = command_message_content(message)
+    tool_name = tool_names.get(message.id)
     if message.role == "tool":
-        host = (message.provider_data or {}).get("_matoloop", {})
-        original = message.content
-        if guarded_skill_result(message):
-            # Transcript browsing does not grant access to the source. Retrieve it
-            # through the scoped result reader instead of persisting a second copy.
-            original = UNAVAILABLE_SKILL_LOAD if host.get("skillLoad") is not None else UNAVAILABLE_SKILL_REFERENCE
-        content = _target_tool_result(
-            tool_names.get(message.id), original, target_trust_level,
-            source_trust_level=message.trust_level,
+        content = _history_tool_result(
+            message, tool_name, target_trust_level, history=history,
             available_secret_references=available_secret_references or set(),
         )
-        content = _model_file_tool_result(content)
-        if (target_trust_level == TrustLevel.PUBLIC and message.trust_level != TrustLevel.PUBLIC.value
-                and (message.provider_data or {}).get("_matoloop", {}).get("scriptParent")):
-            content = '{"redactedPrivateContext":true}'
-    if message.role == "tool":
-        content = _sanitize_tool_result_reference_fields(content)
-        content = model_tool_references(tool_names.get(message.id), content, message.id)
     full_content = content
     if len(full_content) > content_limit and message.role == "tool":
         content = (_shorten_evidence_output(full_content, content_limit) or full_content)[:content_limit]
@@ -123,13 +119,15 @@ def _message_item(
         item["toolResultReference"] = _tool_result_reference(message.id, message.content)
     if message.tool_call_id:
         item["toolCallId"] = message.tool_call_id
-        if tool_name := tool_names.get(message.id):
+        if tool_name:
             item["toolName"] = tool_name
+    if _script_result_hidden(message, tool_name, TrustLevel.PUBLIC):
+        item["privateScriptSource"] = True
     if message.tool_calls:
         item["toolCalls"] = [
             {"id": call.get("id"), "name": call.get("name")} for call in message.tool_calls
         ]
-    if attachments := _attachment_items(message):
+    if not _script_result_hidden(message, tool_name, target_trust_level) and (attachments := _attachment_items(message)):
         item["attachments"] = attachments
     return item, remaining - len(content)
 
@@ -158,7 +156,8 @@ async def _session_tool_result_read(
             )
         ).all()
     )
-    tool_name = _tool_names_by_message_id(records).get(message.id)
+    history = _ToolHistory(records)
+    tool_name = history.names.get(message.id)
     if tool_name is None:
         return ToolResult.error("session.messageNotFound")
     guarded = guarded_skill_result(message)
@@ -178,13 +177,18 @@ async def _session_tool_result_read(
     payload = _tool_result_page(
         message, tool_name, arguments.offset, context.memory_trust_level,
         content_override=replacement,
+        history=history,
         available_secret_references=await available_secret_references(
             context.db, context.session, context.one_time_secrets,
         ),
     )
-    if attachments := _attachment_items(message):
+    if (not _script_result_hidden(message, tool_name, context.memory_trust_level)
+            and (attachments := _attachment_items(message))):
         payload["attachments"] = attachments
-    return ToolResult.json(payload, metadata={"guardedSkillPage": True} if guarded else None)
+    return _history_result(
+        "session_tool_result_read", payload, context.memory_trust_level,
+        metadata={"guardedSkillPage": True} if guarded else None,
+    )
 
 
 async def _session_read(arguments: SessionReadArguments, context: ToolContext) -> ToolResult:
@@ -297,7 +301,7 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
                 params={"retryArguments": retry_arguments},
             )
     page = records[start : start + arguments.limit]
-    tool_names = _tool_names_by_message_id(records)
+    history = _ToolHistory(records)
     remaining = 50_000
     messages: list[dict[str, Any]] = []
     secret_references = await available_secret_references(
@@ -307,9 +311,10 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
         item, remaining = _message_item(
             message,
             remaining,
-            tool_names,
+            history.names,
             context.memory_trust_level,
             reference_tool_results=target_id == context.session.id,
+            history=history,
             available_secret_references=secret_references,
         )
         if "executionAgentId" not in item and message.id in agent_by_message:
@@ -322,7 +327,8 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
     has_more = last_emitted_index + 1 < len(records)
     next_after_message_id = records[last_emitted_index].id if messages and has_more else None
     context.session_read_cursors[target_id] = next_after_message_id
-    return ToolResult.json(
+    return _history_result(
+        "session_read",
         {
             "session": {
                 "id": str(target.id),
@@ -339,6 +345,7 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             ),
             "contentIsUntrusted": True,
         },
+        context.memory_trust_level,
         metadata={"targetSessionId": str(target.id), "messageCount": len(messages)},
     )
 

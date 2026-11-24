@@ -66,7 +66,13 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.permissions.policy import PermissionDecision, execution_directory_permission
 from mato_loop_backend.providers import service as service_module
-from mato_loop_backend.providers.base import ProviderError, ProviderImageInput, ProviderResult
+from mato_loop_backend.providers.base import (
+    ProviderError,
+    ProviderImageInput,
+    ProviderMedia,
+    ProviderResult,
+    select_provider_images,
+)
 from mato_loop_backend.providers.openai_compatible import _chat_messages, _responses_input
 from mato_loop_backend.providers.output_budget import (
     IMAGE_INPUT_RESERVE_TOKENS,
@@ -966,6 +972,64 @@ def test_script_steps_visible_in_chat_but_not_replayed_to_provider() -> None:
     assert next(item["tool_calls"] for item in projected if item.get("tool_calls"))[0]["arguments"] == {}
     for serialize in (_chat_messages, _responses_input):
         assert json.dumps(serialize(projected)) == json.dumps(serialize(baseline))
+
+
+@pytest.mark.parametrize("trust,hidden,protected,visible", [
+    ("public", False, False, True),
+    ("private", False, False, False),
+    ("public", True, False, False),
+    ("public", False, True, False),
+])
+def test_script_child_media_replays_on_parent_exchange(trust, hidden, protected, visible) -> None:
+    session_id, run_id = uuid4(), str(uuid4())
+    user = _message(session_id, "user", "Generate a preview")
+    assistant = _message(session_id, "assistant", "")
+    script = {"id": "script", "name": "run_tool_script", "arguments": {"code": "omitted"}}
+    assistant.tool_calls = [script]
+    assistant.provider_data = {"_matoloop": {"runId": run_id, "scriptToolCalls": {
+        "child": {"id": "child", "name": "read", "scriptParent": "script"},
+    }}}
+    child = _message(session_id, "tool", "child-only text")
+    child.tool_call_id = "child"
+    child.trust_level = trust
+    child.provider_data = {"_matoloop": {
+        "runId": run_id, "scriptParent": "script", "toolName": "read", "fileOutputsHidden": hidden,
+    }}
+    image = _attach_image(child)
+    image.filename = "preview.png"
+    image.metadata_json = {"protectedInput": protected}
+    parent = _message(session_id, "tool", '{"result":42}')
+    parent.tool_call_id = "script"
+    parent.trust_level = "public"
+    parent.provider_data = {"_matoloop": {"runId": run_id, "toolName": "run_tool_script"}}
+    records = [user, assistant, child, parent]
+
+    live = _projection_messages("System", None, records, TrustLevel.PUBLIC, available_records=records,
+                                live_tool_calls={assistant.id: [script]})
+    followup = [*records, _message(session_id, "user", "Continue")]
+    replay = _projection_messages("System", None, followup, TrustLevel.PUBLIC, available_records=followup)
+    assert [item["tool_call_id"] for item in live if item["role"] == "tool"] == ["script"]
+    assert [item["id"] for message in live for item in message.get("attachments", [])] == (
+        [str(image.id)] if visible else []
+    )
+    assert bool(json.loads(live[-1]["content"]).get("scriptAttachments")) is visible
+    assert "child-only text" not in live[-1]["content"]
+    assert [selection.message_index for selection in select_provider_images(live, target_trust_level="public")] == (
+        [len(live) - 1] if visible else []
+    )
+    assert not select_provider_images(replay, target_trust_level="public")
+    # This guarantees the text-only prefix. The image is intentionally not replayed
+    # for an unrelated follow-up, so the media-bearing prefix is different.
+    chat = _chat_messages(live)
+    assert json.dumps(_chat_messages(replay)[:len(chat)]) == json.dumps(chat)
+    instructions, responses = _responses_input(live)
+    replay_instructions, replay_responses = _responses_input(replay)
+    assert json.dumps((replay_instructions, replay_responses[:len(responses)])) == json.dumps((instructions, responses))
+    if visible:
+        image_url = "data:image/png;base64,AA=="
+        media = [ProviderMedia(len(live) - 1, "image/png", data_url=image_url, status="ready")]
+        assert image_url in json.dumps(_chat_messages(live, media=media))
+        assert image_url in json.dumps(_responses_input(live, media=media))
 
 
 async def test_historical_reader_reference_targets_original_page_and_keeps_computer_binding(monkeypatch) -> None:

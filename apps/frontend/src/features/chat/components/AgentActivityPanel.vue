@@ -119,7 +119,8 @@ const presentation = computed(() => props.presentation || agentRunPresentation({
   transcript: { messages: [{ workHistory: props.history }] }
 }))
 const currentBatch = computed(() => props.running && props.activity?.phase === 'processing_tool'
-  && presentation.value.entry?.type === 'tool' ? presentation.value.entry.batchId : null)
+  && presentation.value.entry?.type === 'tool' && !presentation.value.showingScriptChildFailure
+  ? presentation.value.entry.batchId : null)
 const preparedEntries = computed(() => {
   const current = presentation.value.entry
   const history = (props.history?.entries || []).filter((entry) => !hiddenToolRepair(entry, props.running) && !(entry.type === 'reasoning' && entry.live) && (

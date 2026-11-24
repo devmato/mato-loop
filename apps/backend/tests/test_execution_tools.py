@@ -2731,6 +2731,7 @@ async def test_shell_timeout_and_process_evidence(
 
     assert result.is_error == (error_code is not None)
     assert result.metadata.get("errorCode") == error_code
+    assert payload.get("error", {}).get("code") == error_code
     assert payload["exitCode"] == exit_code
     assert payload["timedOut"] == timed_out
     assert payload["durationMs"] == 123

@@ -541,11 +541,10 @@ def session_stop_quality(case, enabled, direct, traces, results, records, decisi
                       for (h, m), (name, error, _) in zip(results, records, strict=True)
                       if name == 'edit_file' or m.tool_call_id in expected_results]
     if enabled and exact_calls and case == 'session-partial-failure':
-        # Returning the checked error is as safe as throwing; score the actual
-        # persisted child outcomes and wrapper progress in either case.
+        # A checked return preserves the result but reports the failed step.
         for call_id, (name, error, owner) in actual_results:
-            if call_id == parent and error is None:
-                expected_results[parent] = (name, None, owner)
+            if call_id == parent and error in {None, 'tool.scriptStepFailed'}:
+                expected_results[parent] = (name, error, owner)
     exact_results = exact_calls and Counter(actual_results) == Counter(expected_results.items())
     exact_approvals = (exact_calls and decisions == expected_decisions
                        and Counter(approval_rows) == expected_approvals)

@@ -188,6 +188,43 @@ describe('subagent inspector navigation and presentation', () => {
     ])
   })
 
+  it('shows the last unresolved script child in collapsed activity after a successful final step', async () => {
+    const steps = [
+      ['older'], ['unresolved'], ['pending', 'pending'], ['recovered', 'recovered'], ['superseded', 'superseded'], ['last']
+    ]
+    const stage = ref('executing')
+    const messages = [
+      { id: 'batch', role: 'assistant', toolCalls: [
+        { id: 'script', name: 'run_tool_script' },
+        ...steps.map(([id]) => ({ id, scriptParent: 'script', name: id === 'last' ? 'read_file' : 'edit_file', arguments: { path: `${id}.txt` } }))
+      ] },
+      ...steps.slice(0, -1).map(([toolCallId, toolRepair]) => ({
+        role: 'tool', toolCallId, toolRepair, content: '{"error":{"code":"file.editTextNotFound"}}'
+      }))
+    ]
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => {
+      const finished = stage.value !== 'executing'
+      const activity = { phase: stage.value === 'waiting' ? 'waiting_model' : 'processing_tool', toolCallId: 'last', tool: 'read_file' }
+      const transcript = buildChatTranscript(finished ? [...messages,
+        { role: 'tool', toolCallId: 'last', content: 'File contents' },
+        { role: 'tool', toolCallId: 'script', content: '{"error":{"code":"tool.scriptStepFailed"}}' }
+      ] : messages, [], { running: true, activeToolCallId: 'last', completedToolCallId: finished ? 'script' : null })
+      return h(AgentActivityPanel, { running: true, activity, history: transcript.messages[0].workHistory })
+    } })
+    app.use(createPinia()).use(Quasar, { components })
+    mountApp()
+    const visibleStep = (status) => root.querySelector(`.tool-call--${status} .tool-call__summary`)?.textContent
+    const executing = visibleStep('running')
+    stage.value = 'finished'
+    await nextTick()
+    const finished = visibleStep('failed')
+    stage.value = 'waiting'
+    await nextTick()
+    expect([executing, finished, visibleStep('failed')]).toEqual(['last.txt', 'unresolved.txt', 'unresolved.txt'])
+  })
+
   it.each([
     ['pending', true, false],
     ['recovered', false, false],
@@ -209,6 +246,30 @@ describe('subagent inspector navigation and presentation', () => {
     app.use(createPinia()).use(Quasar, { components })
     mountApp()
     expect(root.textContent.includes('target.txt')).toBe(visible)
+  })
+
+  it.each([
+    ['tool.scriptStepFailed', 'file.editTextNotFound', 'Fehlgeschlagen'],
+    ['tool.scriptEditAlreadyApplied', 'tool.scriptEditAlreadyApplied', 'Bereits ausgeführt'],
+    ['permission.userDenied', 'permission.userDenied', 'Abgelehnt']
+  ])('shows %s at the actual child once', (wrapperCode, childCode, status) => {
+    const transcript = buildChatTranscript([
+      { id: 'batch', role: 'assistant', toolCalls: [
+        { id: 'script', name: 'run_tool_script' },
+        { id: 'edit', name: 'edit_file', scriptParent: 'script', arguments: { path: 'target.txt' } }
+      ] },
+      ...[['edit', childCode], ['script', wrapperCode]].map(([toolCallId, code]) => ({
+        role: 'tool', toolCallId, content: JSON.stringify({ error: { code } })
+      }))
+    ])
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, { expanded: true, history: transcript.messages[0].workHistory }) })
+    app.use(createPinia()).use(Quasar, { components })
+    mountApp()
+    expect([...root.querySelectorAll('.tool-call__header')].map((row) => (
+      row.querySelector('.tool-call__status [role="img"]')?.getAttribute('aria-label')
+    ))).toEqual([status])
   })
 
   it('summarizes repeated and deleted file operations without output cards', () => {
@@ -1066,6 +1127,21 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelectorAll('.tool-call__message')).toHaveLength(1)
     expect(root.querySelector('.tool-call__message').textContent).toContain('Die Tool-Aktion ist fehlgeschlagen.')
     expect(details[1].getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('shows already-applied status on a collapsed group', () => {
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      expanded: true,
+      history: { entries: ['{}', '{"error":{"code":"tool.scriptEditAlreadyApplied"}}'].map((content, index) => ({
+        key: `edit-${index}`, type: 'tool', tool: { id: `edit-${index}`, name: 'edit_file' }, result: { content }
+      })) }
+    }) })
+    app.use(createPinia()).use(Quasar, { components })
+    mountApp()
+    expect(root.querySelector('.work-history__tool-group-header[aria-expanded="false"] [role="img"]')?.getAttribute('aria-label'))
+      .toBe('Bereits ausgeführt')
   })
 
   it('renders tool calls as static rows without technical details', async () => {

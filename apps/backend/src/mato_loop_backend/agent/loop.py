@@ -261,7 +261,7 @@ async def execute_loop_body(
     script_finalization = False
     read_evidence_available = False
     empty_script_rounds = 0
-    interrupted_script_edits: dict[str, UUID] = {}
+    interrupted_script_actions: dict[tuple[str, str], UUID] = {}
     truncated_tool_batches = 0
     live_tool_calls: dict[UUID, list[dict[str, Any]]] = {}
     pseudonymization_key = (
@@ -290,9 +290,9 @@ async def execute_loop_body(
             empty_script_rounds = 0
             script_finalization = False
             read_evidence_available = False
-            interrupted_script_edits.clear()
+            interrupted_script_actions.clear()
             for signature, code in tuple(failed_tool_call_signatures.items()):
-                if code == "tool.scriptEditAlreadyApplied":
+                if code in {"tool.scriptEditAlreadyApplied", "tool.scriptActionAlreadyApplied"}:
                     failed_tool_call_signatures.pop(signature)
             if await cls._apply_continuation_profile(db, run):
                 agent_profile_id = run.agent_profile_id
@@ -985,7 +985,7 @@ async def execute_loop_body(
                 delegated=delegated, max_tool_calls=tool_call_limit,
                 tool_calls_used=tool_calls_used,
                 recorded_tool_calls=recorded_tool_calls,
-                interrupted_script_edits=interrupted_script_edits,
+                interrupted_script_actions=interrupted_script_actions,
                 execution_binding={
                     "executionAgentId": str(execution_client.agent_id) if execution_client else None,
                     "executionAgentAlias": selected_execution_agent.display_name if selected_execution_agent else None,
@@ -1024,7 +1024,7 @@ async def execute_loop_body(
         recorded_tool_calls += batch.recorded_tool_calls
         read_evidence_available |= batch.read_evidence_available
         empty_script_rounds = (
-            empty_script_rounds + 1 if batch.script_no_progress and batch.recorded_tool_calls == 0 else 0
+            empty_script_rounds + 1 if batch.script_no_progress and not batch.made_tool_progress else 0
         )
         research_tool_calls_used = batch.research_tool_calls_used
         research_used = batch.research_used

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from difflib import unified_diff
+from hashlib import sha256
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -44,6 +46,11 @@ MAX_ATTACHMENT_EXCERPT_CHARACTERS = 20_000
 MAX_WEBFETCH_CONTENT_CHARACTERS = 15_000
 MAX_TOOL_PREVIEW_CHARACTERS = 16_000
 SESSION_TOOL_RESULT_CHUNK_CHARACTERS = 12_000
+_NESTED_SENSITIVE_TOOLS = frozenset({
+    "memory_retrieve", "memory_browse", "context_search", "secret_input", "session_state",
+    "message_metadata", "session_read", "session_tool_result_read", "run_tool_script",
+})
+_PRIVATE_TOOL_RESULT = '{"redactedPrivateContext":true}'
 
 
 _OMITTED_TOOL_OUTPUT = "[Historical tool output omitted from the active context.]"
@@ -528,6 +535,7 @@ def message_dict(
     *,
     include_attachment_text: bool = False,
     include_attachment_markers: bool = True,
+    attachment_marker_sink: list[str] | None = None,
     attachment_service: AttachmentService | None = None,
     pdf_context: dict[str, dict] | None = None,
     attachment_text_characters: int = MAX_ATTACHMENT_EXCERPT_CHARACTERS,
@@ -599,6 +607,8 @@ def message_dict(
                 " [This result attachment is automatically displayed with download controls. "
                 "Do not call provide_file for it again in this response.]"
             )
+    if attachment_marker_sink is not None:
+        attachment_marker_sink.extend(attachment_markers)
     if include_attachment_markers and attachment_markers:
         if message.role == "user" and not message.content.strip():
             content = "\n\n".join(filter(None, (
@@ -741,7 +751,7 @@ def _projection_messages(
     memory_contexts: dict[UUID, str] | None = None,
     session_contexts: dict[UUID, str | dict[str, str]] | None = None,
     skill_results: dict[UUID, str] | None = None,
-    reader_metadata: tuple[dict[UUID, tuple[Message, int]], dict[UUID, dict[str, Any]]] | None = None,
+    tool_history: _ToolHistory | None = None,
     tool_snapshots: list[dict[str, Any]] | None = None,
     tool_snapshot_characters: int = 8_000,
     runtime_instructions: str = "",
@@ -800,23 +810,27 @@ def _projection_messages(
         if has_checklist
         else None
     )
-    tool_names = _tool_names_by_message_id(source_records)
+    history = tool_history if tool_history is not None else _ToolHistory(source_records)
+    tool_names = history.names
     tool_results_by_message: dict[UUID, dict[str, Message]] = {}
-    call_owners: dict[str, UUID] = {}
+    call_owners: dict[tuple[UUID, str | None, str], UUID] = {}
     live_result_ids: set[UUID] = set()
     for record in available_records or records:
+        run_id = (record.provider_data or {}).get("_matoloop", {}).get("runId")
         if record.role == "assistant":
             for call in record.tool_calls or []:
                 if call.get("id"):
-                    call_owners[str(call["id"])] = record.id
-        elif record.role == "tool" and record.tool_call_id in call_owners:
-            owner = call_owners.pop(record.tool_call_id)
-            tool_results_by_message.setdefault(owner, {})[record.tool_call_id] = record
-            if any(call.get("id") == record.tool_call_id for call in (live_tool_calls or {}).get(owner, [])):
-                live_result_ids.add(record.id)
-    reader_sources, original_references = (
-        reader_metadata if reader_metadata is not None else _tool_result_read_metadata(source_records)
-    )
+                    call_owners[record.session_id, run_id, str(call["id"])] = record.id
+        elif record.role == "tool" and record.tool_call_id:
+            owner = call_owners.pop((record.session_id, run_id, record.tool_call_id), None)
+            if owner is not None:
+                tool_results_by_message.setdefault(owner, {})[record.tool_call_id] = record
+                if any(call.get("id") == record.tool_call_id and call.get("name") == tool_names.get(record.id)
+                       for call in (live_tool_calls or {}).get(owner, [])):
+                    live_result_ids.add(record.id)
+    original_references = history.references
+    script_children = _script_attachment_sources(source_records, target_trust_level)
+    anchored_children = {child.id for children in script_children.values() for child in children}
     latest_user_id = next(
         (item.id for item in reversed(records) if item.role == "user"),
         None,
@@ -946,12 +960,16 @@ def _projection_messages(
                 or (item.provider_data or {}).get("_matoloop", {}).get("contextOutputOmitted") is True
             )
             binding = tool_execution_binding(item)
+            if _script_result_hidden(item, tool_name, target_trust_level):
+                projected["attachments"] = []
             if binding.get("executionAgentId") and tool_name:
                 projected["recorded_computer"] = binding
-            if item.id in reader_sources and guarded_skill_result(reader_sources[item.id][0]):
-                source, offset = reader_sources[item.id]
+            if (origin := history.reader_sources.get(item.id)) is not None and guarded_skill_result(origin[0]):
+                source, offset = origin
                 replacement = (skill_results or {}).get(source.id)
-                if (omitted or replacement in (None, UNAVAILABLE_SKILL_LOAD, UNAVAILABLE_SKILL_REFERENCE)
+                if (omitted or source.id not in tool_names
+                        or replacement in (None, UNAVAILABLE_SKILL_LOAD, UNAVAILABLE_SKILL_REFERENCE)
+                        or _script_result_hidden(item, tool_name, target_trust_level)
                         or (target_trust_level == TrustLevel.PUBLIC and item.trust_level != TrustLevel.PUBLIC.value)):
                     projected["content"] = UNAVAILABLE_SKILL_REFERENCE
                 else:
@@ -961,17 +979,9 @@ def _projection_messages(
                         available_secret_references=available_secret_references,
                     )
                     projected["content"] = json.dumps(page, ensure_ascii=False)
-            elif not omitted and item.id in reader_sources:
-                source, offset = reader_sources[item.id]
-                # Revalidate the complete authorized source before slicing, never trust a stored fragment.
-                page = _tool_result_page(
-                    source, tool_names[source.id], offset, target_trust_level,
-                    available_secret_references=available_secret_references or set(),
-                )
-                payload = json.loads(item.content)
-                projected["content"] = json.dumps({**payload, **page}, ensure_ascii=False)
             else:
-                content = str(projected.get("content") or "")
+                content = (item.content if tool_name in {"session_read", "session_tool_result_read"}
+                           else str(projected.get("content") or ""))
                 if guarded_skill_result(item):
                     content = UNAVAILABLE_SKILL_LOAD if tool_name == "load_skill" else UNAVAILABLE_SKILL_REFERENCE
                 projected["content"] = _target_tool_result(
@@ -980,6 +990,12 @@ def _projection_messages(
                     target_trust_level,
                     source_trust_level=item.trust_level,
                     authorized_live=item.id in live_result_ids,
+                    live_history_stamp=(
+                        (item.provider_data or {}).get("_matoloop", {}).get("liveHistoryProjection")
+                        if item.id in live_result_ids and not omitted else None
+                    ),
+                    history=None if omitted else history,
+                    record=item,
                     available_secret_references=available_secret_references,
                 )
             projected["content"] = _model_file_tool_result(projected["content"])
@@ -991,6 +1007,26 @@ def _projection_messages(
             projected["content"] = _sanitize_tool_result_reference_fields(
                 str(projected.get("content") or "")
             )
+            markers: list[str] = []
+            for child in script_children.get(item.id, []):
+                child_projection = message_dict(
+                    child, include_attachment_markers=False, attachment_marker_sink=markers,
+                )
+                for attachment in child_projection["attachments"]:
+                    attachment["source_order"] = source_order[child.id]
+                    projected["attachments"].append(attachment)
+                    projected_attachment_ids.add(attachment["id"])
+            if markers:
+                # Preserve the script's structured result and keep attachment metadata
+                # with the paired parent result, rather than replaying child tool messages.
+                try:
+                    outcome = json.loads(projected["content"])
+                except ValueError:
+                    outcome = projected["content"]
+                projected["content"] = json.dumps({
+                    **(outcome if isinstance(outcome, dict) else {"result": outcome}),
+                    "scriptAttachments": markers,
+                }, ensure_ascii=False)
             if not omitted and tool_name in {"browser", "browser_snapshot"} and item.tool_call_id in browser_inspect_calls:
                 projected["content"] = _model_browser_inspection(projected["content"])
             if not omitted and not (tool_name == "load_skill" and item.id in (skill_results or {})) and tool_registry.output_preview(
@@ -1103,6 +1139,11 @@ def _projection_messages(
     if available_records is not None:
         historical_references = []
         for order, item in enumerate(available_records):
+            if _script_result_hidden(item, tool_names.get(item.id), target_trust_level):
+                continue
+            if (item.id not in anchored_children
+                    and (item.provider_data or {}).get("_matoloop", {}).get("scriptParent")):
+                continue
             if not any(attachment.kind == "image" for attachment in model_attachments(item)):
                 continue
             projected = message_dict(item, include_attachment_markers=False)
@@ -1127,6 +1168,22 @@ def _projection_messages(
     return latest_image_references(
         messages, run_id=attachment_service.run_id if attachment_service is not None else None
     )
+
+
+def _script_attachment_sources(records: list[Message], readable_by: TrustLevel) -> dict[UUID, list[Message]]:
+    from mato_loop_backend.agent.interaction_context import tool_batches
+
+    _, results = tool_batches(records)
+    parents = {(records[batch].id, call_id): records[result] for (batch, call_id), result in results.items()}
+    sources: dict[UUID, list[Message]] = {}
+    for child, assistant, trace in _script_child_calls(records):
+        if _script_result_hidden(child, trace["name"], readable_by) or not model_attachments(child):
+            continue
+        parent = parents.get((assistant.id, trace["scriptParent"]))
+        if (parent is not None and parent.session_id == child.session_id
+                and not _script_result_hidden(parent, "run_tool_script", readable_by)):
+            sources.setdefault(parent.id, []).append(child)
+    return sources
 
 
 def _historical_tool_result(
@@ -1608,28 +1665,48 @@ def _tool_calls_by_message_id(records: list[Message]) -> dict[UUID, dict[str, An
                 calls[record.id] = call
         else:
             legacy_calls = {}
+    calls.update({child.id: trace for child, _, trace in _script_child_calls(records)})
     return calls
 
 
+def _script_child_calls(records: list[Message]) -> Iterator[tuple[Message, Message, dict[str, Any]]]:
+    declared: dict[tuple[UUID, str, str], tuple[Message, dict[str, Any]]] = {}
+    for record in records:
+        host = (record.provider_data or {}).get("_matoloop", {})
+        run_id = host.get("runId")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        if record.role == "assistant":
+            parent_ids = {call.get("id") for call in record.tool_calls or [] if call.get("name") == "run_tool_script"}
+            traces = host.get("scriptToolCalls")
+            if not isinstance(traces, dict):
+                continue
+            for child_id, trace in traces.items():
+                if (isinstance(trace, dict) and isinstance(trace.get("scriptParent"), str)
+                        and trace["scriptParent"] in parent_ids and isinstance(trace.get("name"), str)):
+                    declared[record.session_id, run_id, child_id] = (record, trace)
+        elif record.role == "tool" and host.get("scriptParent") and record.error_code is None:
+            owner = declared.pop((record.session_id, run_id, record.tool_call_id), None)
+            if owner is not None:
+                assistant, trace = owner
+                if host.get("scriptParent") == trace["scriptParent"] and host.get("toolName") == trace["name"]:
+                    yield record, assistant, trace
+
+
 def _tool_names_by_message_id(records: list[Message]) -> dict[UUID, str]:
-    names = {key: str(call.get("name") or "") for key, call in _tool_calls_by_message_id(records).items()}
-    for item in records:
-        host = (item.provider_data or {}).get("_matoloop", {})
-        if item.role == "tool" and host.get("scriptParent") and isinstance(host.get("toolName"), str):
-            names[item.id] = host["toolName"]
-    return names
+    return {key: call["name"] for key, call in _tool_calls_by_message_id(records).items() if call.get("name")}
 
 
 def _tool_result_read_metadata(
-    records: list[Message],
-) -> tuple[dict[UUID, tuple[Message, int]], dict[UUID, dict[str, Any]]]:
+    records: list[Message], calls: dict[UUID, dict[str, Any]],
+) -> tuple[dict[UUID, tuple[Message, int]], dict[UUID, dict[str, Any]], set[UUID]]:
     """Follow only earlier same-session sources authorized by persisted reader calls."""
     from mato_loop_backend.tools.arguments import SessionToolResultReadArguments
 
-    calls = _tool_calls_by_message_id(records)
     earlier: dict[UUID, Message] = {}
     sources: dict[UUID, tuple[Message, int]] = {}
     references: dict[UUID, dict[str, Any]] = {}
+    mismatched: set[UUID] = set()
     for item in records:
         call = calls.get(item.id, {})
         if call.get("name") == "session_tool_result_read":
@@ -1639,19 +1716,65 @@ def _tool_result_read_metadata(
                 })
                 payload = json.loads(item.content)
                 source = earlier.get(arguments.message_id)
-                if (isinstance(payload, dict) and "error" not in payload and source is not None
-                        and source.session_id == item.session_id and source.id in calls
+                if isinstance(payload, dict) and "error" not in payload and (
+                    payload.get("messageId", str(arguments.message_id)) != str(arguments.message_id)
+                    or payload.get("offset", arguments.offset) != arguments.offset
+                ):
+                    mismatched.add(item.id)
+                elif (isinstance(payload, dict) and "error" not in payload and source is not None
+                        and source.session_id == item.session_id
                         and source.error_code is None and item.error_code is None):
                     sources[item.id] = (source, arguments.offset)
-                    references[item.id] = references.get(source.id) or {
-                        **_tool_result_reference(source.id, source.content),
-                        "arguments": {"message_id": str(source.id), "offset": arguments.offset},
-                    }
+                    if calls.get(source.id, {}).get("name"):
+                        references[item.id] = references.get(source.id) or {
+                            **_tool_result_reference(source.id, source.content),
+                            "arguments": {"message_id": str(source.id), "offset": arguments.offset},
+                        }
             except (ValueError, TypeError, AttributeError):
                 pass
         if item.role == "tool":
             earlier[item.id] = item
-    return sources, references
+    return sources, references, mismatched
+
+
+class _ToolHistory:
+    """Canonical records available to revalidate stored history, not a new read grant."""
+
+    def __init__(self, records: list[Message]):
+        self.calls = _tool_calls_by_message_id(records)
+        self.names = {key: call["name"] for key, call in self.calls.items() if call.get("name")}
+        self.reader_sources, self.references, self.mismatched_pages = _tool_result_read_metadata(records, self.calls)
+        self.by_id = {str(item.id): (index, item) for index, item in enumerate(records)}
+
+    def private_script_source(self, message_id: object, readable_by: TrustLevel) -> bool:
+        # A supplied ID cannot authorize a read, but a known private source must
+        # still prohibit replay of the captured bytes when the binding is missing.
+        entry = self.by_id.get(message_id) if isinstance(message_id, str) else None
+        return entry is not None and _script_result_hidden(entry[1], self.names.get(entry[1].id), readable_by)
+
+    def session_source(self, reader: Message, payload: dict, item: dict) -> Message | None:
+        # A retrieved ID is not authority. Only an earlier result in this reader's
+        # own session, with a known call, can replace the stored excerpt.
+        call = self.calls.get(reader.id, {})
+        arguments = call.get("arguments")
+        if call.get("name") != "session_read" or not isinstance(arguments, dict):
+            return None
+        session = payload.get("session")
+        if (not isinstance(session, dict) or session.get("id") != str(reader.session_id)
+                or arguments.get("session_id") not in (None, str(reader.session_id))):
+            return None
+        message_id = item.get("id")
+        source_entry = self.by_id.get(message_id) if isinstance(message_id, str) else None
+        if source_entry is None:
+            return None
+        index, source = source_entry
+        reader_entry = self.by_id.get(str(reader.id))
+        if (reader_entry is None or index >= reader_entry[0] or source.session_id != reader.session_id
+                or source.role != "tool"
+                or source.error_code is not None or source.id not in self.names
+                or item.get("toolCallId") != source.tool_call_id):
+            return None
+        return source
 
 
 def tool_execution_binding(message: Message) -> dict[str, Any]:
@@ -1664,25 +1787,55 @@ def tool_execution_binding(message: Message) -> dict[str, Any]:
 def _tool_result_page(
     message: Message, tool_name: str, offset: int, readable_by: TrustLevel, *,
     content_override: str | None = None,
+    history: _ToolHistory | None = None,
+    depth: int = 0,
     available_secret_references: set[str] | None = None,
 ) -> dict[str, Any]:
-    content = _target_tool_result(
-        tool_name, message.content if content_override is None else content_override, readable_by,
-        source_trust_level=message.trust_level,
+    content = _history_tool_result(
+        message, tool_name, readable_by, history=history, depth=depth, content_override=content_override,
         available_secret_references=available_secret_references,
     )
-    content = _sanitize_tool_result_reference_fields(_model_file_tool_result(content))
-    if (readable_by == TrustLevel.PUBLIC and message.trust_level != TrustLevel.PUBLIC.value
-            and (message.provider_data or {}).get("_matoloop", {}).get("scriptParent")):
-        content = '{"redactedPrivateContext":true}'
-    content = model_tool_references(tool_name, content, message.id)
     end = min(len(content), offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS)
     return {
         "messageId": str(message.id), "offset": offset, "content": content[offset:end],
         "totalCharacters": len(content), "hasMore": end < len(content),
         "nextOffset": end if end < len(content) else None,
         "contentIsUntrusted": True, "toolName": tool_name, **tool_execution_binding(message),
+        **({"privateScriptSource": True} if _script_result_hidden(message, tool_name, TrustLevel.PUBLIC) else {}),
     }
+
+
+def _script_result_hidden(message: Message, tool_name: str | None, readable_by: TrustLevel) -> bool:
+    host = (message.provider_data or {}).get("_matoloop", {})
+    return (
+        message.role == "tool" and readable_by == TrustLevel.PUBLIC
+        and message.trust_level != TrustLevel.PUBLIC.value
+        and (tool_name == "run_tool_script" or host.get("toolName") == "run_tool_script" or bool(host.get("scriptParent")))
+    )
+
+
+def _history_tool_result(
+    message: Message, tool_name: str | None, readable_by: TrustLevel, *,
+    history: _ToolHistory | None = None,
+    depth: int = 0,
+    content_override: str | None = None,
+    available_secret_references: set[str] | None = None,
+) -> str:
+    if _script_result_hidden(message, tool_name, readable_by):
+        return _PRIVATE_TOOL_RESULT
+    content = message.content if content_override is None else content_override
+    if content_override is None and guarded_skill_result(message):
+        # Only the top-level authorized reader may supply a revalidated skill result.
+        host = (message.provider_data or {}).get("_matoloop", {})
+        content = UNAVAILABLE_SKILL_LOAD if "skillLoad" in host else UNAVAILABLE_SKILL_REFERENCE
+    content = _target_tool_result(
+        tool_name, content, readable_by, source_trust_level=message.trust_level,
+        history=history, record=message, depth=depth,
+        available_secret_references=available_secret_references,
+    )
+    return model_tool_references(
+        tool_name, _sanitize_tool_result_reference_fields(_model_file_tool_result(content)), message.id,
+    )
 
 
 def _target_memory_result(content: str, readable_by: TrustLevel) -> str:
@@ -1724,6 +1877,24 @@ def _target_memory_result(content: str, readable_by: TrustLevel) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _history_projection_stamp(tool_name: str, content: str, readable_by: TrustLevel) -> dict[str, str]:
+    """Bind a live history result to what its authorized handler actually filtered."""
+    return {
+        "toolName": tool_name,
+        "readableBy": readable_by.value,
+        "contentSha256": sha256(content.encode("utf-8")).hexdigest(),
+    }
+
+
+def _private_script_excerpt(
+    payload: dict, message_id: object, readable_by: TrustLevel, history: _ToolHistory | None,
+) -> bool:
+    return readable_by == TrustLevel.PUBLIC and (
+        payload.get("privateScriptSource") is True
+        or (history is not None and history.private_script_source(message_id, readable_by))
+    )
+
+
 def _target_tool_result(
     tool_name: str | None,
     content: str,
@@ -1732,12 +1903,26 @@ def _target_tool_result(
     depth: int = 0,
     source_trust_level: str | None = None,
     authorized_live: bool = False,
+    live_history_stamp: object = None,
+    history: _ToolHistory | None = None,
+    record: Message | None = None,
     available_secret_references: set[str] | None = None,
 ) -> str:
+    if record is not None and _script_result_hidden(record, tool_name, readable_by):
+        return _PRIVATE_TOOL_RESULT
+    # Only the built-in history handlers set this live metadata. A matching
+    # field inside untrusted content or an inactive result conveys no authority.
+    if tool_name in {"session_read", "session_tool_result_read"} and live_history_stamp is not None:
+        if (source_trust_level == readable_by.value and isinstance(live_history_stamp, dict)
+                and live_history_stamp == _history_projection_stamp(tool_name, content, readable_by)):
+            return content
+        return _PRIVATE_TOOL_RESULT
     if tool_name is None:
         tool_name = _inferred_tool_name(content)
+        if tool_name == "run_tool_script" and readable_by == TrustLevel.PUBLIC:
+            return _PRIVATE_TOOL_RESULT
     if tool_name == "run_tool_script" and readable_by == TrustLevel.PUBLIC and source_trust_level != "public":
-        return '{"redactedPrivateContext":true}'
+        return _PRIVATE_TOOL_RESULT
     if tool_name == "secret_input" and available_secret_references is not None:
         return model_secret_references(content, available_secret_references)
     if tool_name in {"session_state", "message_metadata"} and readable_by == TrustLevel.PUBLIC and not authorized_live:
@@ -1788,7 +1973,7 @@ def _target_tool_result(
                 return json.dumps(payload, ensure_ascii=False)
         return content
     if tool_name == "session_tool_result_read":
-        if depth >= 8:
+        if depth >= 8 or (history is not None and record is not None and record.id in history.mismatched_pages):
             return json.dumps({"content": "", "redactedNestedToolResult": True})
         try:
             payload = json.loads(content)
@@ -1799,21 +1984,52 @@ def _target_tool_result(
         nested_content = payload.get("content") if isinstance(payload, dict) else None
         if not isinstance(nested_content, str):
             return json.dumps({"content": "", "redactedNestedToolResult": True})
+        if _private_script_excerpt(payload, payload.get("messageId"), readable_by, history):
+            return json.dumps({"content": "", "redactedNestedToolResult": True})
+        origin = history.reader_sources.get(record.id) if history is not None and record is not None else None
+        if origin is not None and history.private_script_source(str(origin[0].id), readable_by):
+            return json.dumps({"content": "", "redactedNestedToolResult": True})
+        if origin is not None and (origin_name := history.names.get(origin[0].id)):
+            # Revalidate the complete source before slicing. A payload label or an
+            # offset alone cannot authorize replay of a sensitive fragment.
+            source, offset = origin
+            if (origin_name == "run_tool_script" or payload.get("privateScriptSource") is True
+                    or _script_result_hidden(source, origin_name, TrustLevel.PUBLIC)) and (
+                payload.get("totalCharacters") == len(_PRIVATE_TOOL_RESULT)
+                and nested_content == _PRIVATE_TOOL_RESULT[offset:offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS]
+            ):
+                # A previously redacted page does not become readable retroactively.
+                payload.pop("attachments", None)
+                return json.dumps(payload, ensure_ascii=False)
+            page = _tool_result_page(
+                source, origin_name, offset, readable_by, history=history, depth=depth + 1,
+                available_secret_references=available_secret_references,
+            )
+            return json.dumps({**payload, **page}, ensure_ascii=False)
         nested_tool_name = payload.get("toolName")
+        inferred = _inferred_tool_name(nested_content)
         if not isinstance(nested_tool_name, str):
-            nested_tool_name = _inferred_tool_name(nested_content)
+            nested_tool_name = inferred
+        elif inferred == "run_tool_script":
+            nested_tool_name = inferred
         # Sensitive fragments cannot be revalidated, especially after a trust change.
         if nested_tool_name is None or (
-            nested_tool_name in {"memory_retrieve", "memory_browse", "context_search", "secret_input", "session_read", "session_tool_result_read"}
-            and (payload.get("offset", 0) != 0 or payload.get("hasMore", False))
+            readable_by == TrustLevel.PUBLIC and source_trust_level == TrustLevel.PRIVATE.value
+        ) or (
+            nested_tool_name in _NESTED_SENSITIVE_TOOLS
+            and (payload.get("offset", 0) != 0 or payload.get("hasMore", False) or payload.get("truncated"))
         ):
             payload["content"] = ""
             payload["redactedNestedToolResult"] = True
+            payload.pop("attachments", None)
             return json.dumps(payload, ensure_ascii=False)
         payload["content"] = _target_tool_result(
             nested_tool_name, nested_content, readable_by, depth=depth + 1,
+            history=history,
             available_secret_references=available_secret_references,
         )
+        if nested_tool_name == "run_tool_script" and readable_by == TrustLevel.PUBLIC:
+            payload.pop("attachments", None)
         return json.dumps(payload, ensure_ascii=False)
     if tool_name != "session_read":
         return content
@@ -1823,9 +2039,9 @@ def _target_tool_result(
         payload = json.loads(content)
     except (TypeError, json.JSONDecodeError):
         return json.dumps({"messages": [], "redactedNestedSessionRead": True})
-    if not isinstance(payload, dict) or "messages" not in payload:
+    if isinstance(payload, dict) and set(payload) == {"error"} and isinstance(payload["error"], dict):
         return content
-    messages = payload.get("messages")
+    messages = payload.get("messages") if isinstance(payload, dict) else None
     if not isinstance(messages, list):
         return json.dumps({"messages": [], "redactedNestedSessionRead": True})
     tool_names: dict[int, str] = {}
@@ -1835,9 +2051,10 @@ def _target_tool_result(
             active_calls = {}
             continue
         if message.get("role") == "assistant":
+            calls = message.get("toolCalls")
             active_calls = {
                 str(call["id"]): str(call.get("name") or "")
-                for call in (message.get("toolCalls") or [])
+                for call in (calls if isinstance(calls, list) else [])
                 if isinstance(call, dict) and call.get("id")
             }
         elif message.get("role") == "tool":
@@ -1848,26 +2065,73 @@ def _target_tool_result(
     for index, message in enumerate(messages):
         if not isinstance(message, dict) or message.get("role") != "tool":
             continue
-        nested_tool_name = message.get("toolName") or tool_names.get(index)
+        nested_tool_name = tool_names.get(index) or message.get("toolName")
+        if not isinstance(nested_tool_name, str):
+            nested_tool_name = None
+        if _private_script_excerpt(message, message.get("id"), readable_by, history):
+            message["content"] = _PRIVATE_TOOL_RESULT
+            message.pop("attachments", None)
+            continue
         nested_content = message.get("content")
         if isinstance(nested_content, str):
+            source = history.session_source(record, payload, message) if history is not None and record is not None else None
+            if source is not None and (guarded_skill_result(source)
+                    or history.names[source.id] in {"run_tool_script", "session_tool_result_read", "session_read"}):
+                nested_tool_name = history.names[source.id]
+                message["toolName"] = nested_tool_name
+                if nested_content == _PRIVATE_TOOL_RESULT:
+                    message.pop("attachments", None)
+                    continue
+                filtered = _history_tool_result(
+                    source, nested_tool_name, readable_by, history=history, depth=depth + 1,
+                    available_secret_references=available_secret_references,
+                )
+                # Keep the captured window and its original bound. Revalidate before shortening.
+                if message.get("truncated") and len(filtered) > len(nested_content):
+                    limit = len(nested_content)
+                    filtered = (_shorten_evidence_output(filtered, limit) or filtered)[:limit]
+                message["content"] = filtered
+                continue
+            inferred = _inferred_tool_name(nested_content)
+            if inferred == "run_tool_script" or nested_tool_name is None:
+                nested_tool_name = inferred
+            if (source is None and readable_by == TrustLevel.PUBLIC and source_trust_level == TrustLevel.PRIVATE.value
+                    and nested_tool_name not in _NESTED_SENSITIVE_TOOLS):
+                message["content"] = _PRIVATE_TOOL_RESULT
+                message.pop("attachments", None)
+                continue
+            if (message.get("truncated") and (nested_tool_name is None or nested_tool_name in _NESTED_SENSITIVE_TOOLS)):
+                message["content"] = ""
+                message["redactedNestedToolResult"] = True
+                message.pop("attachments", None)
+                continue
             message["content"] = _target_tool_result(
                 nested_tool_name,
                 nested_content,
                 readable_by,
                 depth=depth + 1,
+                history=history,
+                source_trust_level=(
+                    source_trust_level if nested_tool_name in {"session_read", "session_tool_result_read"} else None
+                ),
                 available_secret_references=available_secret_references,
             )
+            if nested_tool_name == "run_tool_script" and readable_by == TrustLevel.PUBLIC:
+                message.pop("attachments", None)
     return json.dumps(payload, ensure_ascii=False)
 
 
-def _inferred_tool_name(content: str) -> str | None:
+def _inferred_tool_name(content: str, *, depth: int = 0) -> str | None:
+    if depth >= 8:
+        return None
     try:
         payload = json.loads(content)
     except (TypeError, json.JSONDecodeError):
         return None
     if not isinstance(payload, dict):
         return None
+    if isinstance(payload.get("scriptSteps"), list) and "runToolCalls" in payload:
+        return "run_tool_script"
     if isinstance(payload.get("memories"), list):
         return "context_search"
     items = payload.get("items")
@@ -1892,7 +2156,10 @@ def _inferred_tool_name(content: str) -> str | None:
     if isinstance(payload.get("messages"), list):
         return "session_read"
     nested_content = payload.get("content")
-    if isinstance(nested_content, str) and _inferred_tool_name(nested_content) is not None:
+    if isinstance(nested_content, str) and (
+        all(key in payload for key in ("messageId", "offset", "totalCharacters", "hasMore"))
+        or _inferred_tool_name(nested_content, depth=depth + 1) is not None
+    ):
         return "session_tool_result_read"
     return None
 

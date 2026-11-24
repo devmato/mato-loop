@@ -601,9 +601,17 @@ export function parseToolResult(content, toolName = null, message = null) {
   }
 }
 
-export function hiddenToolScript({ tool, result, approval, question }) {
-  return tool?.name === TOOL_SCRIPT && !approval && !question
-    && !parseToolResult(result?.content, TOOL_SCRIPT, result).error
+export function hiddenToolScript({ tool, result, approval, question }, children = []) {
+  if (tool?.name !== TOOL_SCRIPT || approval || question) return false
+  const { error } = parseToolResult(result?.content, TOOL_SCRIPT, result)
+  if (!error) return true
+  if (error.code === 'tool.scriptStepFailed') {
+    return children.some(({ result: step }) => parseToolResult(step?.content, null, step).error)
+  }
+  // The wrapper can carry the same stop reason as its last child. The child owns it.
+  const last = children.at(-1)?.result
+  return ['permission.denied', 'permission.userDenied', 'tool.scriptEditAlreadyApplied', 'tool.scriptActionAlreadyApplied'].includes(error.code)
+    && parseToolResult(last?.content, null, last).error?.code === error.code
 }
 
 export function toolStatus({ result, approval, question, active }) {
@@ -615,11 +623,14 @@ export function toolStatus({ result, approval, question, active }) {
   }
   if (result) {
     const { error } = parseToolResult(result.content, null, result)
-    if (error?.code === 'permission.denied') {
+    if (['permission.denied', 'permission.userDenied'].includes(error?.code)) {
       return { name: 'denied', label: 'Abgelehnt', icon: 'block', color: 'negative' }
     }
     if (error?.code === 'tool.executionInterrupted') {
       return { name: 'interrupted', label: 'Unterbrochen', icon: 'stop_circle', color: 'warning' }
+    }
+    if (['tool.scriptEditAlreadyApplied', 'tool.scriptActionAlreadyApplied'].includes(error?.code)) {
+      return { name: 'already-applied', label: 'Bereits ausgeführt', icon: 'check' }
     }
     if (error) return { name: 'failed', label: 'Fehlgeschlagen', icon: 'error', color: 'negative' }
     return { name: 'completed', label: 'Erledigt', icon: 'check_circle', color: 'positive' }

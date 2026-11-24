@@ -74,14 +74,17 @@ export function groupWorkHistoryEntries(entries = [], current = null, includePen
 }
 
 function toolHistoryEntries(items) {
-  const children = new Map(items.filter(({ tool }) => tool.name === TOOL_SCRIPT && tool.id).map(({ tool }) => [tool.id, []]))
+  const scripts = new Map(items.filter(({ tool }) => tool.name === TOOL_SCRIPT && tool.id)
+    .map(({ tool, result }) => [tool.id, { children: [], finished: Boolean(result) }]))
   for (const item of items) {
-    children.get(item.tool.scriptParent)?.push(item)
+    scripts.get(item.tool.scriptParent)?.children.push(item)
   }
   // The API appends script children to the batch. Show them in their parent's slot, before its result.
-  return items.flatMap((item) => children.has(item.tool.scriptParent) ? [] : [
-    ...(children.get(item.tool.id) || []), item
-  ]).filter((item) => !hiddenToolScript(item)).map((item) => ({ ...item, type: 'tool' }))
+  return items.flatMap((item) => scripts.has(item.tool.scriptParent) ? [] : [
+    ...(scripts.get(item.tool.id)?.children || []), item
+  ]).filter((item) => !hiddenToolScript(item, scripts.get(item.tool.id)?.children)).map((item) => ({
+    ...item, type: 'tool', ...(scripts.get(item.tool.scriptParent)?.finished ? { scriptFinished: true } : {})
+  }))
 }
 
 export function buildChatTranscript(

@@ -4,7 +4,7 @@
 
 **Administration > Provider** öffnet zunächst **Einstellungen** mit dem Schalter für persönliche Provider. Unter **Verwaltung** legen Administratoren gemeinsame Verbindungen an und verwalten deren Modelle. **Einstellungen > Provider** verwaltet ausschließlich deine eigenen Provider, auch für Administratoren. Deaktivierte persönliche Konfiguration bleibt gespeichert; gemeinsame Modelle bleiben verfügbar.
 
-Aktiviere pro Chatmodell **Skriptmodus erlauben (experimentell)**, wenn das Modell aufeinander aufbauende Tool-Schritte per JavaScript bündeln darf. Direkte Aufrufe bleiben verfügbar. Rückfragen, geschützte Eingaben und andere Steueraktionen bleiben immer direkt. Jeder Schritt nutzt die bestehenden Freigaben und bleibt im Verlauf sichtbar. Bei Ablehnung oder Abbruch bleiben bereits ausgeführte Änderungen bestehen.
+Aktiviere pro Chatmodell **Skriptmodus erlauben (experimentell)**, wenn das Modell vorhersehbare, aufeinander aufbauende Tool-Schritte per JavaScript bündeln darf. Für einzelne oder unabhängige Schritte sind direkte Aufrufe vorgesehen. Rückfragen und geschützte Eingaben bleiben immer direkt. Jeder Schritt nutzt die bestehenden Freigaben und bleibt im Verlauf sichtbar. Bei einem Fehler, einer Ablehnung oder einem Abbruch bleiben bereits ausgeführte Änderungen bestehen.
 
 ### ChatGPT Codex
 

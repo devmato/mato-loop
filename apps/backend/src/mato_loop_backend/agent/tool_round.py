@@ -9,7 +9,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,12 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent import run_support
 from mato_loop_backend.agent.media_model_helpers import media_model_handlers
 from mato_loop_backend.agent.openscad_preview import verify_preview
-from mato_loop_backend.agent.projection import (
-    ContextProjection,
-    _model_file_tool_result,
-    _target_tool_result,
-    _tool_result_reference,
-)
+from mato_loop_backend.agent.projection import ContextProjection, _tool_result_reference
 from mato_loop_backend.agent.repository_instructions import (
     check_repository_instruction_targets,
 )
@@ -32,12 +27,12 @@ from mato_loop_backend.agent.run_support import (
     _RESEARCH_TOOL_NAMES,
     MEMORY_WRITE_OUTCOME_PRIORITY,
 )
-from mato_loop_backend.agent.script_tools import (
-    SCRIPT_TOOL,
-    StopScript,
-    run_script,
-    with_script_progress,
+from mato_loop_backend.agent.script_round import (
+    ScriptChildResult,
+    ScriptRound,
+    finish_script_result,
 )
+from mato_loop_backend.agent.script_tools import SCRIPT_TOOL
 from mato_loop_backend.agent.session_settings import apply_run_session_settings
 from mato_loop_backend.agent.subagents import run_tasks
 from mato_loop_backend.agent.tool_repairs import repairable_tool_error, tool_repair_key
@@ -50,7 +45,6 @@ from mato_loop_backend.media.attachments import AttachmentError, AttachmentServi
 from mato_loop_backend.memory import policy as memory_policy
 from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
 from mato_loop_backend.permissions.policy import PermissionDecision, PermissionRequest
-from mato_loop_backend.privacy import PseudonymizationError
 from mato_loop_backend.providers.base import (
     MAX_PROVIDER_IMAGE_BYTES,
     MAX_PROVIDER_IMAGES,
@@ -80,11 +74,11 @@ from mato_loop_backend.tools.contracts import (
     RepositoryInstructionsChanged,
     ToolAttachment,
     ToolCallSuperseded,
+    ToolDefinition,
     ToolFileAction,
     ToolResult,
 )
 from mato_loop_backend.tools.display import tool_display
-from mato_loop_backend.tools.references import model_tool_references
 from mato_loop_backend.tools.registry import EffectiveToolSet
 from mato_loop_backend.tools.secrets import effective_sudo_reference
 
@@ -134,6 +128,9 @@ async def persist_tool_result(
                    if call.name == "search_tools" and not metadata.get("errorCode")
                    and isinstance(metadata.get("toolDiscovery"), dict) else {}),
                 **({"computerRead": metadata["computerRead"]} if isinstance(metadata.get("computerRead"), dict) else {}),
+                **({"liveHistoryProjection": metadata["liveHistoryProjection"]}
+                   if call.name in {"session_read", "session_tool_result_read"}
+                   and isinstance(metadata.get("liveHistoryProjection"), dict) else {}),
                 **({"repositoryInstructionTargets": metadata["repositoryInstructionTargets"]}
                    if isinstance(metadata.get("repositoryInstructionTargets"), dict) else {}),
                 **({"preparedReply": metadata["preparedReply"]} if isinstance(metadata.get("preparedReply"), dict) else {}),
@@ -268,12 +265,43 @@ def session_edit_replay_key(name: str, arguments: dict[str, Any], root_files: Ro
     return hashlib.sha256(effect.encode()).hexdigest()
 
 
+def script_mutation_key(
+    call: ToolCall, definition: ToolDefinition | None, run: AgentRun, root_files: RootFileService,
+) -> tuple[str, str] | None:
+    if key := session_edit_replay_key(call.name, call.arguments, root_files):
+        return key, "tool.scriptEditAlreadyApplied"
+    if definition is None or not any(
+        action.mutates or action.category in {"write", "delete"} for action in definition.actions
+    ):
+        return None
+    # Exact replay protection, not an assertion that different arguments have different effects.
+    signature = run_support._tool_call_signature(call)
+    arguments = call.arguments
+    # Only workspace-backed calls can resolve the same arguments differently after a directory change.
+    workspace = (
+        definition.required_operation in {"shell.run", "filesystem.patch"}
+        or any(arguments.get(field) in ("workspace", "computer") for field in (
+            "root", "source_root", "destination_root",
+        ))
+        or (call.name in {"edit_file", "write_file"} and "root" not in arguments)
+        or (call.name == "edit_image" and any(
+            isinstance(image, dict) and image.get("root") in ("workspace", "computer")
+            for image in (arguments.get("images") if isinstance(arguments.get("images"), list) else [])
+        ))
+    )
+    agent_id = str(run.execution_agent_id) if workspace or definition.tool_type == "computer" else None
+    directory = run.current_directory_snapshot if workspace else None
+    effect = json.dumps([agent_id, directory, signature])
+    return hashlib.sha256(effect.encode()).hexdigest(), "tool.scriptActionAlreadyApplied"
+
+
 @dataclass
 class ToolBatchResult:
     script_tool_calls_used: int = 0
     read_evidence_available: bool = False
     script_no_progress: bool = False
     recorded_tool_calls: int = 0
+    made_tool_progress: bool = False
     research_tool_calls_used: int = 0
     research_used: bool = False
     openscad_render_pending: bool = False
@@ -359,12 +387,12 @@ async def execute_tool_batch(
     repository_authorize: Callable[[PermissionRequest], Awaitable[PermissionDecision]] | None = None,
     pending_tool_repairs: dict[str, Message] | None = None,
     recorded_tool_calls: int = 0,
-    interrupted_script_edits: dict[str, UUID] | None = None,
+    interrupted_script_actions: dict[tuple[str, str], UUID] | None = None,
 ) -> ToolBatchResult:
     if pending_tool_repairs is None:
         pending_tool_repairs = {}
-    if interrupted_script_edits is None:
-        interrupted_script_edits = {}
+    if interrupted_script_actions is None:
+        interrupted_script_actions = {}
     state = ToolBatchResult(
         research_tool_calls_used=research_tool_calls_used,
         research_used=research_used,
@@ -417,8 +445,7 @@ async def execute_tool_batch(
         child_result: list[tuple[Message, str, dict[str, Any]]] | None = None,
     ) -> AsyncGenerator[asyncio.Task[ToolResult], None]:
         nonlocal superseded, repository_deferred
-        script_steps: list[dict[str, Any]] = []
-        script_edits: dict[str, UUID] = {}
+        script: ScriptRound | None = None
         read_started = False
         bound_tool = toolset.tools.get(call.name) if toolset is not None else None
         tool_label = bound_tool.definition.label if bound_tool else None
@@ -489,8 +516,11 @@ async def execute_tool_batch(
         if not rejected_batch_code and not repository_deferred and is_research_call and not repeated_research_call and not state.user_denied_batch:
             state.research_tool_calls_used += 1
         tool_trust = trust_level
-        edit_key = session_edit_replay_key(call.name, call.arguments, root_files) if interrupted_script_edits else None
-        applied_edit = interrupted_script_edits.get(edit_key) if edit_key is not None else None
+        mutation_key = (
+            script_mutation_key(call, bound_tool.definition if bound_tool else None, run, root_files)
+            if interrupted_script_actions else None
+        )
+        applied_action = interrupted_script_actions.get(mutation_key) if mutation_key is not None else None
         if superseded:
             content = json.dumps(error_payload("tool.superseded"), ensure_ascii=False)
             metadata = {"errorCode": "tool.superseded"}
@@ -553,8 +583,8 @@ async def execute_tool_batch(
         ):
             content = json.dumps(error_payload("tool.unavailable"), ensure_ascii=False)
             metadata = {"errorCode": "tool.unavailable"}
-        elif applied_edit is not None:
-            result = ToolResult.error("tool.scriptEditAlreadyApplied", params={"messageId": str(applied_edit)})
+        elif applied_action is not None and mutation_key is not None:
+            result = ToolResult.error(mutation_key[1], params={"messageId": str(applied_action)})
             content, metadata = result.content, result.metadata
         else:
             if call_signature in failed_tool_call_signatures:
@@ -636,82 +666,40 @@ async def execute_tool_batch(
             try:
                 if call.name == SCRIPT_TOOL:
                     assert bound_tool is not None
-                    first_child = True
 
-                    async def dispatch(name, arguments):
-                        nonlocal tool_trust, first_child
-                        if (not first_child and max_tool_calls is not None
-                                and tool_calls_used + state.script_tool_calls_used >= max_tool_calls):
-                            raise StopScript(ToolResult.error("agent.toolCallLimitReached"))
-                        if not first_child:
-                            state.script_tool_calls_used += 1
-                        first_child = False
-                        if name not in script_names:
-                            raise StopScript(ToolResult.error("tool.unavailable"))
-                        if restore_script_arguments is not None:
-                            try:
-                                arguments = restore_script_arguments(arguments)
-                            except PseudonymizationError as exc:
-                                raise StopScript(ToolResult.error("privacy.pseudonymizationFailed")) from exc
-                        if openscad_source_review_pending is not None and (
-                            name != "read"
-                            or (arguments.get("root"), arguments.get("path")) != openscad_source_review_pending
-                        ):
-                            raise StopScript(ToolResult.error("tool.invalidArguments", field="code"))
-                        edit_key = session_edit_replay_key(name, arguments, root_files)
-                        previous = interrupted_script_edits.get(edit_key) if edit_key else None
-                        if previous is not None:
-                            raise StopScript(ToolResult.error("tool.scriptEditAlreadyApplied", params={
-                                "messageId": str(previous),
-                            }))
-                        result = []
-                        child = ToolCall(f"call-{uuid4()}", name, arguments)
+                    async def execute_script_child(child: ToolCall) -> ScriptChildResult:
+                        result: list[tuple[Message, str, dict[str, Any]]] = []
                         async with aclosing(execute_one(
                             index, child, parallel=False,
                             script_parent=call.id, child_result=result,
                         )) as execution:
                             await anext(execution, None)
                         message, child_content, child_metadata = result[0]
-                        child_error = child_metadata.get("errorCode")
-                        if child_metadata.get("userEdited"):
-                            edit_key = session_edit_replay_key(name, child.arguments, root_files)
-                        if edit_key and not child_error and not child_metadata.get("repositoryInstructionsDeferred"):
-                            script_edits[edit_key] = message.id
-                        script_steps.append({
-                            "tool": name, "messageId": str(message.id),
-                            "status": "error" if child_error else (
-                                "deferred" if child_metadata.get("repositoryInstructionsDeferred") else "completed"
-                            ),
-                            **({"errorCode": child_error} if child_error else {}),
-                        })
-                        if message.trust_level == TrustLevel.PRIVATE.value:
-                            tool_trust = TrustLevel.PRIVATE
+                        replay_key = None
+                        shell_read_only = child.name == "shell_run" and child_metadata.get("shellReadOnly") is True
+                        if not shell_read_only and not any(child_metadata.get(key) for key in (
+                            "errorCode", "repositoryInstructionsDeferred", "alreadyCompleted",
+                        )):
+                            replay_key = script_mutation_key(child, toolset.tools[child.name].definition, run, root_files)
+                        stop = None
                         if state.user_denied_batch or superseded or repository_deferred:
-                            raise StopScript(ToolResult(child_content, child_metadata))
-                        if state.repeated_tool_call_limit_reached:
-                            raise StopScript(ToolResult.error("agent.repeatedToolCall"))
-                        if child_metadata.get("errorCode") == "permission.denied":
-                            raise StopScript(ToolResult.error("permission.denied"))
-                        if message.trust_level == TrustLevel.PRIVATE.value and trust_level == TrustLevel.PUBLIC:
-                            # A script must not turn protected tool data into an untyped result.
-                            raise StopScript(ToolResult.error("permission.denied"))
-                        output = _target_tool_result(name, child_content, trust_level,
-                                                     source_trust_level=message.trust_level)
-                        output = model_tool_references(name, _model_file_tool_result(output), message.id)
-                        if len(output) > 96_000:
-                            return {"outputTooLarge": True, "messageId": str(message.id)}
-                        try:
-                            return json.loads(output)
-                        except ValueError:
-                            return output
+                            stop = ToolResult(child_content, child_metadata)
+                        elif state.repeated_tool_call_limit_reached:
+                            stop = ToolResult.error("agent.repeatedToolCall")
+                        return ScriptChildResult(message, child_content, child_metadata, replay_key, stop)
 
-                    async def execute_script(arguments):
-                        result = await run_script(arguments, dispatch)
-                        result.trust_level = tool_trust
-                        return result
-
-                    tool_context.script_handler = execute_script
+                    script = ScriptRound(
+                        execute_child=execute_script_child,
+                        allowed_names=script_names,
+                        trust_level=trust_level,
+                        extra_call_budget=(None if max_tool_calls is None else
+                                           max_tool_calls - tool_calls_used - state.script_tool_calls_used),
+                        restore_arguments=restore_script_arguments,
+                        source_review_pending=openscad_source_review_pending,
+                    )
+                    tool_context.script_handler = script.execute
                     tool_result = await toolset.execute(call, tool_context)
+                    state.script_tool_calls_used += script.extra_calls
                 elif parallel:
                     handler_started = asyncio.get_running_loop().create_future()
                     tool_context.handler_started = lambda: handler_started.set_result(None)
@@ -843,28 +831,36 @@ async def execute_tool_batch(
         if parallel and not read_started:
             await finish_reads()
         if call.name == SCRIPT_TOOL and script_parent is None:
-            # Build from host-recorded outcomes, never from the script's own output.
-            envelope = with_script_progress(ToolResult(content, metadata), script_steps,
-                                            recorded_tool_calls + state.recorded_tool_calls)
-            content = envelope.content
-            if metadata.get("errorCode") or any(step["status"] != "completed" for step in script_steps):
-                interrupted_script_edits.update(script_edits)
+            envelope = finish_script_result(
+                script, ToolResult(content, metadata), recorded_tool_calls + state.recorded_tool_calls,
+                interrupted_script_actions,
+            )
+            content, metadata = envelope.content, envelope.metadata
         workflow_repair = (
             (call.name == "web_search" and session.web_search_policy == WebSearchPolicy.REQUIRED)
             or call.name == "memory_write"
             or (call.name == "render_openscad" and state.openscad_render_pending)
         )
-        repair_key = tool_repair_key(call, run)
+        # A wrapper has no repair target. Match retries at the child call instead.
+        repair_key = tool_repair_key(call, run) if call.name != SCRIPT_TOOL else None
         repairable = repairable_tool_error(call, metadata, workflow=workflow_repair)
         error_code = metadata.get("errorCode")
-        if (call.name == SCRIPT_TOOL and not script_steps and isinstance(error_code, str)
+        empty_script_failure = call.name == SCRIPT_TOOL and (script is None or not script.steps) and (
+            error_code in {
+                "tool.scriptJavaScriptFailed", "tool.scriptNoProgress", "tool.scriptOutputLimit", "tool.scriptTimedOut",
+            } or metadata.get("argumentsRejected") is True
+        )
+        if empty_script_failure:
+            repairable = True
+        if (call.name == SCRIPT_TOOL and (script is None or not script.made_progress) and isinstance(error_code, str)
                 and rejected_batch_code is None and error_code not in {
                     "permission.denied", "permission.userDenied", "tool.skippedAfterUserDenial", "tool.superseded",
                 }):
             state.script_no_progress = True
         previous_repair = None
-        if not metadata.get("repositoryInstructionsDeferred") and (
-            repairable or not error_code or error_code == "agent.repeatedToolCall"
+        if repair_key is not None and not metadata.get("repositoryInstructionsDeferred") and (
+            repairable or (not error_code and not metadata.get("alreadyCompleted"))
+            or error_code == "agent.repeatedToolCall"
         ):
             previous_repair = pending_tool_repairs.pop(repair_key, None)
         if repairable:
@@ -879,6 +875,8 @@ async def execute_tool_batch(
         )
         if call.name != SCRIPT_TOOL:
             state.recorded_tool_calls += 1
+            if not error_code and not metadata.get("repositoryInstructionsDeferred") and not metadata.get("alreadyCompleted"):
+                state.made_tool_progress = True
         if previous_repair is not None:
             previous_repair.provider_data = {
                 **previous_repair.provider_data,
@@ -892,7 +890,7 @@ async def execute_tool_batch(
                 "type": "message.updated", "messageId": str(previous_repair.id),
             })
         error_code = metadata.get("errorCode")
-        if repairable:
+        if repairable and repair_key is not None:
             pending_tool_repairs[repair_key] = tool_message
         await run_events.publish(run.id, {
             "type": "tool.completed", "tool": call.name, "toolLabel": tool_label,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -212,6 +213,7 @@ async def _run_process(
     requested_arguments: dict[str, Any],
     executed_arguments: dict[str, Any],
     redacted_values: tuple[str, ...] = (),
+    inspection: ShellInspectResult | None = None,
 ) -> ToolResult:
     output = {"stdout": "", "stderr": ""}
     published_output = dict(output)
@@ -265,6 +267,8 @@ async def _run_process(
                             "type": "process.output", "toolCallId": context.tool_call.id,
                             "stream": channel, "delta": delta,
                         })
+    error = (ToolResult.error("process.timedOut" if result.timed_out else "process.commandFailed")
+             if result.timed_out or result.exit_code != 0 else None)
     tool_result = ToolResult.json(
         {
             **result.model_dump(by_alias=True),
@@ -275,14 +279,16 @@ async def _run_process(
                 **safe_output,
                 "truncated": truncated,
             },
+            **(json.loads(error.content) if error is not None else {}),
         },
         metadata={"shellExecution": {"id": execution.id, "startedAt": execution.started_at.isoformat()}},
     )
-    if result.timed_out or result.exit_code != 0:
+    if error is not None:
         tool_result.is_error = True
-        tool_result.metadata["errorCode"] = (
-            "process.timedOut" if result.timed_out else "process.commandFailed"
-        )
+        tool_result.metadata.update(error.metadata)
+    elif inspection is not None and inspection.analysis_complete and inspection.read_only:
+        # Only completed reads with a concrete inspection are exempt from script replay protection.
+        tool_result.metadata["shellReadOnly"] = True
     return tool_result
 
 
@@ -363,6 +369,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
                 context, "administrator.run", payload,
                 requested_arguments=requested, executed_arguments=requested,
                 redacted_values=(*resolved.values(), *((password,) if password else ())),
+                inspection=inspection,
             )
         except ExecutionClientError as exc:
             if exc.code in {"process.sudoAuthFailed", "process.sudoAuthRequired"}:
@@ -418,6 +425,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         requested_arguments=requested,
         executed_arguments=executed,
         redacted_values=tuple(environment.values()),
+        inspection=inspection,
     )
 
 

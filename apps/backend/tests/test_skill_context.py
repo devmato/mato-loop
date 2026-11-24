@@ -218,6 +218,18 @@ async def test_large_skill_fits_or_uses_authorized_result_paging(monkeypatch, tm
     assert json.loads(recorded.content)["content"] == ""
     replay = _projection_messages("System", None, [*records, reader, recorded], TrustLevel.PUBLIC, skill_results=results)
     assert json.loads(replay[-1]["content"]) == json.loads(page.content)
+    ctx.scripted = True
+    assert (await tool_registry.execute(call, ctx)).metadata["errorCode"] == "permission.denied"
+    ctx.scripted = False
+    # Paging the stored reader result must not reconstruct its guarded contents.
+    call.arguments = {"message_id": str(recorded.id)}
+    ctx.db.scalar.return_value = recorded
+    ctx.db.scalars.return_value.all.return_value = [*records, reader, recorded]
+    nested = await tool_registry.execute(call, ctx)
+    assert "Required middle rule." not in nested.content
+    call.arguments = {"message_id": str(load_id), "offset": 36_000}
+    ctx.db.scalar.return_value = load
+    ctx.db.scalars.return_value.all.return_value = records
     ctx.check_permission.return_value = PermissionDecision.DENY
     assert (await tool_registry.execute(call, ctx)).metadata["errorCode"] == "permission.denied"
 

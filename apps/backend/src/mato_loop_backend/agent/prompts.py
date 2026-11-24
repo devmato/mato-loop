@@ -320,7 +320,8 @@ def general_system_prompt(
     if offered_tool_names:
         if "run_tool_script" in offered_tool_names:
             parts.append(
-                "Use offered tools directly or use run_tool_script to combine predictable dependent steps. "
+                "Prefer run_tool_script for predictable dependent steps when earlier results determine later calls. "
+                "Prefer direct calls for a single step, independent steps, or when you need to interpret a result first. "
                 "Do not rerun completed steps when changing how you call tools."
             )
         parts.extend(

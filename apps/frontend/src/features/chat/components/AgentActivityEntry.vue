@@ -232,9 +232,6 @@ const resultMessage = computed(() => hydratedResult.value && hydratedResult.valu
   ? hydratedResult.value : props.entry.result)
 const result = computed(() => isTool.value ? parseToolResult(resultMessage.value?.content, props.entry.tool.name, resultMessage.value) : {})
 const toolInfo = computed(() => isTool.value ? toolPresentation(tool.value, props.entry.approval?.details?.displayItems) : null)
-const summary = computed(() => isTool.value
-  ? (tool.value.name === TOOL_SCRIPT ? result.value.errorMessage : result.value.summary) || toolInfo.value.summary
-  : reasoningSummary.value ? '' : props.entry.presentation?.summary)
 const shellCommandText = computed(() => isTool.value ? shellCommand(tool.value) : '')
 const emptyShellOutput = Object.freeze({})
 const shellOutput = computed(() => typeof result.value.stdout === 'string' ? result.value
@@ -245,11 +242,20 @@ const status = computed(() => {
     return statuses.find((item) => ['failed', 'denied'].includes(item.name))
       || statuses.find((item) => item.name === 'interrupted')
       || statuses.find((item) => ['approval', 'question'].includes(item.name))
+      || statuses.find((item) => item.name === 'already-applied')
       || { name: '', label: '' }
   }
   return isTool.value ? toolStatus({ ...props.entry, result: resultMessage.value }) : { name: props.entry.warning ? 'interrupted' : '', label: 'Warnung' }
 })
-const statusIcon = computed(() => ({ failed: 'error', denied: 'error', interrupted: 'warning', approval: 'pending_actions', question: 'help_outline' })[status.value.name])
+const statusIcon = computed(() => status.value.name === 'already-applied' ? status.value.icon
+  : ({ failed: 'error', denied: 'error', interrupted: 'warning', approval: 'pending_actions', question: 'help_outline' })[status.value.name])
+const summary = computed(() => {
+  if (!isTool.value) return reasoningSummary.value ? '' : props.entry.presentation?.summary
+  if (status.value.name === 'already-applied') {
+    return [toolInfo.value.summary, status.value.label].filter(Boolean).join(' · ')
+  }
+  return (tool.value.name === TOOL_SCRIPT ? result.value.errorMessage : result.value.summary) || toolInfo.value.summary
+})
 const errorDetails = computed(() => result.value.errorMessage || '')
 const toolDetails = computed(() => (toolInfo.value?.items || []).filter((item) => item.value.length && item.value !== summary.value && item.value !== shellCommandText.value))
 const hasDetails = computed(() => {

@@ -28,6 +28,20 @@ def test_private_history_instruction_is_model_bound_not_session_bound() -> None:
     assert "No other proactive discovery." in prompt
 
 
+def test_script_call_preferences_only_when_scripting_is_offered() -> None:
+    session = ChatSession()
+    direct = general_system_prompt(session, offered_tool_names=frozenset({"read"}), include_local_time=False)
+    scripted = general_system_prompt(
+        session, offered_tool_names=frozenset({"read", "run_tool_script"}), include_local_time=False,
+    )
+    guidance = (
+        "Prefer run_tool_script for predictable dependent steps when earlier results determine later calls. "
+        "Prefer direct calls for a single step, independent steps, or when you need to interpret a result first. "
+        "Do not rerun completed steps when changing how you call tools.\n\n"
+    )
+    assert direct.replace("Call only supplied schemas", guidance + "Call only supplied schemas", 1) == scripted
+
+
 def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     account = IntegrationInstance(
         name="Calendar",

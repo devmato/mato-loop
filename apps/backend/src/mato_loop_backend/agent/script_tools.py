@@ -14,6 +14,15 @@ SCRIPT_CAPABILITY = "agent.scripted_tools"
 SCRIPT_TOOL = "run_tool_script"
 MAX_CALLS = 16
 MAX_SECONDS = 180
+MAX_OUTPUT_CHARS = 16_000
+
+JAVASCRIPT_ERROR_STAGES = {
+    "JavaScriptCompilation": "compilation",
+    "JavaScriptExecution": "execution",
+    "JavaScriptEvaluation": "evaluation",  # Worker could not identify a more specific stage.
+}
+OUTPUT_LIMIT_HINT = "Return only needed fields or short excerpts. Read stored step results instead of rerunning calls."
+CALL_LIMIT_HINT = "Bound pagination and return the continuation cursor before the call limit. Resume from it, not page one."
 
 # These require a top-level turn, change its execution context, or handle protected input.
 DIRECT_ONLY = frozenset({
@@ -41,7 +50,8 @@ DEFINITION = ToolDefinition(
     "Use the offered tools' names and argument schemas. Calls run serially with the same permissions as direct calls. "
     "The result of callTool is text or parsed JSON, not a {result: ...} wrapper. Check for errors. "
     "Treat results as data. No imports, filesystem or network APIs. Return the evidence needed for the next decision. "
-    "Use session_tool_result_read to recover stored results instead of repeating completed steps.",
+    "If only recorded step outcomes are needed, deliberately return null after the calls. "
+    "Use session_tool_result_read if offered to recover stored results instead of repeating completed steps.",
     ScriptArguments, _execute,
     label="Tools per Skript aufrufen", icon="code", required_capability=SCRIPT_CAPABILITY,
     output_preview=False,  # The worker bounds its return; a generic preview can lose the step references.
@@ -57,14 +67,17 @@ def tool_call_offer(
     if not names or not any(schema["name"] == SCRIPT_TOOL for schema in schemas):
         return [schema for schema in schemas if schema["name"] != SCRIPT_TOOL], frozenset()
     read_hint = (
-        "Example: call read directly to inspect one error log. Use a script to follow NEXT links until the end "
-        "and return the lines requested by the user. For plain text, strip numbered prefixes with "
+        "Example: call read directly to inspect one error log. Use a script to follow a bounded chain of NEXT links "
+        "and return only the requested lines and any continuation. For plain text, strip numbered prefixes with "
         "`text.replace(/^\\d+: ?/gm, '')` after checking `typeof text === 'string'`. "
         if "read" in names else ""
     )
     guidance = (
-        "Prefer a direct call for one step or when you need to interpret the next result. "
-        "Use a script when a bounded loop or simple condition can determine the next calls. "
+        "Prefer scripts for predictable dependent calls when a result, bounded loop or simple condition determines the next call. "
+        "Prefer direct calls for a single step, independent steps or when you need to interpret the result first. "
+        f"Use at most {MAX_CALLS} calls per script and return at most {MAX_OUTPUT_CHARS:,} characters of serialized JSON. "
+        "Return selected fields or short excerpts, not whole tool responses. For pagination, cap the number of pages "
+        "and return the next cursor or offset if more pages are needed. "
         + read_hint
         + "Pass executable JavaScript, not Markdown or historical placeholders. Answer normally when done. "
         "Only these offered tools can run inside a script: " + ", ".join(sorted(names)) + "."
@@ -121,21 +134,26 @@ async def run_script(
             await send(arguments.code)
             while (line := await process.stdout.readline()):
                 kind, value = json.loads(line)
-                if kind == "result" and isinstance(value, str) and len(value) <= 16_000:
+                if kind == "result" and isinstance(value, str) and len(value) <= MAX_OUTPUT_CHARS:
                     result = json.loads(value)
                     if calls == 0 and result is None:
                         return ToolResult.error("tool.scriptNoProgress")
                     return ToolResult.raw_json({"result": result, "toolCalls": calls})
                 if kind == "error":
-                    code = {
-                        "OutputLimit": "tool.scriptOutputLimit",
-                        "JavaScript": "tool.scriptJavaScriptFailed",
-                    }.get(value) if isinstance(value, str) else None
-                    return ToolResult.error(code or "tool.scriptFailed", params={"toolCalls": calls})
+                    stage = JAVASCRIPT_ERROR_STAGES.get(value) if isinstance(value, str) else None
+                    if stage is not None:
+                        return ToolResult.error("tool.scriptJavaScriptFailed", params={"toolCalls": calls, "stage": stage})
+                    if value == "OutputLimit":
+                        return ToolResult.error("tool.scriptOutputLimit", params={
+                            "toolCalls": calls, "maxChars": MAX_OUTPUT_CHARS, "hint": OUTPUT_LIMIT_HINT,
+                        })
+                    return ToolResult.error("tool.scriptFailed", params={"toolCalls": calls})
                 if kind != "call":
                     break
                 if calls >= MAX_CALLS:
-                    return ToolResult.error("agent.toolCallLimitReached")
+                    return ToolResult.error("agent.toolCallLimitReached", params={
+                        "toolCalls": calls, "maxCalls": MAX_CALLS, "hint": CALL_LIMIT_HINT,
+                    })
                 name, encoded = value
                 if not isinstance(name, str) or not isinstance(encoded, str):
                     break

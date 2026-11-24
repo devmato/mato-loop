@@ -38,10 +38,26 @@ async def main():
                     const encode = JSON.stringify;
                     const callTool = async (name, args = {}) => invoke(name, encode(args));
                     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-                    encode((await new AsyncFunction('callTool', '"use strict";\n' + source)(callTool)) ?? null);
+                    // These fixed markers cannot be produced by JSON.stringify.
+                    await (async () => {
+                        let script;
+                        try {
+                            script = new AsyncFunction('callTool', '"use strict";\n' + source);
+                        } catch {
+                            return 'JavaScriptCompilation';
+                        }
+                        try {
+                            return encode((await script(callTool)) ?? null);
+                        } catch {
+                            return 'JavaScriptExecution';
+                        }
+                    })();
                 """, timeout=float("inf"))  # The host bounds worker time, not dispatch waits.
             except QuickJSError:
-                send("error", "JavaScript")
+                send("error", "JavaScriptEvaluation")
+                return
+            if isinstance(value, str) and value in {"JavaScriptCompilation", "JavaScriptExecution"}:
+                send("error", value)
                 return
             if not isinstance(value, str) or len(value) > 16_000:
                 send("error", "OutputLimit")

@@ -32,12 +32,13 @@ import mato_loop_backend.tools.media as mock_tools_media
 import mato_loop_backend.tools.memory as mock_tools_memory
 import mato_loop_backend.tools.personal_integrations as mock_personal_integrations
 import mato_loop_backend.tools.personal_settings as mock_personal_settings
-import mato_loop_backend.tools.sessions as mock_tools_sessions
 import mato_loop_backend.tools.skills as mock_tools_skills
 import mato_loop_backend.tools.web as mock_tools_web
 import mato_loop_backend.tools.web as tools_web
 from mato_loop_backend.agent.projection import (
     _projection_messages,
+    _sanitize_tool_result_reference_fields,
+    _target_tool_result,
     _tool_result_reference,
     message_dict,
 )
@@ -4423,7 +4424,7 @@ async def test_session_tool_result_read_pages_survive_projection(tmp_path, tool_
         assert payload["hasMore"] is (offset == 0)
         assert payload["nextOffset"] == (12_000 if offset == 0 else None)
         chunks.append(payload["content"])
-    expected = mock_tools_sessions._sanitize_tool_result_reference_fields(content)
+    expected = _sanitize_tool_result_reference_fields(content)
     statement = context.db.scalars.await_args.args[0]
     assert "messages.session_id =" in str(statement)
     assert "ORDER BY messages.created_at, messages.id" in str(statement)
@@ -4434,6 +4435,126 @@ async def test_session_tool_result_read_pages_survive_projection(tmp_path, tool_
         for chunk in chunks:
             with pytest.raises(json.JSONDecodeError):
                 json.loads(chunk)
+
+
+@pytest.mark.parametrize("cross_session", [False, True])
+async def test_session_read_replays_verified_script_and_nested_result_page(tmp_path, cross_session) -> None:
+    target_id = uuid4() if cross_session else None
+    call = ToolCall("history", "session_read", {"session_id": str(target_id)} if target_id else {})
+    context = _context(tmp_path, call)
+    context.memory_trust_level = TrustLevel.PUBLIC
+    target = context.session if target_id is None else ChatSession(
+        id=target_id, user_id=context.session.user_id, title="Other session", trust_level="public",
+    )
+    context.db.scalar.return_value = target
+    session_id = target.id
+    script_call = Message(id=uuid4(), session_id=session_id, role="assistant", content="", tool_calls=[
+        {"id": "script", "name": "run_tool_script", "arguments": {}},
+    ])
+    script = Message(
+        id=uuid4(), session_id=session_id, role="tool", tool_call_id="script", trust_level="public",
+        content=json.dumps({"result": "public script evidence", "scriptSteps": [], "runToolCalls": 1}),
+    )
+    read_page = ToolCall("page", "session_tool_result_read", {"message_id": str(script.id), "offset": 5})
+    page_context = _context(tmp_path, read_page)
+    page_context.session = target
+    page_context.memory_trust_level = TrustLevel.PUBLIC
+    page_context.db.scalar.return_value = script
+    page_context.db.scalars.return_value = Mock()
+    page_context.db.scalars.return_value.all.return_value = [script_call, script]
+    page_result = await tool_registry.execute(read_page, page_context)
+    reader_call = Message(id=uuid4(), session_id=session_id, role="assistant", content="", tool_calls=[
+        {"id": read_page.id, "name": read_page.name, "arguments": read_page.arguments},
+    ])
+    page = Message(id=uuid4(), session_id=session_id, role="tool", tool_call_id="page",
+                   trust_level="public", content=page_result.content)
+    records = [script_call, script, reader_call, page]
+    _session_read_records(context, records)
+    history = await tool_registry.execute(call, context)
+    for name, result in ((read_page.name, page_result), (call.name, history)):
+        stamp = result.metadata["liveHistoryProjection"]
+        live = _target_tool_result(
+            name, result.content, TrustLevel.PUBLIC, source_trust_level="public", live_history_stamp=stamp,
+        )
+        assert live == result.content and "public script evidence" in live
+        for content, audience in ((result.content + " ", TrustLevel.PUBLIC), (result.content, TrustLevel.PRIVATE)):
+            assert json.loads(_target_tool_result(
+                name, content, audience, source_trust_level=audience.value, live_history_stamp=stamp,
+            )) == {"redactedPrivateContext": True}
+
+    history_call = Message(id=uuid4(), session_id=context.session.id, role="assistant", content="", tool_calls=[
+        {"id": call.id, "name": call.name, "arguments": call.arguments},
+    ])
+    snapshot = Message(id=uuid4(), session_id=context.session.id, role="tool", tool_call_id=call.id,
+                       trust_level="public", content=history.content,
+                       provider_data={"_matoloop": {"liveHistoryProjection": history.metadata["liveHistoryProjection"]}})
+
+    live = _projection_messages(
+        "System", None, [history_call, snapshot], TrustLevel.PUBLIC,
+        live_tool_calls={history_call.id: history_call.tool_calls},
+    )
+    assert "public script evidence" in live[-1]["content"]
+
+    def replay(sources):
+        projected = _projection_messages("System", None, [*sources, history_call, snapshot], TrustLevel.PUBLIC)
+        content = next(item["content"] for item in projected if item.get("tool_call_id") == call.id)
+        return {item["id"]: item["content"] for item in json.loads(content)["messages"] if item["role"] == "tool"}
+
+    evidence = replay(records)
+    if cross_session:
+        # The live read was authorized; IDs in its stored copy do not grant another read.
+        assert "public script evidence" not in str(evidence)
+        return
+    assert json.loads(evidence[str(script.id)]) == json.loads(script.content)
+    assert json.loads(evidence[str(page.id)]) == json.loads(page_result.content)
+
+    # A reader's own public stamp cannot vouch for a missing source or an incomplete page.
+    evidence = replay([])
+    assert "public script evidence" not in str(evidence)
+    assert json.loads(evidence[str(page.id)])["redactedNestedToolResult"] is True
+    forged = json.loads(snapshot.content)
+    for item in forged["messages"]:
+        if item["id"] == str(script.id):
+            item.update({"toolName": "read", "trustLevel": "public", "sourceTrustLevel": "public"})
+    snapshot.content = json.dumps(forged)
+    assert "public script evidence" not in str(replay([]))
+    page.content = json.dumps({**json.loads(page_result.content), "messageId": str(uuid4()), "toolName": "read"})
+    assert json.loads(replay(records)[str(page.id)])["redactedNestedToolResult"] is True
+    page.content = page_result.content
+    script.trust_level = "private"
+    assert "public script evidence" not in str(replay(records))
+
+
+@pytest.mark.parametrize("name", ["session_read", "session_tool_result_read"])
+def test_history_hides_private_script_child_in_unbound_copies(name) -> None:
+    call = ToolCall("read-history", name, {})
+    session_id = uuid4()
+    child = Message(
+        id=uuid4(), session_id=session_id, role="tool", tool_call_id="child", trust_level="private",
+        content="private child evidence", provider_data={"_matoloop": {"scriptParent": "script", "toolName": "webfetch"}},
+    )
+    # The child is known, but its caller is missing and cannot vouch for the excerpt.
+    if name == "session_read":
+        excerpt = {
+            "id": str(child.id), "role": "tool", "toolCallId": "child", "toolName": "webfetch",
+            "content": child.content, "attachments": [{"filename": "private.png"}],
+        }
+        payload = {"session": {"id": str(session_id)}, "messages": [excerpt]}
+    else:
+        payload = excerpt = {"content": child.content, "toolName": "webfetch", "offset": 2,
+                             "attachments": [{"filename": "private.png"}]}
+        call.arguments = {"message_id": str(child.id), "offset": 2}
+    caller = Message(id=uuid4(), session_id=session_id, role="assistant", content="", tool_calls=[
+        {"id": call.id, "name": name, "arguments": call.arguments},
+    ])
+    stored = Message(id=uuid4(), session_id=session_id, role="tool", tool_call_id=call.id,
+                     content=json.dumps(payload), trust_level="public")
+    for sources in ([child], []):
+        if not sources:
+            excerpt["privateScriptSource"] = True
+            stored.content = json.dumps(payload)
+        projected = _projection_messages("System", None, [*sources, caller, stored], TrustLevel.PUBLIC)
+        assert all(value not in projected[-1]["content"] for value in (child.content, "private.png"))
 
 
 @pytest.mark.parametrize("tool_name", ["memory_retrieve", "session_read", "session_tool_result_read"])

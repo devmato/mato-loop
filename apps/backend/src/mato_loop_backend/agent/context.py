@@ -147,8 +147,8 @@ class ContextManager:
         # Only the projection view crosses the thread boundary; originals stay
         # attached to this session for updating omissions and compaction state.
         projection_records = {item.id: _projection_record(item) for item in records}
-        reader_metadata = (agent_projection._tool_result_read_metadata(list(projection_records.values()))
-                           if load_skill_results else None)
+        tool_history = (agent_projection._ToolHistory(list(projection_records.values()))
+                        if load_skill_results is not None else None)
 
         async def persist_omissions() -> None:
             for item in active_records:
@@ -177,8 +177,8 @@ class ContextManager:
                     and item.id not in omitted_tool_result_ids
                     and not (item.provider_data or {}).get("_matoloop", {}).get("contextOutputOmitted")
                 }
-                assert reader_metadata is not None
-                readers, _ = reader_metadata
+                assert tool_history is not None
+                readers = tool_history.reader_sources
                 references.update(readers[item][0].id for item in list(references) if item in readers)
                 skill_results = await load_skill_results(references)
             projected_summary = (SimpleNamespace(content=summary.content,
@@ -195,7 +195,7 @@ class ContextManager:
                     memory_contexts=memory_contexts,
                     session_contexts=session_contexts,
                     skill_results=skill_results,
-                    reader_metadata=reader_metadata,
+                    tool_history=tool_history,
                     tool_snapshots=tool_snapshots,
                     tool_snapshot_characters=int(input_budget * 0.05 * characters_per_token),
                     runtime_instructions=runtime_instructions,

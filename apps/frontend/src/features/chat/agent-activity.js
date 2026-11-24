@@ -1,5 +1,5 @@
 import { reasoningBlocks, reasoningHistoryPresentation, reasoningStatusLabel } from 'src/features/chat/reasoning-display'
-import { hiddenToolScript, parseToolResult, TOOL_SCRIPT, toolActivityLabel, toolSummary } from 'src/features/chat/tool-display'
+import { hiddenToolScript, parseToolResult, TOOL_SCRIPT, toolActivityLabel, toolStatus, toolSummary } from 'src/features/chat/tool-display'
 
 const LABELS = {
   submitting: 'Verarbeite Anfrage',
@@ -156,12 +156,16 @@ export function agentRunPresentation({
         ? toolItems.find((item) => item.tool.id === activity.toolCallId)
         : toolItems.findLast((item) => item.current !== false && (item.result || item.completed))
       : null
-  // A script completes without another processing phase after its last child.
-  const scriptParent = phaseTool?.tool.scriptParent
-  const selectedTool = (scriptParent && toolItems.find((item) => (
-    item.completed && item.result && item.batchId === phaseTool.batchId
-      && item.tool.name === TOOL_SCRIPT && item.tool.id === scriptParent
-  ))) || phaseTool
+  // The phase can still point at the last child after the wrapper has finished.
+  const scriptParent = phaseTool?.current !== false && !phaseTool?.active && phaseTool?.tool.scriptParent
+  const sameBatch = (item) => item.batchId === phaseTool.batchId && item.runId === phaseTool.runId && item.current !== false
+  const scriptWrapper = scriptParent && toolItems.find((item) => (
+    sameBatch(item) && item.result && item.tool.name === TOOL_SCRIPT && item.tool.id === scriptParent
+  ))
+  const failedChild = scriptParent && phaseTool.scriptFinished && !scriptWrapper && !approval && !question
+    && toolItems.findLast((item) => sameBatch(item) && item.tool.scriptParent === scriptParent
+      && !hiddenToolRepair(item, running) && ['failed', 'denied', 'interrupted'].includes(toolStatus(item).name))
+  const selectedTool = scriptWrapper || failedChild || phaseTool
   const argumentsRejected = hiddenToolRepair(selectedTool, running)
   const presentationTool = argumentsRejected ? null : selectedTool?.tool || (
     ['preparing_context', 'processing_tool', 'waiting_model'].includes(activity?.phase) && activity.tool && activity.tool !== TOOL_SCRIPT && !reasoningSummary && !streamContextSummary?.content
@@ -170,6 +174,7 @@ export function agentRunPresentation({
   )
   const scriptResult = presentationTool?.name === TOOL_SCRIPT ? selectedTool?.result : null
   const scriptError = scriptResult && parseToolResult(scriptResult.content, TOOL_SCRIPT, scriptResult).errorMessage
+  const failureMessage = scriptError || (failedChild && parseToolResult(failedChild.result.content, failedChild.tool.name, failedChild.result).errorMessage)
   const label = stopping
     ? 'Anfrage abbrechen'
     : approval
@@ -194,10 +199,10 @@ export function agentRunPresentation({
     announcement = 'Antwort erforderlich'
   } else if (reasoningSummary) {
     announcement = 'Nachdenken'
-  } else if (scriptError && !stopping) {
-    announcement = scriptError
+  } else if (failureMessage && !stopping) {
+    announcement = failureMessage
   }
-  const active = !stopping && !approval && !question && !scriptError && !['waiting_approval', 'waiting_input'].includes(activity?.phase)
+  const active = !stopping && !approval && !question && !scriptError && !failedChild && !['waiting_approval', 'waiting_input'].includes(activity?.phase)
   let entry = toolItems.find((item) => (approval && item.approval === approval) || (question && item.question === question))
   if (!entry && !stopping) {
     if (presentationTool) entry = selectedTool || { key: `activity-tool-${activity.toolCallId}`, type: 'tool', tool: presentationTool, runId }
@@ -219,7 +224,11 @@ export function agentRunPresentation({
       icon: reasoningSummary ? 'psychology' : ACTIVITY_ICONS[activity?.phase] || 'smart_toy'
     }
   }
-  return { showActivity: true, label, summary, announcement, entry: { ...entry, active }, ...(presentationTool ? { tool: presentationTool } : {}) }
+  return {
+    showActivity: true, label, summary, announcement, entry: { ...entry, active },
+    ...(presentationTool ? { tool: presentationTool } : {}),
+    ...(failedChild && !stopping ? { showingScriptChildFailure: true } : {})
+  }
 }
 
 export function activityDurationMs(history, running, now = Date.now()) {

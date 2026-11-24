@@ -466,6 +466,8 @@ _MESSAGES = {
     "tool.scriptFailed": "The script failed or exceeded its resource limits. Earlier tool effects may remain; inspect the results before retrying.",
     "tool.scriptOutputLimit": "The script returned more than 16,000 characters. Use the recorded step results rather than repeating completed calls.",
     "tool.scriptJavaScriptFailed": "JavaScript evaluation failed. Use the recorded step results rather than repeating completed calls.",
+    "tool.scriptStepFailed": "One or more script steps failed. Check scriptSteps and use the recorded results instead of repeating completed actions.",
+    "tool.scriptActionAlreadyApplied": "This action already completed before a script failure. Its recorded result can be read; the action was not repeated.",
     "tool.scriptNoProgress": "The script called no tools and returned no result. Answer from existing evidence or use a script to gather what is missing.",
     "tool.scriptEditAlreadyApplied": "This exact session file edit succeeded before the earlier script failed. It was not repeated. Use its recorded result and continue only with remaining work.",
     "tool.scriptTimedOut": "The script timed out. Earlier tool effects may remain; inspect the results before retrying.",

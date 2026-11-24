@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -21,9 +22,12 @@ from mato_loop_backend.agent.run_support import (
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.script_tools import SCRIPT_TOOL
 from mato_loop_backend.agent.subagents import integration_ceiling_ids, permission_snapshot
-from mato_loop_backend.agent.tool_round import ToolBatchResult
-from mato_loop_backend.files.service import RootFileError
-from mato_loop_backend.models import ExecutionAgent, Message, WebSearchPolicy
+from mato_loop_backend.agent.tool_round import ToolBatchResult, script_mutation_key
+from mato_loop_backend.execution import ExecutionClient, ProcessResult, ShellInspectResult
+from mato_loop_backend.files.service import RootFileError, RootFileService
+from mato_loop_backend.integrations.caldav.adapter import CALDAV_SHARED_TOOLS
+from mato_loop_backend.models import AgentRun, ExecutionAgent, Message, WebSearchPolicy
+from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.sessions.serialization import message_payload
@@ -39,9 +43,11 @@ from mato_loop_backend.tools.secrets import resolve_sudo_password
 pytestmark = pytest.mark.usefixtures("skill_library")
 
 
-@pytest.mark.parametrize("failure", ["empty", "javascript", "continuation"])
+@pytest.mark.parametrize("failure", ["empty", "javascript", "continuation", "steps"])
 async def test_repeated_distinct_empty_scripts_end_with_answer_only_after_evidence(monkeypatch, failure):
     codes = ["throw new Error('one');", "throw new Error('two');"] if failure == "javascript" else ["return;", "return null;"]
+    if failure == "steps":
+        codes = [f"await callTool('read', {{root: 'files', path: '{name}'}}); return 42;" for name in ('a', 'b')]
     answers = [ProviderResult(content="The supported answer.")]
     if failure == "continuation":
         answers.append(ProviderResult(content="Answer to the continuation."))
@@ -58,9 +64,18 @@ async def test_repeated_distinct_empty_scripts_end_with_answer_only_after_eviden
         if call.name == SCRIPT_TOOL:
             return await tool.definition.handler(tool.definition.validate_arguments(call.arguments), context)
         assert call.name == "read"
+        if call.arguments["path"] != "facts.txt":
+            return ToolResult.error("file.notFound")
         return evidence
 
     tool_registry._execute_definition.side_effect = execute
+    if failure == "steps":
+        async def assign_ids():
+            for message in _tool_messages(db):
+                if message.id is None:
+                    message.id = uuid4()
+
+        db.flush.side_effect = assign_ids
     if failure == "continuation":
         complete = ProviderService.complete
         continuation_pending = False
@@ -82,6 +97,41 @@ async def test_repeated_distinct_empty_scripts_end_with_answer_only_after_eviden
 
     expected = ["auto", "auto", "auto", "none"] + (["auto"] if failure == "continuation" else [])
     assert [request["tool_choice"] for request in requests] == expected
+    if failure == "steps":
+        outcome = json.loads(_tool_messages(db)[-1].content)
+        assert (outcome["result"], outcome["error"]["code"]) == (42, "tool.scriptStepFailed")
+
+
+@pytest.mark.parametrize("retry", ["script", "direct", "unrelated"])
+async def test_script_repair_is_recovered_only_for_the_same_child_target(monkeypatch, retry):
+    read = ToolCall("read", "read", {"root": "files", "path": "target.txt"})
+    code = f"return await callTool('read', {json.dumps(read.arguments)});"
+    edit = ToolCall("edit", "edit_file", {**read.arguments, "oldString": "present", "newString": "fixed"})
+    stale = {**edit.arguments, "oldString": "absent"}
+    first = ToolCall("first", SCRIPT_TOOL, {"code": (
+        f"return await callTool('edit_file', {json.dumps(stale)});" if retry == "direct" else "throw new Error();"
+    )})
+    second = ToolCall("retry", SCRIPT_TOOL, {"code": code}) if retry == "script" else edit if retry == "direct" else read
+    db, run, *_ = await _runtime_setup(monkeypatch, [
+        ProviderResult(tool_calls=[first]), ProviderResult(tool_calls=[second]), ProviderResult(content="Done."),
+    ], search_policy=WebSearchPolicy.DISABLED, scripted_tools_enabled=True)
+
+    async def assign_ids():
+        for message in _tool_messages(db):
+            if message.id is None:
+                message.id = uuid4()
+
+    async def execute(call, context, tool):
+        if call.name == SCRIPT_TOOL:
+            return await tool.definition.handler(tool.definition.validate_arguments(call.arguments), context)
+        if call.arguments.get("oldString") == "absent":
+            return ToolResult.error("file.editTextNotFound")
+        return ToolResult("Evidence", {})
+
+    db.flush.side_effect = assign_ids
+    tool_registry._execute_definition.side_effect = execute
+    await AgentRuntime._execute_loop(db, run)
+    assert message_payload(_tool_messages(db)[0])["toolRepair"] == ("recovered" if retry == "direct" else "pending")
 
 
 async def test_repeated_calls_do_not_finalize_with_new_memory_write_pending(monkeypatch):
@@ -99,23 +149,28 @@ async def test_repeated_calls_do_not_finalize_with_new_memory_write_pending(monk
 
 
 @pytest.mark.parametrize("retry_directly", [False, True])
-async def test_failed_script_does_not_repeat_a_successful_session_edit(monkeypatch, retry_directly):
-    args = "{root: 'files', path: 'x.txt', oldString: 'X', newString: 'XY'"
+@pytest.mark.parametrize("tool_name", ["edit_file", "write_file"])
+async def test_failed_script_does_not_repeat_a_successful_mutation(monkeypatch, retry_directly, tool_name):
+    arguments = {"root": "files", "path": "x.txt"}
+    arguments.update({"oldString": "X", "newString": "XY"} if tool_name == "edit_file" else {"content": "XY"})
+    retry = {**arguments, "root": "session", "_reason": "Retry"}
     codes = [
-        "await callTool('edit_file', " + args + "}); throw new Error('later step failed');",
-        "return await callTool('edit_file', " + args + ", _reason: 'Retry'});",
+        f"await callTool('{tool_name}', {json.dumps(arguments)}); throw new Error('later step failed');",
+        f"return await callTool('{tool_name}', {json.dumps(retry)});",
     ]
     scripted_attempts = [ToolCall(str(index), SCRIPT_TOOL, {"code": code}) for index, code in enumerate(codes)]
     if retry_directly:
-        scripted_attempts[1] = ToolCall("1", "edit_file", {
-            "root": "session", "path": "x.txt", "oldString": "X", "newString": "XY", "_reason": "Retry",
-        })
+        scripted_attempts[1] = ToolCall("1", tool_name, retry)
     db, run, requests, _projections, _events = await _runtime_setup(
         monkeypatch,
-        [ProviderResult(tool_calls=[call]) for call in scripted_attempts]
-        + [ProviderResult(content="The original edit remains applied.")],
+        [ProviderResult(tool_calls=[scripted_attempts[0]]),
+         ProviderResult(tool_calls=[ToolCall("cd", "change_directory", {"path": "/other"})]),
+         ProviderResult(tool_calls=[scripted_attempts[1]]),
+         ProviderResult(content="The original edit remains applied.")],
         search_policy=WebSearchPolicy.DISABLED, scripted_tools_enabled=True,
+        execution_agent_id=uuid4(), execution_operations=("filesystem.resolve",),
     )
+    run.current_directory_snapshot = "/work"
     edits = []
 
     async def assign_message_ids():
@@ -128,16 +183,84 @@ async def test_failed_script_does_not_repeat_a_successful_session_edit(monkeypat
     async def execute(call, context, tool):
         if call.name == SCRIPT_TOOL:
             return await tool.definition.handler(tool.definition.validate_arguments(call.arguments), context)
-        assert call.name == "edit_file"
+        if call.name == "change_directory":
+            run.current_directory_snapshot = "/other"
+            return ToolResult.json({"currentDirectory": "/other"})
+        assert call.name == tool_name
         edits.append(call.arguments)
         return ToolResult.json({"edited": "x.txt"})
 
     tool_registry._execute_definition.side_effect = execute
     await AgentRuntime._execute_loop(db, run)
 
-    assert {"edit_file", SCRIPT_TOOL} <= {schema["name"] for schema in requests[1]["tools"]}
+    assert {tool_name, SCRIPT_TOOL} <= {schema["name"] for schema in requests[2]["tools"]}
     assert len(edits) == 1
-    assert _tool_messages(db)[-1].provider_data["_matoloop"]["errorCode"] == "tool.scriptEditAlreadyApplied"
+    error = "tool.scriptEditAlreadyApplied" if tool_name == "edit_file" else "tool.scriptActionAlreadyApplied"
+    assert _tool_messages(db)[-1].provider_data["_matoloop"]["errorCode"] == error
+
+
+def test_calendar_replay_key_ignores_working_directory():
+    contribution = next(tool for tool in CALDAV_SHARED_TOOLS if tool.name == "calendar_create_event")
+    definition = ToolRegistry._contributed_definition(contribution)
+    call = ToolCall("calendar", definition.name, {"integration_id": str(uuid4()), "summary": "Test"})
+    run = AgentRun(execution_agent_id=uuid4(), current_directory_snapshot="/work")
+    root_files = RootFileService(uuid4())
+    key = script_mutation_key(call, definition, run, root_files)
+    run.current_directory_snapshot = "/other"
+    assert key is not None and script_mutation_key(call, definition, run, root_files) == key
+
+
+@pytest.mark.parametrize(("categories", "complete", "executions"), [
+    (["read"], True, 2),
+    (["read"], False, 1),
+    (["read", "write"], True, 1),
+])
+async def test_failed_script_blocks_shell_replay_only_for_mutations_or_incomplete_inspection(
+    monkeypatch, categories, complete, executions,
+):
+    arguments = {"command": "printf '%s\\n' example"}
+    db, run, *_ = await _runtime_setup(monkeypatch, [
+        ProviderResult(tool_calls=[ToolCall("first", SCRIPT_TOOL, {
+            "code": f"await callTool('shell_run', {json.dumps(arguments)}); throw new Error();",
+        })]),
+        ProviderResult(tool_calls=[ToolCall("retry", "shell_run", arguments)]),
+        ProviderResult(content="Done."),
+    ], search_policy=WebSearchPolicy.DISABLED, scripted_tools_enabled=True,
+        execution_agent_id=uuid4(), execution_operations=("shell.inspect", "shell.run"))
+    run.current_directory_snapshot = "/work"
+    read_only = categories == ["read"]
+    inspection = ShellInspectResult(
+        required_categories=categories, classification="read" if read_only else "write",
+        analysis_complete=complete, read_only=read_only, inspection_revision="a" * 64,
+        targets=[], commands=[],
+    )
+    process = AsyncMock(return_value=ProcessResult(
+        exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0, stderr_bytes=0,
+        stdout_truncated=False, stderr_truncated=False,
+    ))
+
+    async def request(_self, operation, arguments, _model, **kwargs):
+        if operation == "shell.inspect":
+            return inspection
+        assert operation == "shell.run"
+        return await process(arguments, **kwargs)
+
+    async def execute(call, context, tool):
+        return await tool.definition.handler(tool.definition.validate_arguments(call.arguments), context)
+
+    async def assign_message_ids():
+        for message in _tool_messages(db):
+            if message.id is None:
+                message.id = uuid4()
+
+    db.flush.side_effect = assign_message_ids
+    monkeypatch.setattr(ExecutionClient, "request", request)
+    monkeypatch.setattr(AgentRuntime, "_authorize", AsyncMock(return_value=PermissionDecision.ALLOW))
+    tool_registry._execute_definition.side_effect = execute
+    await AgentRuntime._execute_loop(db, run)
+    assert (process.await_count, _tool_messages(db)[-1].provider_data["_matoloop"].get("errorCode")) == (
+        executions, "tool.scriptActionAlreadyApplied" if executions == 1 else None,
+    )
 
 
 @pytest.mark.parametrize("transmitted", [30_000, None])
