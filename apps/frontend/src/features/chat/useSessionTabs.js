@@ -30,9 +30,10 @@ export function useSessionTabs({ chat, route }) {
   const context = computed(() => chat.current || {
     projectId: typeof route.query.project === 'string' ? route.query.project : null
   })
-  const activeKey = computed(() => sessionTabKey(context.value.id, context.value.projectId))
   const routeKey = computed(() => route.query.session || (Object.hasOwn(route.query, 'new')
     ? sessionTabKey(null, route.query.project) : null))
+  // Show the accepted navigation immediately, independently of the detail request.
+  const activeKey = computed(() => routeKey.value || sessionTabKey(context.value.id, context.value.projectId))
   let restoringKey = route.meta?.restoreSessionTabs ? routeKey.value : null
   watch(routeKey, () => { restoringKey = null }, { flush: 'sync' })
   function visit(keep) {

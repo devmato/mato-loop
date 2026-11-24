@@ -186,9 +186,14 @@ export const draftActions = {
       }
       this.persistDrafts()
     },
-    setDraft(message, { defer = false } = {}) {
-      if (this.current) this.drafts.sessionMessages[this.current.id] = message
-      else this.drafts.newSession.message = message
+    setDraft(message, { defer = false, sessionId = this.current?.id, projectId = this.sessionsProjectId } = {}) {
+      if (sessionId) this.drafts.sessionMessages[sessionId] = message
+      else {
+        const draft = projectId === this.sessionsProjectId
+          ? this.drafts.newSession : this.drafts.newSessions[sessionScopeKey(projectId)]
+        if (!draft) return
+        draft.message = message
+      }
       if (!defer) this.persistDrafts()
       else if (this.draftOwnerUserId) {
         // Devtools may wrap `this` per action; the state keeps the same identity.

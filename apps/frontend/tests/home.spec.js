@@ -77,15 +77,19 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   useExecutionAgentStore().$patch({ loaded: true, items: computers })
   let sessions = [{ id: 'session-1', title: 'Ein Gespräch fortsetzen', projectId: 'project-1', createdAt: '2026-10-03T12:00:00Z', hasUnreadMessages: true, activeRunStatus: 'waiting_approval' }]
   useHomeStore().$patch({ sessions: [{ id: 'cached', title: 'Veraltete Liste' }], loaded: true })
-  let finishApprovals
-  const pendingApprovals = new Promise((resolve) => { finishApprovals = resolve })
+  let finishSessions
+  const pendingSessions = new Promise((resolve) => { finishSessions = resolve })
+  mocks.get.mockReturnValueOnce(pendingSessions)
   let finishLatestApprovals
   const latestApprovals = new Promise((resolve) => { finishLatestApprovals = resolve })
   let approvalReads = 0
   let failed = false
   mocks.get.mockImplementation(async (path) => {
     if (path === '/sessions/home' && failed) throw new Error('unavailable')
-    if (path === '/approvals/pending') return ++approvalReads === 1 ? pendingApprovals : latestApprovals
+    if (path === '/approvals/pending') {
+      approvalReads++
+      return latestApprovals
+    }
     return { data: {
       '/sessions/home': { items: sessions }, '/projects': { items: projects },
       '/automations': { items: automations }, '/execution-agents': { items: computers },
@@ -106,11 +110,14 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   app.mount(root)
 
   await nextTick()
-  expect(root.querySelector('.home-activity-row')).toBeNull()
+  expect(root.querySelector('.home-activity-row').textContent).toContain('Veraltete Liste')
+  finishSessions({ data: { items: sessions } })
+  await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))
+  expect(root.querySelector('.home-activity-row [role="status"]').getAttribute('aria-label')).toBe('1 offene Anfrage')
+  expect(approvalReads).toBe(0)
   const latest = useApprovalStore().fetchPending()
-  finishApprovals({ data: [] })
-  await vi.waitFor(() => expect(approvalReads).toBe(2))
-  expect(root.querySelector('.home-activity-row')).toBeNull()
+  await vi.waitFor(() => expect(approvalReads).toBe(1))
+  expect(root.querySelector('.home-activity-row').textContent).toContain('Ein Gespräch fortsetzen')
   finishLatestApprovals({ data: [] })
   await latest
   await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))
@@ -162,14 +169,20 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   expect(tabs.readingPositions['session-1']).toBeUndefined()
   const sessionRequests = mocks.get.mock.calls.filter(([path]) => path === '/sessions/home').length
   await router.push('/home')
-  await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))
-  expect(mocks.get.mock.calls.filter(([path]) => path === '/sessions/home')).toHaveLength(sessionRequests + 1)
+  await vi.waitFor(() => expect(mocks.get.mock.calls.filter(([path]) => path === '/sessions/home')).toHaveLength(sessionRequests + 1))
+  await useHomeStore().loadRequest
   failed = true
   await useHomeStore().load().catch(() => {})
-  await vi.waitFor(() => expect(root.textContent).toContain('Sessions konnten nicht geladen werden.'))
+  await vi.waitFor(() => expect(root.textContent).toContain('Nicht aktuell verfügbar: Sessions.'))
+  expect(root.querySelector('.home-activity-row').textContent).toContain('Ein Gespräch fortsetzen')
   failed = false
   sessions = []
+  let finishRetry
+  mocks.get.mockReturnValueOnce(new Promise((resolve) => { finishRetry = resolve }))
   root.querySelector('button').click()
+  await nextTick()
+  expect(root.querySelector('.home-activity-row').textContent).toContain('Ein Gespräch fortsetzen')
+  finishRetry({ data: { items: [] } })
   await vi.waitFor(() => expect(root.textContent).toContain('Deine letzten Gespräche erscheinen hier.'))
   expect(mocks.get).toHaveBeenCalledWith('/sessions/home', { retainedIds: ['session-1'] }, {})
 })

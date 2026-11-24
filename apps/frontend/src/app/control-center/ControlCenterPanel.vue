@@ -166,7 +166,7 @@
     <div class="control-center__content col relative-position">
       <component
         :is="content(tab.appId).component"
-        v-for="tab in controlCenter.tabs.filter((item) => item.kind === 'app' && !['files', 'computer-files'].includes(item.appId))"
+        v-for="tab in mountedAppTabs"
         v-show="controlCenter.activeContentId === tab.tabId"
         :key="tab.tabId"
         class="fit"
@@ -188,7 +188,7 @@
       />
       <component
         :is="item.component"
-        v-for="item in controlCenterGlobalSections"
+        v-for="item in mountedGlobalSections"
         v-show="controlCenter.activeContentId === item.id"
         :key="item.id"
         class="fit"
@@ -234,7 +234,7 @@
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { agentDisplayName } from 'src/features/computers/display'
-import { computed, nextTick } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useTabReorder } from 'src/shared/ui/useTabReorder'
 import AppClosableTab from 'src/shared/ui/AppClosableTab.vue'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
@@ -280,6 +280,15 @@ const { draggedId: draggedIntegrationId, dropTarget, startDrag, updateDropTarget
   (source, target, after) => controlCenter.reorderIntegration(source, target, after)
 )
 const flexibleTabs = computed(() => controlCenter.tabs.filter((tab) => tab.appId !== 'session'))
+// Keep state in apps that were already visited without mounting every saved tab.
+const mountedContentIds = ref(new Set())
+watch(() => controlCenter.activeContentId, id => {
+  if (id) mountedContentIds.value.add(id)
+}, { immediate: true })
+const mountedAppTabs = computed(() => controlCenter.tabs.filter(tab => (
+  tab.kind === 'app' && !['files', 'computer-files'].includes(tab.appId) && mountedContentIds.value.has(tab.tabId)
+)))
+const mountedGlobalSections = computed(() => controlCenterGlobalSections.filter(item => mountedContentIds.value.has(item.id)))
 const activeFlexibleTabId = computed(() => (
   controlCenter.activeGlobalSectionId || controlCenter.activeAppId === 'session'
     ? null

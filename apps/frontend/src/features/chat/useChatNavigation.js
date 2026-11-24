@@ -1,7 +1,8 @@
-import { computed, nextTick, onBeforeUnmount, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useSessionTabsStore } from './session-tabs-store'
 
 export function useChatNavigation({ chat, route, router, composer, controlCenter, subagents, projects }) {
+  const tabs = useSessionTabsStore()
   const queryId = key => computed(() => typeof route.query[key] === 'string' ? route.query[key] : null)
   const routeSessionId = queryId('session')
   const routeProjectId = queryId('project')
@@ -12,6 +13,17 @@ export function useChatNavigation({ chat, route, router, composer, controlCenter
     && !['session', 'new', 'project'].some(key => Object.hasOwn(route.query, key)))
   const destination = computed(() => routeSessionId.value ? `session:${routeSessionId.value}`
     : personalRequested.value ? 'personal' : `draft:${route.fullPath}`)
+  const routeSession = computed(() => {
+    const id = routeSessionId.value
+    if (!id) return null
+    if (chat.current?.id === id) return chat.current
+    // Cached metadata can establish editability without making it the active session.
+    const recent = chat.sessionDetails.find(session => session.id === id)
+    const cached = tabs.summaries[id] || chat.findCachedSession(id)
+    return cached?.readOnly || cached?.archived || cached?.archivedAt ? cached
+      : recent || (cached?.readOnly === false && cached.archived === false ? cached : null)
+  })
+  const audioNavigationPending = ref(false)
   let operation
   let disposed = false
 
@@ -30,7 +42,12 @@ export function useChatNavigation({ chat, route, router, composer, controlCenter
     const current = () => !disposed && operation === request
       && destination.value === request.destination && chat.draftOwnerUserId === request.owner
     const id = routeSessionId.value
-    await composer.value?.prepareAudioNavigation?.()
+    audioNavigationPending.value = Boolean(composer.value?.hasAudioActivity?.())
+    try {
+      await composer.value?.prepareAudioNavigation?.()
+    } finally {
+      if (operation === request) audioNavigationPending.value = false
+    }
     if (!current()) return
     if (personalRequested.value) {
       await chat.loadSession(null)
@@ -62,8 +79,6 @@ export function useChatNavigation({ chat, route, router, composer, controlCenter
     if (typeof route.query.controlCenter === 'string') {
       try { await controlCenter.openApp(route.query.controlCenter) } catch { /* Central API toast. */ }
     }
-    await nextTick()
-    if (current() && !routeMessageId.value && (id || newSessionRequested.value)) composer.value?.focus({ automatic: true })
   }
 
   watch(destination, (_, previous) => {
@@ -86,5 +101,8 @@ export function useChatNavigation({ chat, route, router, composer, controlCenter
     } })
   })
   onBeforeUnmount(() => { disposed = true; operation = null; void subagents.loadChildren(null) })
-  return { routeSessionId, routeProjectId, routeMessageId, routeSubagentId, newSessionRequested, loadRouteSession }
+  return {
+    routeSessionId, routeProjectId, routeMessageId, routeSubagentId, routeSession,
+    destination, personalRequested, newSessionRequested, audioNavigationPending, loadRouteSession
+  }
 }

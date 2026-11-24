@@ -183,14 +183,14 @@ describe('control center panel', () => {
     }
     const activeTabId = controlCenter.activeAppId
     await mountPanel()
+    await vi.waitFor(() => expect(root.querySelector(`[data-app="${appId}"]`)).not.toBeNull())
     const content = root.querySelector(`[data-app="${appId}"]`)
-    const notifications = root.querySelector('[data-app="notifications"]')
-    expect(content).not.toBeNull()
     expect(content.style.display).not.toBe('none')
-    expect(notifications.style.display).toBe('none')
+    expect(root.querySelector('[data-app="notifications"]')).toBeNull()
 
     notificationButton().click()
-    await nextTick()
+    await vi.waitFor(() => expect(root.querySelector('[data-app="notifications"]')).not.toBeNull())
+    const notifications = root.querySelector('[data-app="notifications"]')
     expect(controlCenter.activeGlobalSectionId).toBe('notifications')
     expect(controlCenter.activeAppId).toBe(activeTabId)
     expect(root.querySelector(`[data-app="${appId}"]`)).toBe(content)

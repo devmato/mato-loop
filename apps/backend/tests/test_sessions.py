@@ -1511,6 +1511,35 @@ async def test_session_message_page_keeps_non_tool_anchor_with_results_and_curso
     assert continuation_id not in result_query.compile().params.values()
 
 
+@pytest.mark.parametrize(("preview", "carrier_bytes", "boundaries", "row_count", "expected_count"), [
+    (False, 2_000, (), 21, 20),  # Ordinary pages still count carriers.
+    (True, 2_000, range(8), 8, 8),  # An already short session remains whole.
+    (True, 2_000, range(121), 121, 6),  # Stop at six sections even below the ordinary page size.
+    (True, 6_000, (2, 4, 6, 8, 10, 12, 60), 62, 13),  # Do not add a fragment of the long older section.
+    (True, 2_000, (59, 60, 62, 63, 64, 65), 121, 66),  # The newest section alone spans three ordinary pages.
+    (True, 3_050, (59, 60, 62, 63, 64, 65), 121, 61),  # Retain the complete boundary before the byte budget.
+    (True, 10_000, (59,), 121, 19),  # If the newest section cannot fit, still make progress.
+])
+async def test_initial_session_preview_pages_by_section(preview, carrier_bytes, boundaries, row_count, expected_count) -> None:
+    session_id = uuid4()
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+    anchors = [
+        SimpleNamespace(created_at=now - timedelta(seconds=index), id=uuid4(),
+                        payload_bytes=carrier_bytes, section_start=index in boundaries)
+        for index in range(row_count)
+    ]
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = MagicMock(all=MagicMock(return_value=anchors))
+    db.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
+
+    _, _, cursor = await session_message_page(db, session_id, page_size=20, cursor=None, history_preview=preview)
+
+    anchor_query = db.execute.await_args.args[0]
+    assert anchor_query._limit == (121 if preview else 21)
+    assert [anchor.id for anchor in anchors[:expected_count]] in db.scalars.await_args_list[0].args[0].compile().params.values()
+    assert cursor == (str(anchors[expected_count - 1].id) if expected_count < row_count else None)
+
+
 async def test_session_message_page_omits_legacy_orphan_results() -> None:
     db = AsyncMock(spec=AsyncSession)
     db.execute.return_value = MagicMock(all=MagicMock(return_value=[]))
@@ -1527,7 +1556,7 @@ async def test_session_owner_cannot_read_another_users_session() -> None:
     db.scalar.return_value = None
 
     with pytest.raises(ApiError) as exc_info:
-        await get_session(session.id, other, db)
+        await get_session(session.id, other, db, history_preview=True)
 
     assert exc_info.value.code == "session.notFound"
     db.scalars.assert_not_awaited()

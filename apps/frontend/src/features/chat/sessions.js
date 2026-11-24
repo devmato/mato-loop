@@ -10,7 +10,7 @@ import { compareSessions, defaultSessionOptions, lastAssistantMessage, mergeSess
 import { deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
 import { notifyError } from 'src/utils/notifications'
 import { errorDescriptor } from 'src/utils/api-errors'
-import { SESSION_PAGE_SIZE, ACTIVE_TITLE_GENERATION_STATUSES, mergeMessages, sessionStateAfterMutation } from 'src/features/chat/model'
+import { SESSION_PAGE_SIZE, ACTIVE_TITLE_GENERATION_STATUSES, compareMessages, mergeMessages, sessionStateAfterMutation } from 'src/features/chat/model'
 import { useSessionTabsStore } from './session-tabs-store'
 import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
 
@@ -473,7 +473,9 @@ export const sessionsActions = {
       }
       this.loading = true
       try {
-        this.sessionLoadPromise = markRaw(api.get(`/sessions/${id}`, { signal: controller.signal }))
+        this.sessionLoadPromise = markRaw(api.get(`/sessions/${id}`, {
+          signal: controller.signal, params: { historyPreview: true }
+        }))
         const session = (await this.sessionLoadPromise).data
         if (this.selectedSessionId !== id || this.sessionLoadVersion !== loadVersion) return
         if (session.readOnly && session.parentSessionId) return session
@@ -556,6 +558,27 @@ export const sessionsActions = {
                 session.contextSummaries = mergeMessages(data.contextSummaries, session.contextSummaries)
                 if (cursor === data.nextCursor) break
                 cursor = data.nextCursor
+              }
+              // Only explicit pagination moves the displayed lower boundary.
+              const boundary = this.current.messages?.find(message => message.id === this.current.nextMessageCursor)
+              if (boundary?.createdAt) {
+                const included = message => compareMessages(message, boundary) >= 0
+                const carriers = new Map()
+                session.messages = session.messages.filter(message => {
+                  if (message.role === 'tool') {
+                    // A result can arrive after the boundary even when its carrier is older.
+                    const carrier = carriers.get(message.toolCallId)?.findLast(candidate => (
+                      !candidate.runId || !message.runId || candidate.runId === message.runId
+                    ))
+                    return carrier && included(carrier)
+                  }
+                  for (const { id } of message.toolCalls || []) {
+                    if (!carriers.has(id)) carriers.set(id, [])
+                    carriers.get(id).push(message)
+                  }
+                  return included(message)
+                })
+                session.contextSummaries = (session.contextSummaries || []).filter(included)
               }
               session.messages = mergeMessages(this.current.messages, session.messages)
               session.contextSummaries = mergeMessages(

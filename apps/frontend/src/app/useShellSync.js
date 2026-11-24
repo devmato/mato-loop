@@ -100,7 +100,6 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
       return
     }
     queueChanges([{ resource: 'all' }])
-    void sessionTabs.fetchWorkspace().catch(() => {})
   }
 
   watch(() => chat.draftOwnerUserId, owner => {
@@ -116,9 +115,10 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   watch(() => $q.screen.lt.md, mobile => {
     if (mobile) controlCenter.mobileOpen = false
   }, { flush: 'sync' })
+  watch([() => automations.dirty, () => workspace.hasDirtyEditors], () => sessionTabs.applyDeferredControlCenterClose())
 
   function refreshWorkspaceOnFocus() {
-    if (document.visibilityState === 'visible') void sessionTabs.fetchWorkspace().catch(() => {})
+    if (document.visibilityState === 'visible') queueChanges([{ resource: 'workspace' }])
   }
 
   function refreshPushState() {
@@ -167,9 +167,11 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     const all = resources.has('all')
     const sessionsChanged = all || resources.has('sessions') || resources.has('messages')
     const sessionIds = new Set(changes.map((change) => change.sessionId).filter(Boolean))
-    const listChanges = changes.filter((change) => ['sessions', 'messages'].includes(change.resource))
+    const listChanges = changes.filter((change) => ['sessions', 'messages', 'session_read'].includes(change.resource))
     const refreshAllLists = all || listChanges.some((change) => !change.sessionId)
     const changedSessionIds = [...new Set(listChanges.map((change) => change.sessionId).filter(Boolean))]
+    const currentSessionChanged = all || listChanges.some(change => change.resource !== 'session_read'
+      && (!change.sessionId || change.sessionId === routeSessionId.value))
     const config = { suppressErrorToast: true }
     const projectIds = [...new Set(changes.filter((change) => change.resource === 'project_summaries').map((change) => change.projectId).filter(Boolean))]
     const requests = []
@@ -184,16 +186,17 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     if (all || resources.has('approvals')) reload('approvals', approvals.fetchPending(config))
     if (all || resources.has('questions')) reload('questions', questions.fetchPending(config))
     if (all || resources.has('notifications')) reload('notifications', notifications.fetchLatest(config))
+    if (all || resources.has('workspace')) reload('workspace', sessionTabs.refreshWorkspace(config))
     if (refreshAllLists || resources.has('projects')) reload('sessions', sessionTabs.refreshSummaries())
-    if ((sessionsChanged || resources.has('home') || resources.has('projects') || resources.has('approvals') || resources.has('questions'))
+    if ((sessionsChanged || resources.has('session_read') || resources.has('home') || resources.has('projects') || resources.has('approvals') || resources.has('questions'))
       && (home.loaded || home.loadRequest)) {
       if (home.displayed) reload('home', home.load(config))
       else home.invalidate()
     }
-    if (sessionsChanged) {
+    if (sessionsChanged || resources.has('session_read')) {
       if (route.name === 'chat' && routeSessionId.value
         && (!chat.running || (voice.active && voice.sessionId === routeSessionId.value))
-        && (refreshAllLists || changedSessionIds.includes(routeSessionId.value))) {
+        && currentSessionChanged) {
         reload('messages', chat.refreshSession(routeSessionId.value, config), routeSessionId.value)
       }
       if (refreshAllLists) reload('sessions', chat.invalidateSessionLists(config))
@@ -283,7 +286,8 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   )
 
   watch(() => route.name, (name) => {
-    if (name === 'chat') void Promise.allSettled([
+    if (name !== 'chat') controlCenter.cancelPendingReveal()
+    else void Promise.allSettled([
       integrations.fetchCatalog(), integrations.fetchBrowser(), integrations.fetchTbsDesk()
     ])
   }, { immediate: true })

@@ -74,7 +74,7 @@ def _record_project(session: Session, user_id: UUID, project_id: UUID | None) ->
 
 @event.listens_for(ChangeTrackingSession, "before_flush")
 def _collect_changes(session: Session, _context, _instances) -> None:
-    from mato_loop_backend.models import AgentRun, ChatSession, Message
+    from mato_loop_backend.models import AgentRun, ChatSession, Message, SettingRecord
 
     related = defaultdict(set)
     for item in set(session.new) | set(session.dirty) | set(session.deleted):
@@ -86,6 +86,14 @@ def _collect_changes(session: Session, _context, _instances) -> None:
         if isinstance(item, Message) and item.role == "tool":
             continue
         resource, owner, key = source
+        if isinstance(item, SettingRecord) and item.key == "user-preferences" and item in session.dirty:
+            previous = inspect(item).attrs.data.history.deleted
+            if previous:
+                fields = {"session_tabs", "control_center_open"}
+                if {k: v for k, v in previous[0].items() if k not in fields} == {
+                    k: v for k, v in item.data.items() if k not in fields
+                }:
+                    resource = "workspace"
         if owner is type(item):
             if item in session.deleted and resource in {"sessions", "projects"}:
                 resource = "all"
@@ -130,6 +138,8 @@ def _collect_bulk_changes(state: ORMExecuteState) -> None:
     from mato_loop_backend.models import ChatSession, Message
 
     resource, owner, key = source
+    if model is ChatSession and state.is_update and state.execution_options.get("matoloop_session_read"):
+        resource = "session_read"
     if state.is_delete and resource in {"sessions", "projects"}:
         resource = "all"
     statement = select(

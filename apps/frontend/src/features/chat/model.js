@@ -53,6 +53,13 @@ function controlCenterFileTarget(root, path, session) {
   }
 }
 
+export function compareMessages(left, right) {
+  // Partial responses can precede a direct message by only one microsecond.
+  return Date.parse(left.createdAt) - Date.parse(right.createdAt)
+    || Number(left.createdAt?.match(/\.\d+/u)?.[0] || 0) - Number(right.createdAt?.match(/\.\d+/u)?.[0] || 0)
+    || (left.createdAt && right.createdAt ? left.id.localeCompare(right.id) : 0)
+}
+
 function mergeMessages(existing = [], incoming = []) {
   const replacements = new Map(incoming.map((message) => [message.id, message]))
   const merged = existing.map((message) => {
@@ -62,10 +69,7 @@ function mergeMessages(existing = [], incoming = []) {
   })
   const existingIds = new Set(existing.map((message) => message.id))
   merged.push(...incoming.filter((message) => !existingIds.has(message.id)))
-  // Partial responses can precede a direct message by only one microsecond.
-  return merged.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt)
-    || Number(left.createdAt?.match(/\.\d+/u)?.[0] || 0) - Number(right.createdAt?.match(/\.\d+/u)?.[0] || 0)
-    || (left.createdAt && right.createdAt ? left.id.localeCompare(right.id) : 0))
+  return merged.sort(compareMessages)
 }
 
 async function sessionStateAfterMutation(sessionId, messageId) {

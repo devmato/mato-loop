@@ -290,6 +290,47 @@ describe('voice attachment composer', () => {
     expect(root.querySelector('.chat-composer__input')).not.toBeNull()
   })
 
+  it('edits the routed session draft while session details and the outbox are pending', async () => {
+    chat.setDraft('Other session draft')
+    const target = { id: 'session-2', readOnly: false, archived: false, messages: [] }
+    chat.ensureSessionList().items = [target]
+    chat.drafts.sessionMessages[target.id] = 'Saved draft'
+    const send = vi.spyOn(chat, 'send')
+    let finishLoad
+    const details = new Promise(resolve => { finishLoad = resolve })
+    mocks.api.get.mockImplementation(async url => url === '/sessions/session-2' ? details : { data: { items: [] } })
+    await router.push('/?session=session-2')
+    showPage.value = true
+    await vi.waitFor(() => expect(mocks.api.get).toHaveBeenCalledWith('/sessions/session-2', expect.anything()))
+
+    const input = root.querySelector('.chat-composer__input')
+    const initial = { text: input.value, disabled: input.disabled, focused: document.activeElement === input }
+    const append = text => {
+      input.value += text
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    append(' plus more')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    finishLoad({ data: target })
+    await vi.waitFor(() => expect(chat.current?.id).toBe(target.id))
+
+    chat.outboxLoaded = true
+    chat.outboxSaving = true
+    await nextTick()
+    const disabledWhileSaving = input.disabled
+    append(' while saving')
+    await nextTick()
+    expect({
+      initial, text: chat.activeDraft, otherDraft: chat.drafts.sessionMessages['session-1'], disabledWhileSaving,
+      newDraft: chat.drafts.newSession.message, sendAttempts: send.mock.calls,
+      sendDisabled: root.querySelector('[aria-label="Nachricht senden"]').disabled
+    }).toEqual({
+      initial: { text: 'Saved draft', disabled: false, focused: true }, text: 'Saved draft plus more while saving',
+      disabledWhileSaving: false,
+      otherDraft: 'Other session draft', newDraft: '', sendAttempts: [], sendDisabled: true
+    })
+  })
+
   it('keeps the file dropzone active across child elements and adds dropped files to the draft', async () => {
     const files = [file('notiz.txt'), file('bild.png')]
     const transfer = { types: ['Files'], files, dropEffect: 'none' }
@@ -433,28 +474,61 @@ describe('voice attachment composer', () => {
     expect(target.scrollTop).toBe(300)
   })
 
-  it('automatically loads collapsed history beyond two pages until the viewport fills', async () => {
-    let pages = 0
+  it('keeps a collapsed opening preview still and preloads on an upward gesture', async () => {
+    const older = vi.fn(async () => ({ data: {
+      items: [{ id: 'earlier', role: 'user', content: 'Earlier request', createdAt: '2025-12-31T23:00:00Z' }],
+      nextCursor: 'older'
+    } }))
     const target = document.createElement('div')
+    const earlierHeight = () => root.querySelector('[data-message-id="earlier"]') ? 530 : 0
     Object.defineProperties(target, {
       clientHeight: { value: 400 },
-      scrollHeight: { get: () => pages >= 3 ? 1000 : 400 }
+      scrollHeight: { get: () => 400 + earlierHeight() }
     })
+    target.getBoundingClientRect = () => ({ top: 0, bottom: 400 })
     mocks.scrollTarget = target
-    const messages = page => Array.from({ length: 20 }, (_, index) => ({
-      id: `reply-${page}-${index}`, role: 'assistant', content: 'Reply',
-      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 100 - page * 20 + index)).toISOString()
+    const messages = Array.from({ length: 60 }, (_, index) => ({
+      id: `reply-${index}`, role: 'assistant', content: 'Reply',
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString()
     }))
     mocks.api.get.mockImplementation(async url => ({ data: url === '/sessions/session-1'
-      ? { id: 'session-1', messages: messages(0), nextMessageCursor: 'cursor-0' }
-      : url === '/sessions/session-1/messages'
-        ? { items: messages(++pages), nextCursor: `cursor-${pages}` }
-        : { items: [] } }))
+      ? { id: 'session-1', messages, nextMessageCursor: 'older' }
+      : url === '/sessions/session-1/messages' ? (await older()).data : { items: [] } }))
     vi.useFakeTimers()
     showPage.value = true
     await nextTick()
     await vi.advanceTimersByTimeAsync(1000)
-    expect(pages).toBe(3)
+    const latest = () => root.querySelector('.chat-transcript:not(.invisible) [data-message-id="reply-59"]')
+    expect(latest()).not.toBeNull()
+    expect(target.scrollTop).toBe(0)
+    expect(older).not.toHaveBeenCalled()
+    expect(mocks.api.get).toHaveBeenCalledWith('/sessions/session-1', expect.objectContaining({ params: { historyPreview: true } }))
+
+    const getBounds = HTMLElement.prototype.getBoundingClientRect
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      const top = 75 + earlierHeight() - target.scrollTop
+      return this.dataset.messageId === 'reply-59' ? { top, bottom: top + 50 } : getBounds.call(this)
+    })
+    try {
+      target.dispatchEvent(new WheelEvent('wheel', { deltaY: -30 }))
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(older).toHaveBeenCalledTimes(1) // A stalled cursor does not retry on layout.
+      expect(latest()?.getBoundingClientRect().top).toBe(75)
+    } finally {
+      bounds.mockRestore()
+    }
+  })
+
+  it('keeps an older partial section outside the preview on a background refresh', async () => {
+    const older = { id: 'older', role: 'assistant', createdAt: '2026-01-01T00:00:00.000001Z', toolCalls: [{ id: 'old-call' }] }
+    const boundary = { id: 'boundary', role: 'user', createdAt: '2026-01-01T00:00:00.000002Z' }
+    const oldResult = { id: 'result', role: 'tool', createdAt: '2026-01-01T00:00:00.000003Z', toolCallId: 'old-call' }
+    const newer = { id: 'newer', role: 'assistant', createdAt: '2026-01-01T00:00:01Z' }
+    mocks.api.get.mockResolvedValueOnce({ data: { id: 'session-1', messages: [boundary], nextMessageCursor: boundary.id } })
+      .mockResolvedValueOnce({ data: { id: 'session-1', messages: [older, boundary, oldResult, newer], nextMessageCursor: older.id } })
+    await chat.loadSession('session-1')
+    await chat.refreshSession('session-1')
+    expect([chat.current.messages, chat.current.nextMessageCursor]).toEqual([[boundary, newer], boundary.id])
   })
 
   it('reveals a search result merged into the final assistant message', async () => {
@@ -507,12 +581,11 @@ describe('voice attachment composer', () => {
     expect(sentMessages).toEqual([{ content: quotedMessage([{ type: 'text', text: '/example-two additional arguments' }, ...quotes]), options: { interrupt: false } }])
   })
   it('invalidates message heights and remounts the composer input when the session message size changes', async () => {
-    mocks.api.get.mockResolvedValue({ data: { items: [] } })
-    await router.push('/?project=draft')
+    mocks.api.get.mockImplementation(async url => ({ data: url === '/sessions/session-1'
+      ? { id: 'session-1', sessionProfile: { messageSize: 'standard' }, messages: [{ id: 'message', role: 'user', content: 'Text' }] }
+      : { items: [] } }))
     showPage.value = true
-    await nextTick()
-    chat.current = { id: 'session-1', sessionProfile: { messageSize: 'standard' }, messages: [{ id: 'message', role: 'user', content: 'Text' }] }
-    await nextTick()
+    await vi.waitFor(() => expect(chat.current?.sessionProfile?.messageSize).toBe('standard'))
     mocks.resetMessageSizes.mockClear()
     const previousInput = root.querySelector('.chat-composer__input')
 
@@ -644,6 +717,7 @@ describe('voice attachment composer', () => {
     chat.outboxLoaded = true
     mocks.api.get.mockImplementation(async (url) => ({ data: url.startsWith('/sessions/session-')
       ? { id: url.split('/').pop(), messages: [] } : { items: [] } }))
+    await chat.setSessionScope('draft')
     await router.push('/?project=draft')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.chat-start-project')).not.toBeNull())
@@ -655,7 +729,7 @@ describe('voice attachment composer', () => {
     expect(document.activeElement).not.toBe(input)
     expect(mocks.api.post).not.toHaveBeenCalledWith('/sessions', expect.anything())
 
-    await router.push('/?new=1')
+    await router.push('/?new=1&project=draft')
     await vi.waitFor(() => expect(root.querySelector('h1')?.textContent).toBe('Neue Session'))
     expect(root.querySelector('.home-stub')).toBeNull()
     expect(root.querySelector('.chat-input-dock textarea')).toBe(input)
@@ -1087,11 +1161,16 @@ describe('voice attachment composer', () => {
     expect(chat.activeAttachmentDraft).toEqual([])
   })
 
-  it.each(['recording', 'starting', 'finalizing'])('hands off actual route navigation while %s', async (state) => {
+  it.each([
+    ['recording', false], ['starting', false], ['finalizing', false], ['recording', true]
+  ])('hands off actual route navigation while %s (archived destination: %s)', async (state, archived) => {
     chat.outboxLoaded = true
-    mocks.api.get.mockImplementation(async (url) => ({ data: url.startsWith('/sessions/session-')
-      ? { id: url.split('/').pop(), messages: [] }
-      : { items: [] } }))
+    const destination = { id: 'session-2', archived, messages: [] }
+    if (archived) chat.ensureSessionList().items = [destination]
+    mocks.api.get.mockImplementation(async (url) => ({ data: {
+      '/sessions/session-1': { id: 'session-1', messages: [] },
+      '/sessions/session-2': destination
+    }[url] || { items: [] } }))
     showPage.value = true
     await vi.waitFor(() => expect(mocks.api.get.mock.calls.some(([url]) => url === '/sessions/session-1')).toBe(true))
     await vi.waitFor(() => expect(chat.current?.id).toBe('session-1'))
@@ -1104,6 +1183,7 @@ describe('voice attachment composer', () => {
     if (state === 'finalizing') await click('Sprachnachricht beenden')
     mocks.api.get.mockClear()
     await router.push('/?session=session-2')
+    await nextTick()
     if (state !== 'starting') {
       expect(mocks.recorder.stopRecording).toHaveBeenCalledOnce()
       expect(chat.current.id).toBe('session-1')

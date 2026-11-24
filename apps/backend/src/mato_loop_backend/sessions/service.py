@@ -86,6 +86,9 @@ from .cleanup import descendant_sessions
 logger = logging.getLogger(__name__)
 VISIBLE_MESSAGE_ROLES = ("user", "assistant")
 ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_approval", "waiting_input")
+_MESSAGE_PAGE_BYTES = 192_000
+_HISTORY_PREVIEW_SECTIONS = 6
+_HISTORY_PREVIEW_CARRIERS = 120
 
 
 PayloadSerializer = Callable[..., Awaitable[dict[str, Any]]]
@@ -404,12 +407,14 @@ async def session_detail_payload(
     session_serializer: PayloadSerializer,
     message_serializer: MessageSerializer,
     context_summary_serializer: MessageSerializer,
+    history_preview: bool = False,
 ) -> dict[str, Any]:
     messages, context_summaries, next_message_cursor = await session_message_page(
         db,
         item.id,
         page_size=20,
         cursor=None,
+        history_preview=history_preview,
     )
     attributions = await message_attributions(db, messages)
     latest_run = await db.scalar(
@@ -563,6 +568,7 @@ async def session_message_page(
     *,
     page_size: int,
     cursor: UUID | None,
+    history_preview: bool = False,
 ) -> tuple[list[Message], list[ContextSummary], str | None]:
     upper_bound: tuple[datetime, UUID] | None = None
     if cursor is not None:
@@ -579,8 +585,7 @@ async def session_message_page(
             raise SessionServiceError(400, "validation.invalid", field="cursor")
         upper_bound = (cursor_row.created_at, cursor_row.id)
 
-    # Page by individual visible messages, not user turns. Keep each tool-call
-    # carrier with its results so the transcript never receives orphan results.
+    # Keep each tool-call carrier with its results, including on cursor pages.
     anchors_statement = select(
         Message.created_at, Message.id,
         (func.octet_length(Message.content)
@@ -591,26 +596,45 @@ async def session_message_page(
         Message.session_id == session_id,
         Message.role != "tool",
     )
-    if upper_bound is not None:
+    preview = history_preview and upper_bound is None
+    if preview:
+        # The UI folds consecutive assistants together. A preceding user (or
+        # standalone automation reply) starts a new section and gives it a stable key.
+        anchors_statement = anchors_statement.add_columns(or_(
+            Message.role != "assistant",
+            Message.provider_data["_matoloop"]["source"]["type"].as_string() == "automationRun",
+        ).label("section_start"))
+    elif upper_bound is not None:
         anchors_statement = anchors_statement.where(
             tuple_(Message.created_at, Message.id) < upper_bound
         )
+    carrier_limit = _HISTORY_PREVIEW_CARRIERS if preview else page_size
     anchors = (
         await db.execute(
             anchors_statement.order_by(Message.created_at.desc(), Message.id.desc()).limit(
-                page_size + 1
+                carrier_limit + 1
             )
         )
     ).all()
-    page_anchors = anchors[:page_size]
     # This is an approximate visible-message budget, not a response-size cap.
     # A carrier and its parallel results remain atomic; tool bodies/arguments are lazy.
-    size = 0
-    for index, anchor in enumerate(page_anchors):
+    count = size = sections = last_boundary = 0
+    for anchor in anchors[:carrier_limit]:
         size += getattr(anchor, "payload_bytes", 0)
-        if index and size > 192_000:
-            page_anchors = page_anchors[:index]
+        if count and size > _MESSAGE_PAGE_BYTES:
             break
+        count += 1
+        if preview and anchor.section_start:
+            sections += 1
+            last_boundary = count
+            # Keep short sessions whole; otherwise, stop at the target section.
+            if sections >= _HISTORY_PREVIEW_SECTIONS and len(anchors) > page_size:
+                break
+    if preview and last_boundary and count < len(anchors):
+        # If the budget cuts an older section in half, leave that section for
+        # the cursor page rather than changing its group when history is loaded.
+        count = last_boundary
+    page_anchors = anchors[:count]
     if not page_anchors:
         # Legacy tool-only histories have no carrier to render safely.
         return [], [], None

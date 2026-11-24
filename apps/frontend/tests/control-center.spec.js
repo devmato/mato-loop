@@ -194,16 +194,40 @@ describe('control center store', () => {
   })
 
   it('does not reopen after an explicit close while app state is saving', async () => {
+    Screen.lt.md = true
     const store = useControlCenterStore()
     store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
-    await store.setOpen(true)
     let resolve
     api.patch.mockReturnValueOnce(new Promise(done => { resolve = done }))
     const opening = store.openApp('session')
+    expect(store.open).toBe(true)
     await store.setOpen(false)
     resolve(response([tab('files')], 'session'))
     await opening
     expect(store.open).toBe(false)
+  })
+
+  it('does not reopen or persist a preview closed while loading the desktop preference', async () => {
+    const store = useControlCenterStore()
+    useSessionTabsStore().$patch({ owner: 'user-1' })
+    let finishWorkspace
+    api.get.mockReturnValueOnce(new Promise((resolve) => { finishWorkspace = resolve }))
+
+    const opening = store.openApp('session')
+    expect(store.open).toBe(true)
+    const closing = store.setOpen(false)
+    finishWorkspace({ data: { sessionTabs: [], controlCenterOpen: false } })
+    await Promise.all([opening, closing])
+
+    expect(store.open).toBe(false)
+    expect(api.put).not.toHaveBeenCalled()
+  })
+
+  it('reopens the confirmed active app without patching the session', async () => {
+    const store = useControlCenterStore()
+    store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'session' } })
+    await store.openApp('session')
+    expect(api.patch).not.toHaveBeenCalled()
   })
 
   it.each(['notifications', 'approvals'])('opens %s as notifications without saving session state', async (appId) => {
@@ -245,17 +269,25 @@ describe('control center store', () => {
   })
 
   it('adds and persists an integration for the active session', async () => {
-    api.patch.mockResolvedValue(response([tab('files'), tab('calendar')], 'calendar'))
+    let finishSave
+    api.patch.mockReturnValueOnce(new Promise((resolve) => { finishSave = resolve }))
+    api.put.mockResolvedValue({ data: { sessionTabs: [], controlCenterOpen: true } })
     const store = useControlCenterStore()
+    useSessionTabsStore().$patch({ owner: 'user-1', loaded: true })
     store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
 
-    await store.openApp('calendar')
+    const opening = store.openApp('calendar')
+    expect(store.open).toBe(true)
+    expect(api.put).not.toHaveBeenCalled()
+    finishSave(response([tab('files'), tab('calendar')], 'calendar'))
+    await opening
 
     expect(store.activeContentId).toBe('calendar')
     expect(store.open).toBe(true)
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
       control_center: requestState(['session', 'files', 'calendar'], 'calendar')
     })
+    expect(api.put).toHaveBeenCalledWith('/users/me/workspace-state', { controlCenterOpen: true })
   })
 
   it('adds a background integration without opening or activating the panel', async () => {
@@ -295,6 +327,7 @@ describe('control center store', () => {
   it('restores the prior server state after a failed mutation', async () => {
     api.patch.mockRejectedValue(new Error('request failed'))
     const store = useControlCenterStore()
+    useSessionTabsStore().$patch({ owner: 'user-1', loaded: true })
     store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
 
     await expect(store.openApp('calendar')).rejects.toThrow('request failed')
@@ -302,25 +335,27 @@ describe('control center store', () => {
     expect(store.tabs).toEqual([tab('session'), tab('files')])
     expect(store.activeAppId).toBe('files')
     expect(store.open).toBe(false)
+    expect(api.put).not.toHaveBeenCalled()
   })
 
   it('unlocks persistence when the session changes during a save', async () => {
     let resolveFirst
     api.patch
       .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
-      .mockResolvedValueOnce(response([tab('files'), tab('test-app')], 'test-app'))
+      .mockResolvedValueOnce(response([tab('files'), tab('test-app')], 'files'))
     const store = useControlCenterStore()
     store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
     const oldSave = store.openApp('calendar')
 
     store.syncSession({ id: 'session-2', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
     expect(store.saving).toBe(false)
-    await store.openApp('test-app')
+    await store.ensureApp('test-app')
     resolveFirst(response([tab('files'), tab('calendar')], 'calendar'))
     await oldSave
 
     expect(store.sessionId).toBe('session-2')
-    expect(store.activeAppId).toBe('test-app')
+    expect(store.tabs).toEqual([tab('session'), tab('files'), tab('test-app')])
+    expect(store.open).toBe(false)
     expect(store.saving).toBe(false)
   })
 
@@ -507,6 +542,8 @@ describe('control center store', () => {
 
   it('defers integration shortcuts until authoritative session state is loaded', async () => {
     const store = useControlCenterStore()
+    useSessionTabsStore().$patch({ owner: 'user-1', loaded: true })
+    api.put.mockResolvedValue({ data: { sessionTabs: [], controlCenterOpen: true } })
     store.bindSession({
       id: 'session-1',
       controlCenter: { tabs: [tab('files')], activeAppId: 'files' }
@@ -514,19 +551,33 @@ describe('control center store', () => {
 
     await store.openApp('calendar')
     expect(api.patch).not.toHaveBeenCalled()
+    expect(api.put).not.toHaveBeenCalled()
     expect(store.requestedAppId).toBe('calendar')
     api.patch.mockResolvedValue(response([tab('files'), tab('calendar')], 'calendar'))
     store.syncSession({
       id: 'session-1',
       controlCenter: { tabs: [tab('files')], activeAppId: 'files' }
     })
-    await vi.waitFor(() => expect(api.patch).toHaveBeenCalled())
+    await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/users/me/workspace-state', { controlCenterOpen: true }))
 
     expect(api.patch.mock.calls[0][1].control_center.tabs).toEqual([
       requestTab('session'),
       requestTab('files'),
       requestTab('calendar')
     ])
+  })
+
+  it('closes the local preview without persisting visibility when a deferred app save fails', async () => {
+    const store = useControlCenterStore()
+    useSessionTabsStore().$patch({ owner: 'user-1', loaded: true })
+    const session = { id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } }
+    store.bindSession(session)
+    await store.openApp('calendar')
+    const previewWasVisible = store.open
+    api.patch.mockRejectedValueOnce(new Error('request failed'))
+    store.syncSession(session)
+    await vi.waitFor(() => expect(store.saving).toBe(false))
+    expect([previewWasVisible, store.activeAppId, store.open, api.put.mock.calls.length]).toEqual([true, 'files', false, 0])
   })
 
   it.each(['calendar', 'notifications', 'approvals'])('does not carry a deferred %s shortcut into another session', async (appId) => {

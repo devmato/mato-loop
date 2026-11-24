@@ -100,15 +100,8 @@
           @virtual-scroll="handleVirtualScroll"
         >
           <template #before>
-            <div v-if="chat.olderMessagesLoading" class="absolute-top q-px-md" role="status">
-              <div class="chat-history-loading" aria-hidden="true">
-                <q-skeleton type="text" width="42%" height="10px" />
-                <q-skeleton type="text" width="72%" height="10px" />
-              </div>
-              <span class="app-sr-only">Ältere Nachrichten werden geladen</span>
-            </div>
             <q-banner
-              v-else-if="chat.olderMessagesLoadFailed && !positionLoadFailed"
+              v-if="chat.olderMessagesLoadFailed && !positionLoadFailed"
               dense
               rounded
               class="app-surface-tonal q-mb-md"
@@ -118,6 +111,13 @@
                 <q-btn flat dense no-caps color="primary" label="Erneut versuchen" @click="loadOlderHistory" />
               </template>
             </q-banner>
+            <div v-else-if="chat.current?.nextMessageCursor" class="row justify-center q-mb-sm">
+              <q-btn
+                flat dense no-caps color="primary" label="Ältere Nachrichten laden"
+                :loading="chat.olderMessagesLoading" @click="loadOlderHistory"
+              />
+              <span v-if="chat.olderMessagesLoading" class="app-sr-only" role="status">Ältere Nachrichten werden geladen</span>
+            </div>
           </template>
           <template #default="{ item: message }">
             <div
@@ -178,7 +178,8 @@
     </q-scroll-area>
 
     <div
-      v-if="!chat.loadError && !chat.current?.readOnly && !chat.current?.archived && (chat.loading || !routeSessionId || chat.current)"
+      v-if="!chat.loadError && (audioNavigationPending || (!composerReadOnly && (chat.loading || !routeSessionId || routeSession || chat.current)))"
+      v-show="!composerReadOnly"
       class="chat-composer-region"
     >
       <transition name="chat-scroll-jump">
@@ -269,23 +270,22 @@
         />
         <ChatComposer
           ref="composer"
-          :autofocus="!chat.loading && !showHome"
-          :session="chat.loading ? null : chat.activeContext"
+          :autofocus="!composerDraftDisabled && !showHome && !routeMessageId"
+          :session="routeSessionId ? routeSession : composerMatchesActive && !chat.loading ? chat.activeContext : null"
+          :draft-scope-key="composerScopeKey"
           :read-draft="readComposerDraft"
-          :disabled="chat.loading || changingDraftProject || !chat.outboxLoaded
-            || chat.outboxSaving
-            || chat.historyActionPending || Boolean(chat.queueUndoId)
-            || (!chat.current && chat.activeQueuedMessages.length > 0)"
-          :running="!chat.loading && chat.running"
+          :draft-disabled="composerDraftDisabled"
+          :disabled="composerActionsDisabled"
+          :running="composerMatchesActive && !chat.loading && chat.running"
           :stopping="chat.stopping"
           :queue-mode="chat.messageQueueActive"
-          :attachments="chat.loading || pendingDraft ? emptyItems : chat.activeAttachmentDraft"
+          :attachments="!composerMatchesActive || chat.loading || pendingDraft ? emptyItems : chat.activeAttachmentDraft"
           @add-attachments="addAttachmentFiles"
-          @remove-attachment="chat.removeAttachmentFile"
+          @remove-attachment="!composerActionsDisabled && chat.removeAttachmentFile($event)"
           @send="send"
           @stop="chat.stop"
-          @update="chat.updateActive"
-          @update:draft="chat.setDraft($event, { defer: true })"
+          @update="!composerActionsDisabled && chat.updateActive($event)"
+          @update:draft="updateComposerDraft"
         />
       </div>
     </div>
@@ -342,6 +342,7 @@ import HomeContent from 'src/features/home/HomeContent.vue'
 import ComputerChoiceStrip from 'src/features/chat/components/ComputerChoiceStrip.vue'
 import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
 import ChatComposer from 'src/features/chat/components/ChatComposer.vue'
+import { newSessionQueueKey, queueKeyForEntry, sessionScopeKey } from './state'
 import { parseQuotedMessage } from './quote-drafts'
 import { useChatViewport } from './useChatViewport'
 import { useChatNavigation } from './useChatNavigation'
@@ -462,10 +463,6 @@ async function setTodosCollapsed(collapsed) {
 }
 const trustedImageOriginsBySession = ref(new Map())
 const expandedWorkHistoryIds = ref(new Set())
-const pendingDraft = computed(() => chat.activePendingMessage && !chat.activePendingMessage.preserveDraft)
-const readComposerDraft = () => chat.loading || pendingDraft.value ? '' : chat.activeDraft
-const canQuote = computed(() => Boolean(composer.value) && !composer.value?.quoteEditing && !chat.loading && !pendingDraft.value
-  && !changingDraftProject.value && chat.outboxLoaded && !chat.outboxSaving && !chat.historyActionPending)
 const sendingMessageId = computed(() => chat.queueSendingEntryId || (
   chat.activity.phase === 'submitting' || chat.activePendingMessage?.continuationRunId
     ? chat.activePendingMessage?.id : null
@@ -487,7 +484,8 @@ function setWorkHistoryExpanded(messageId, expanded) {
   else next.delete(messageId)
   expandedWorkHistoryIds.value = next
 }
-const { routeSessionId, routeProjectId, routeSubagentId, newSessionRequested, loadRouteSession } = useChatNavigation({
+const { routeSessionId, routeProjectId, routeMessageId, routeSubagentId, routeSession,
+  destination, personalRequested, newSessionRequested, audioNavigationPending, loadRouteSession } = useChatNavigation({
   chat, route, router, composer, controlCenter, subagents, projects
 })
 const isNewConversation = computed(() => !routeSessionId.value && !chat.current && !chat.loading && !chat.loadError)
@@ -496,6 +494,43 @@ const draftProjectLabel = computed(() => routeProjectId.value
   ? projects.items.find(project => project.id === routeProjectId.value)?.name || 'Projekt'
   : 'Ohne Projekt')
 const changingDraftProject = ref(false)
+const submittingDraftScopeKey = ref(null)
+const composerScopeKey = computed(() => JSON.stringify([
+  chat.draftOwnerUserId, routeSessionId.value, routeSessionId.value ? null : routeProjectId.value
+]))
+const composerReadOnly = computed(() => Boolean(
+  routeSession.value?.readOnly || routeSession.value?.archived || routeSession.value?.archivedAt
+))
+const composerMatchesActive = computed(() => routeSessionId.value
+  ? chat.current?.id === routeSessionId.value
+  : !personalRequested.value && !chat.current && chat.selectedSessionId === null
+    && chat.sessionsProjectId === routeProjectId.value)
+const composerHasDraftScope = computed(() => Boolean(chat.draftOwnerUserId) && !chat.loadError && (
+  routeSessionId.value ? Boolean(routeSession.value) && !composerReadOnly.value : composerMatchesActive.value && !chat.loading
+))
+const pendingDraft = computed(() => {
+  const pending = chat.pendingOutboxEntry
+  return Boolean(pending && !pending.preserveDraft && queueKeyForEntry(pending) === (
+    routeSessionId.value || newSessionQueueKey(routeProjectId.value)
+  ))
+})
+const composerActionsDisabled = computed(() => !composerHasDraftScope.value || !composerMatchesActive.value
+  || chat.loading || changingDraftProject.value || !chat.outboxLoaded || chat.outboxSaving
+  || chat.historyActionPending || Boolean(chat.queueUndoId) || pendingDraft.value
+  || (!routeSessionId.value && chat.activeQueuedMessages.length > 0))
+const composerDraftDisabled = computed(() => !composerHasDraftScope.value || pendingDraft.value
+  || chat.historyActionPending || Boolean(chat.queueUndoId)
+  || (routeSessionId.value ? submittingDraftScopeKey.value === composerScopeKey.value : composerActionsDisabled.value))
+const readComposerDraft = () => {
+  if (!composerHasDraftScope.value || pendingDraft.value) return ''
+  const id = routeSessionId.value
+  return id ? chat.drafts.sessionMessages[id] || '' : chat.drafts.newSessions[sessionScopeKey(routeProjectId.value)]?.message || ''
+}
+function updateComposerDraft(message, scopeKey) {
+  if (composerDraftDisabled.value || scopeKey !== composerScopeKey.value) return
+  chat.setDraft(message, { defer: true, sessionId: routeSessionId.value, projectId: routeProjectId.value })
+}
+const canQuote = computed(() => Boolean(composer.value) && !composer.value?.quoteEditing && !composerActionsDisabled.value)
 const draftProjectDialogOpen = ref(false)
 let draftProjectCreationContext = null
 const draftProjectOptions = computed(() => [
@@ -781,8 +816,8 @@ async function loadBackgroundData() {
     templates.load(),
     integrations.fetchEffectiveSearch(),
     mail.fetchAccounts(),
-    approvals.fetchPending(),
-    questions.fetchPending(),
+    approvals.ensurePending(),
+    questions.ensurePending(),
     chat.fetchDefaults(),
     toolSettings.fetchAvailability(),
     instanceLimits.fetchSettings(),
@@ -804,12 +839,16 @@ async function loadBackgroundData() {
 }
 
 async function send(content, options) {
-  enableFollowMode()
+  if (composerActionsDisabled.value) return
+  const scopeKey = composerScopeKey.value
+  submittingDraftScopeKey.value = scopeKey
   try {
+    enableFollowMode()
     await chat.send(content, options)
   } finally {
+    if (!chat.outboxSaving && submittingDraftScopeKey.value === scopeKey) submittingDraftScopeKey.value = null
     await nextTick()
-    composer.value?.focus()
+    if (scopeKey === composerScopeKey.value) composer.value?.focus()
   }
 }
 
@@ -819,16 +858,24 @@ async function sendPreparedAnswer(content) {
 }
 
 function addAttachmentFiles(files, done, options) {
+  // A recording finishing during navigation still belongs to its original scope.
+  if (options ? options.ownerUserId !== chat.draftOwnerUserId : composerActionsDisabled.value) return
   const result = chat.addAttachmentFiles(files, options)
   if (result.error) $q.notify({ type: 'negative', message: result.error })
   done?.(result)
 }
 
-watch([newSessionRequested, routeProjectId], async ([requested]) => {
-  if (!requested || !isNewConversation.value) return
-  await nextTick()
-  composer.value?.focus({ automatic: true })
-})
+watch(() => chat.outboxSaving, saving => {
+  // The send may wait for settings before exposing its pending outbox entry.
+  if (!saving) submittingDraftScopeKey.value = null
+}, { flush: 'sync' })
+let focusedDestination = null
+watch([destination, composerDraftDisabled, routeMessageId, composer], ([target, disabled, message, input], [previous]) => {
+  if (target !== previous) focusedDestination = null
+  if (!input || disabled || message || focusedDestination === target || (!routeSessionId.value && !newSessionRequested.value)) return
+  focusedDestination = target
+  input.focus({ automatic: true })
+}, { flush: 'post', immediate: true })
 watch(showHome, async (shown) => {
   if (!shown) return
   await nextTick()
@@ -849,11 +896,11 @@ watch(
   { immediate: true }
 )
 watch(
-  [activeQuestion, () => chat.running],
-  async ([question, running], [previousQuestion, wasRunning]) => {
-    if (question || running || (!previousQuestion && !wasRunning)) return
+  [activeQuestion, () => chat.running, composerScopeKey],
+  async ([question, running, scope], [previousQuestion, wasRunning, previousScope]) => {
+    if (scope !== previousScope || question || running || (!previousQuestion && !wasRunning)) return
     await nextTick()
-    composer.value?.focus({ automatic: true })
+    if (scope === composerScopeKey.value && !routeMessageId.value) composer.value?.focus({ automatic: true })
   }
 )
 watch(

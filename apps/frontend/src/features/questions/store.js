@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
-import { queueRefresh } from 'src/utils/queued-refresh'
+import { queueRefresh, waitForRefresh } from 'src/utils/queued-refresh'
 import { reconcileApiRows } from 'src/utils/api-snapshot'
 import { errorDescriptor } from 'src/utils/api-errors'
 
@@ -24,6 +24,10 @@ export const useQuestionStore = defineStore('questions', {
     forSession: (state) => (sessionId) => state.pending.filter((item) => item.sessionId === sessionId)
   },
   actions: {
+    ensurePending() {
+      if (this.loading) return waitForRefresh(this)
+      return this.loaded && !this.loadFailed ? Promise.resolve() : this.fetchPending()
+    },
     async fetchPending(config = {}) {
       return queueRefresh(this, config, async (revision) => {
         this.loading = true

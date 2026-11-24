@@ -1,46 +1,30 @@
-import AgentCodingApp from 'src/features/coding/AgentCodingApp.vue'
-import GitApp from 'src/features/coding/GitApp.vue'
-import AutomationApp from 'src/features/automations/AutomationApp.vue'
-import ComputerFileExplorerPanel from 'src/features/files/components/ComputerFileExplorerPanel.vue'
-import FileExplorerPanel from 'src/features/files/components/FileExplorerPanel.vue'
-import FileExplorerFooter from 'src/features/files/components/FileExplorerFooter.vue'
-import FileViewerApp from 'src/features/files/components/FileViewerApp.vue'
-import FileViewerFooter from 'src/features/files/components/FileViewerFooter.vue'
-import NotificationCenterApp from 'src/features/notifications/NotificationCenterApp.vue'
-import MailApp from 'src/features/mail/MailApp.vue'
-import TbsDeskApp from 'src/features/tbs-desk/TbsDeskApp.vue'
-import CodingApp from 'src/features/coding/CodingApp.vue'
-import SessionApp from 'src/features/chat/components/SessionApp.vue'
-import SessionFooter from 'src/features/chat/components/SessionFooter.vue'
-import TerminalApp from 'src/features/terminal/TerminalApp.vue'
-import TerminalFooter from 'src/features/terminal/TerminalFooter.vue'
-import BrowserApp from 'src/features/browser/BrowserApp.vue'
+import { defineAsyncComponent } from 'vue'
 import {
   controlCenterGlobalSectionManifest,
   controlCenterIntegrationManifest
 } from 'src/app/control-center/manifest'
 
 const components = {
-  session: SessionApp,
-  'agent-coding': AgentCodingApp,
-  git: GitApp,
-  files: FileExplorerPanel,
-  automation: AutomationApp,
-  'computer-files': ComputerFileExplorerPanel,
-  'file-viewer': FileViewerApp,
-  mail: MailApp,
-  'tbs-desk': TbsDeskApp,
-  coding: CodingApp,
-  terminal: TerminalApp,
-  browser: BrowserApp,
-  notifications: NotificationCenterApp
+  session: defineAsyncComponent(() => import('src/features/chat/components/SessionApp.vue')),
+  'agent-coding': defineAsyncComponent(() => import('src/features/coding/AgentCodingApp.vue')),
+  git: defineAsyncComponent(() => import('src/features/coding/GitApp.vue')),
+  files: defineAsyncComponent(() => import('src/features/files/components/FileExplorerPanel.vue')),
+  automation: defineAsyncComponent(() => import('src/features/automations/AutomationApp.vue')),
+  'computer-files': defineAsyncComponent(() => import('src/features/files/components/ComputerFileExplorerPanel.vue')),
+  'file-viewer': defineAsyncComponent(() => import('src/features/files/components/FileViewerApp.vue')),
+  mail: defineAsyncComponent(() => import('src/features/mail/MailApp.vue')),
+  'tbs-desk': defineAsyncComponent(() => import('src/features/tbs-desk/TbsDeskApp.vue')),
+  coding: defineAsyncComponent(() => import('src/features/coding/CodingApp.vue')),
+  terminal: defineAsyncComponent(() => import('src/features/terminal/TerminalApp.vue')),
+  browser: defineAsyncComponent(() => import('src/features/browser/BrowserApp.vue')),
+  notifications: defineAsyncComponent(() => import('src/features/notifications/NotificationCenterApp.vue'))
 }
 
 const footerComponents = {
-  session: SessionFooter,
-  files: FileExplorerFooter,
-  'file-viewer': FileViewerFooter,
-  terminal: TerminalFooter
+  session: defineAsyncComponent(() => import('src/features/chat/components/SessionFooter.vue')),
+  files: defineAsyncComponent(() => import('src/features/files/components/FileExplorerFooter.vue')),
+  'file-viewer': defineAsyncComponent(() => import('src/features/files/components/FileViewerFooter.vue')),
+  terminal: defineAsyncComponent(() => import('src/features/terminal/TerminalFooter.vue'))
 }
 
 function withComponents(items) {

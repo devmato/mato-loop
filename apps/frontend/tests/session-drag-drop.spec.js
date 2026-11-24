@@ -118,7 +118,7 @@ vi.mock('stores/control-center', async () => {
       else this.desktopOpen = open
     }),
     openApp: vi.fn(async function () { await this.setOpen(true) }),
-    ensureApp: vi.fn().mockResolvedValue(),
+    ensureApp: vi.fn().mockResolvedValue(), cancelPendingReveal: vi.fn(),
     removeFileTabs: vi.fn().mockResolvedValue()
   })
   return { useControlCenterStore: () => store }
@@ -339,6 +339,22 @@ it('does not refresh the visible transcript for a background message and an unre
   }
 })
 
+it('updates summaries without reloading the transcript on a read acknowledgement', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  const route = useRoute()
+  const previous = route.query
+  route.query = { session: 'standalone' }
+  try {
+    EventSource.instances[0].emit([{ resource: 'session_read', sessionId: 'standalone' }])
+    await vi.advanceTimersByTimeAsync(50)
+    expect([chat.syncSessionSummaries.mock.calls, chat.refreshSession.mock.calls])
+      .toEqual([[[['standalone'], { suppressErrorToast: true }]], []])
+  } finally {
+    route.query = previous
+    visibility.mockRestore()
+  }
+})
+
 it('coalesces targeted summary updates and retains their IDs when retrying', async () => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
   chat.syncSessionSummaries.mockRejectedValueOnce(new Error('offline'))
@@ -407,14 +423,18 @@ it('retains a session hint before its initial response has populated the current
 
 it('reconciles an external run hint and reloads on reconnect', async () => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  const refreshWorkspace = vi.spyOn(useSessionTabsStore(), 'refreshWorkspace').mockResolvedValue()
   useChatStore().current = { id: 'standalone', messages: [] }
   useRoute().query = { session: 'standalone' }
   const source = EventSource.instances[0]
   source.emit([{ resource: 'sessions', sessionId: 'standalone' }])
   await vi.advanceTimersByTimeAsync(50)
+  source.emit([{ resource: 'workspace' }])
+  await vi.advanceTimersByTimeAsync(50)
   source.emit([{ resource: 'all' }])
   await vi.advanceTimersByTimeAsync(50)
-  expect(useChatStore().refreshSession).toHaveBeenCalledTimes(2)
+  expect([useChatStore().refreshSession.mock.calls.length, refreshWorkspace.mock.calls.length]).toEqual([2, 2])
+  refreshWorkspace.mockRestore()
   visibility.mockRestore()
 })
 

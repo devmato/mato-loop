@@ -809,6 +809,7 @@ async def get_session(
     session_id: UUID,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    history_preview: Annotated[bool, Query(alias="historyPreview")] = False,
 ) -> dict:
     item = await _owned_session(db, session_id, user.id)
     if item is None:
@@ -819,6 +820,7 @@ async def get_session(
         session_serializer=_session_payload,
         message_serializer=partial(message_payload, compact=True),
         context_summary_serializer=context_summary_payload,
+        history_preview=history_preview,
     )
 
 
@@ -955,6 +957,7 @@ async def mark_session_read(
                 ChatSession.last_read_at < read_at,
             )
             .values(last_read_at=read_at, updated_at=ChatSession.updated_at)
+            .execution_options(matoloop_session_read=True)
         )
     from mato_loop_backend.notifications import NotificationService
 

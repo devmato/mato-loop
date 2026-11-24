@@ -12,10 +12,9 @@
       </q-banner>
       <section aria-labelledby="home-sessions">
         <h2 id="home-sessions" class="text-weight-medium q-mt-none q-mb-xs" :class="$q.screen.lt.sm ? 'text-subtitle2' : 'text-subtitle1'">Zuletzt aktiv</h2>
-        <div v-if="!visitReady && !home.loadFailed" aria-label="Sessions werden geladen">
+        <div v-if="!home.loaded && !home.loadFailed" aria-label="Sessions werden geladen">
           <q-skeleton v-for="index in 3" :key="index" type="text" class="q-my-md" />
         </div>
-        <p v-else-if="home.loadFailed" class="app-muted">Sessions konnten nicht geladen werden.</p>
         <q-list v-else-if="recentSessions.length">
           <q-item v-for="session in recentSessions" :key="session.id" clickable v-ripple :dense="$q.screen.lt.sm" :active="false" @click="openSession(session)" class="home-activity-row rounded-borders q-px-sm" :class="[$q.screen.lt.sm ? 'q-py-xs' : 'q-py-sm', { 'home-activity-row--menu-open': openSessionMenuId === session.id }]">
             <q-item-section side class="q-pr-sm">
@@ -43,6 +42,7 @@
             </q-item-section>
           </q-item>
         </q-list>
+        <p v-else-if="home.loadFailed" class="app-muted">Sessions konnten nicht geladen werden.</p>
         <p v-else class="app-muted q-mt-sm">Deine letzten Gespräche erscheinen hier.</p>
       </section>
       <section v-if="ready(automations) && upcoming.length" class="q-mt-lg" aria-labelledby="home-automations">
@@ -126,7 +126,6 @@ const {
 })
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
 const refreshing = ref(false)
-const visitReady = ref(false)
 const ready = (store) => store.loaded && !store.loadFailed
 const greeting = computed(() => {
   const name = ready(profile) && [profile.preferredName, profile.fullName]
@@ -157,7 +156,6 @@ const projectName = (id) => id ? projects.items.find((item) => item.id === id)?.
 async function refresh() {
   if (refreshing.value) return
   refreshing.value = true
-  visitReady.value = false
   try {
     await Promise.allSettled([
       home.load(), projects.fetchAll(), automations.fetchAutomations(),
@@ -165,15 +163,12 @@ async function refresh() {
     ])
   } finally {
     await Promise.allSettled([waitForRefresh(approvals), waitForRefresh(questions), waitForRefresh(home)])
-    visitReady.value = true
     refreshing.value = false
   }
 }
 
-onMounted(async () => {
-  await Promise.allSettled([home.beginVisit(), approvals.fetchPending(), questions.fetchPending(), profile.fetchProfile()])
-  await Promise.allSettled([waitForRefresh(approvals), waitForRefresh(questions), waitForRefresh(home)])
-  visitReady.value = true
+onMounted(() => {
+  void Promise.allSettled([home.beginVisit(), approvals.ensurePending(), questions.ensurePending(), profile.fetchProfile()])
 })
 onBeforeUnmount(() => home.endVisit())
 </script>

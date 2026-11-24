@@ -5,6 +5,8 @@ import { reorderedTabs } from 'src/shared/ui/useTabReorder'
 import { queueRefresh } from 'src/utils/queued-refresh'
 import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
 import { equalJson } from 'src/utils/api-snapshot'
+import { useAutomationStore } from 'stores/automations'
+import { useWorkspaceStore } from 'stores/workspace'
 
 export const sessionTabKey = (sessionId, projectId = null) => sessionId || `draft:${projectId || 'standalone'}`
 export const sessionTabTarget = (tab) => ({
@@ -15,9 +17,11 @@ export const sessionTabTarget = (tab) => ({
   }
 })
 
+const hasDirtyControlCenter = () => useAutomationStore().dirty || useWorkspaceStore().hasDirtyEditors
+
 export const useSessionTabsStore = defineStore('session-tabs', {
-  state: () => ({ items: [], summaries: {}, summaryVersions: {}, summaryRevision: 0, readingPositions: {}, owner: null, loaded: false, loading: false, loadRequest: null,
-    followLatestRequest: null, lastVisitedKey: null, visitClock: 0, controlCenterOpen: false, confirmed: { sessionTabs: [], controlCenterOpen: false }, pending: null, saving: null, revision: 0, generation: 0 }),
+  state: () => ({ items: [], summaries: {}, summaryVersions: {}, summaryRevision: 0, readingPositions: {}, owner: null, loaded: false, loading: false, loadRequest: null, queuedWorkspaceRefresh: null,
+    followLatestRequest: null, lastVisitedKey: null, visitClock: 0, controlCenterOpen: false, deferredControlCenterClose: false, confirmed: { sessionTabs: [], controlCenterOpen: false }, pending: null, saving: null, revision: 0, generation: 0 }),
   actions: {
     async setOwner(owner) {
       if (this.owner === owner) return
@@ -28,13 +32,14 @@ export const useSessionTabsStore = defineStore('session-tabs', {
       this.owner = owner
       if (owner) await this.fetchWorkspace()
     },
-    fetchWorkspace() {
+    fetchWorkspace(config) {
+      if (!this.owner) return Promise.resolve()
+      if (this.saving) return this.refreshWorkspace(config)
       if (this.loadRequest) return this.loadRequest
-      if (!this.owner || this.saving) return Promise.resolve()
       const generation = this.generation, revision = this.revision
       this.loading = true
       const request = (async () => { try {
-        const { data } = await api.get('/users/me/workspace-state')
+        const { data } = await (config ? api.get('/users/me/workspace-state', config) : api.get('/users/me/workspace-state'))
         if (generation !== this.generation || revision !== this.revision) return
         this.applyWorkspace(data)
         this.confirmed = data
@@ -44,14 +49,39 @@ export const useSessionTabsStore = defineStore('session-tabs', {
       this.loadRequest = markRaw(request)
       return request
     },
+    refreshWorkspace(config) {
+      if (!this.owner) return Promise.resolve()
+      if (this.queuedWorkspaceRefresh) return this.queuedWorkspaceRefresh
+      if (!this.saving && !this.loadRequest) return this.fetchWorkspace(config)
+      const generation = this.generation
+      const request = (async () => {
+        // An in-flight response may have been taken before the invalidation.
+        while (generation === this.generation && (this.saving || this.loadRequest)) {
+          await (this.saving || this.loadRequest).catch(() => {})
+        }
+        if (generation !== this.generation) return
+        this.queuedWorkspaceRefresh = null
+        return this.fetchWorkspace(config)
+      })()
+      this.queuedWorkspaceRefresh = markRaw(request)
+      return request
+    },
     applyWorkspace(data) {
       const localUsage = new Map(this.items.map(tab => [tab.key, tab.lastUsedAt ?? 0]))
-      this.items = (data.sessionTabs || []).map((tab, index) => {
+      const items = (data.sessionTabs || []).map((tab, index) => {
         const key = sessionTabKey(tab.sessionId, tab.projectId)
         // Older workspaces only have their saved list order.
         return { ...tab, key, addedAt: tab.addedAt || index + 1, lastUsedAt: Math.max(tab.lastUsedAt ?? 0, localUsage.get(key) ?? 0) }
       })
-      this.controlCenterOpen = data.controlCenterOpen === true
+      if (!equalJson(this.items, items)) this.items = items
+      const open = data.controlCenterOpen === true
+      this.deferredControlCenterClose = !open && this.controlCenterOpen && hasDirtyControlCenter()
+      if (!this.deferredControlCenterClose) this.controlCenterOpen = open
+    },
+    applyDeferredControlCenterClose() {
+      if (!this.deferredControlCenterClose || hasDirtyControlCenter()) return
+      this.deferredControlCenterClose = false
+      this.controlCenterOpen = false
     },
     applySummaryUpdates(ids, summaries) {
       let next = this.summaries
@@ -80,7 +110,12 @@ export const useSessionTabsStore = defineStore('session-tabs', {
             if (this.summaries[id]) next[id] = this.summaries[id]
             else delete next[id]
           }
-          this.summaries = next
+          if (!equalJson(this.summaries, next)) {
+            for (const id of Object.keys(next)) {
+              if (equalJson(this.summaries[id], next[id])) next[id] = this.summaries[id]
+            }
+            this.summaries = next
+          }
         }
       }, 'summaryRevision')
     },
@@ -125,7 +160,8 @@ export const useSessionTabsStore = defineStore('session-tabs', {
       const generation = this.generation
       if (this.owner && !this.loaded) await this.fetchWorkspace()
       if (generation !== this.generation) return
-      if (open === this.controlCenterOpen) return Promise.resolve()
+      if (open === this.controlCenterOpen && !this.deferredControlCenterClose) return
+      this.deferredControlCenterClose = false
       this.controlCenterOpen = open
       return this.saveWorkspace({ controlCenterOpen: open })
     },

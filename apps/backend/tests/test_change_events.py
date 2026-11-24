@@ -63,6 +63,24 @@ async def test_changes_are_coalesced_and_isolated_by_owner():
     assert not broker._subscribers
 
 
+def test_workspace_update_does_not_invalidate_every_resource(monkeypatch):
+    from sqlalchemy.orm import make_transient_to_detached
+
+    from mato_loop_backend.models import SettingRecord
+
+    user_id = uuid4()
+    item = SettingRecord(id=uuid4(), key="user-preferences", user_id=user_id, data={"session_tabs": []})
+    make_transient_to_detached(item)
+    with changes.ChangeTrackingSession() as session:
+        session.add(item)
+        item.data = {"session_tabs": [{"last_used_at": 10}]}
+        publish = Mock()
+        monkeypatch.setattr(changes.change_events, "publish", publish)
+        changes._collect_changes(session, None, None)
+        changes._publish_changes(session)
+        publish.assert_called_once_with(user_id, {("workspace", None)})
+
+
 def test_flush_and_rollback_do_not_publish_uncommitted_changes(db, monkeypatch):
     publish = Mock()
     monkeypatch.setattr(changes.change_events, "publish", publish)

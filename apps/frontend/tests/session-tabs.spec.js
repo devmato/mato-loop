@@ -8,6 +8,8 @@ import { quasarOptions } from './quasar-options'
 import { useSessionTabsStore } from '../src/features/chat/session-tabs-store'
 import { useSessionTabs } from '../src/features/chat/useSessionTabs'
 import { useUserPreferencesStore } from '../src/features/settings/user-preferences-store'
+import { useAutomationStore } from 'stores/automations'
+import { useWorkspaceStore } from 'stores/workspace'
 import { useChatStore } from '../src/features/chat/store'
 import { useProjectStore } from '../src/features/projects/store'
 import { useQuestionStore } from '../src/stores/questions'
@@ -225,6 +227,38 @@ it('restores the ordered preview list on another device and persists removal', a
   await otherDevice.setOwner('owner')
   expect([otherDevice.items.map(tab => [tab.key, tab.preview]), otherDevice.controlCenterOpen])
     .toEqual([[['b', true]], true])
+})
+
+it('coalesces workspace invalidations received during a save and applies the newer server state', async () => {
+  const { tabs } = await mount()
+  tabs.$patch({ owner: 'owner', loaded: true })
+  api.get.mockClear().mockResolvedValueOnce({ data: { sessionTabs: [{ sessionId: 'b' }], controlCenterOpen: false } })
+  let finishSave
+  api.put.mockReturnValueOnce(new Promise(resolve => { finishSave = resolve }))
+  const saving = tabs.setControlCenterOpen(true)
+  const refreshes = [tabs.refreshWorkspace(), tabs.refreshWorkspace()]
+  expect(api.get).not.toHaveBeenCalled()
+  finishSave({ data: { sessionTabs: [{ sessionId: 'a' }], controlCenterOpen: true } })
+  await Promise.all([saving, ...refreshes])
+  expect([api.get.mock.calls.length, tabs.items.map(tab => tab.key), tabs.controlCenterOpen]).toEqual([1, ['b'], false])
+})
+
+it('reconciles remote tabs without closing a dirty editor, then applies the close when clean', async () => {
+  const { tabs } = await mount()
+  const automations = useAutomationStore()
+  const workspace = useWorkspaceStore()
+  tabs.$patch({ owner: 'owner', loaded: true, controlCenterOpen: true })
+  automations.dirty = true
+  workspace.editorDirty = true
+  api.get.mockResolvedValueOnce({ data: { sessionTabs: [{ sessionId: 'b' }], controlCenterOpen: false } })
+  await tabs.refreshWorkspace()
+  const whileDirty = [tabs.items.map(tab => tab.key), tabs.controlCenterOpen]
+  automations.dirty = false
+  tabs.applyDeferredControlCenterClose()
+  const whileFileDirty = tabs.controlCenterOpen
+  workspace.editorDirty = false
+  tabs.applyDeferredControlCenterClose()
+  expect([whileDirty, whileFileDirty, tabs.controlCenterOpen]).toEqual([[['b'], true], true, false])
 })
 
 it('keeps a remotely closed tab closed when a stale client switches tabs', async () => {

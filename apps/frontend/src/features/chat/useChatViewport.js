@@ -29,6 +29,8 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   let readingAnchor = null
   let userScrolling = false
   let touching = false
+  let touchStartY = null
+  let browsingHistory = false
   let lastScrollTop = 0
   let stalledHistoryCursor = null
   let historyRequest = null
@@ -211,8 +213,8 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
       }
       if (revealMessageId === messageId) revealMessageId = null
       if (!followingBottom.value) readingAnchor = captureAnchor() || anchor
-      // Fetch one page at a time until collapsed history fills the viewport,
-      // or prepended messages move the reading anchor away from the top edge.
+      // An underfilled preview must not move after it becomes visible. Only
+      // fill ahead of a reader who has started browsing toward older messages.
       if (!messageId) maybeLoadOlderHistory()
     } finally {
       if (isCurrent(request)) {
@@ -224,9 +226,8 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
 
   function maybeLoadOlderHistory() {
     const cursor = chat.current?.nextMessageCursor
-    if (!transcriptPreparing.value && !revealMessageId && !positionLoadFailed.value && target?.clientHeight > 0
-      && (target.scrollHeight <= target.clientHeight + 1
-        || !followingBottom.value && target.scrollTop <= target.clientHeight)
+    if (browsingHistory && !followingBottom.value && !transcriptPreparing.value && !revealMessageId
+      && !positionLoadFailed.value && target?.clientHeight > 0 && target.scrollTop <= target.clientHeight
       && cursor && !chat.olderMessagesLoadFailed && cursor !== stalledHistoryCursor) {
       void loadOlderHistory()
     }
@@ -238,9 +239,11 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     const sessionId = chat.current.id
     const cursor = chat.current.nextMessageCursor
     const request = { sessionId, firstMessage: chat.current.messages?.[0]?.id, anchor: captureAnchor() || readingAnchor }
+    followingBottom.value = false
+    readingAnchor = request.anchor
     historyRequest = request
     try {
-      await chat.loadOlderMessages(sessionId, followingBottom.value ? undefined : SCROLL_HISTORY_PAGE_SIZE)
+      await chat.loadOlderMessages(sessionId, request.anchor ? SCROLL_HISTORY_PAGE_SIZE : undefined)
       await request.positioned
       if (disposed || historyRequest !== request || chat.current?.id !== sessionId) return
       stalledHistoryCursor = chat.current.nextMessageCursor === cursor ? cursor : null
@@ -296,9 +299,11 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     followingBottom.value = chatShouldFollowBottom(
       followingBottom.value, userScrolling && movedUp, userScrolling && !movedUp && chatBottomDistance(target) <= 64
     )
+    if (followingBottom.value) browsingHistory = false
     const anchor = !operation && !followingBottom.value ? captureAnchor() : null
     if (!operation) readingAnchor = followingBottom.value ? null : anchor || readingAnchor
     if (userScrolling && movedUp) {
+      browsingHistory = true
       if (!anchor && !transcriptPreparing.value && displayMessages.value.length) {
         // Wait for Quasar's scroll event rather than prepending to an offscreen slice.
         if (target.scrollTop <= 0) virtualScroll.value?.scrollTo(0, 'start')
@@ -310,7 +315,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   }
 
   function beginUserScroll() {
-    cancelLayout()
+    if (!operation?.prepending) cancelLayout()
     revealMessageId = null
     positionLoadFailed.value = false
     userScrolling = true
@@ -327,12 +332,35 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     }, 180)
   }
 
-  function handleTouchStart() { if (!transcriptPreparing.value) { touching = true; beginUserScroll() } }
-  function handleTouchMove() { if (!transcriptPreparing.value && !userScrolling) beginUserScroll() }
-  function handleTouchEnd() { touching = false; if (userScrolling) scheduleUserScrollEnd() }
-  function handleWheel(event) {
-    if (transcriptPreparing.value || !event.deltaY) return
+  function browseFromTop() {
+    // When the preview is short, an upward scroll gesture can leave scrollTop
+    // unchanged. In that case the gesture, not a scroll event, starts loading.
+    if (!target || target.scrollTop > 0 || !chat.current?.nextMessageCursor) return
+    browsingHistory = true
+    followingBottom.value = false
+    readingAnchor = captureAnchor() || readingAnchor
+    maybeLoadOlderHistory()
+  }
+  function handleTouchStart(event) {
+    if (transcriptPreparing.value) return
+    touching = true
+    touchStartY = event.touches?.[0]?.clientY ?? null
     beginUserScroll()
+  }
+  function handleTouchMove(event) {
+    if (transcriptPreparing.value) return
+    if (!userScrolling) beginUserScroll()
+    if (touchStartY != null && event.touches?.[0]?.clientY - touchStartY > 8) browseFromTop()
+  }
+  function handleTouchEnd() {
+    touching = false
+    touchStartY = null
+    if (userScrolling) scheduleUserScrollEnd()
+  }
+  function handleWheel(event) {
+    if (transcriptPreparing.value || event.ctrlKey || !event.deltaY) return
+    beginUserScroll()
+    if (event.deltaY < 0) browseFromTop()
     scheduleUserScrollEnd()
   }
   function handleScrollKey(event) {
@@ -340,6 +368,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
       || event.target?.closest?.('input, textarea, select, [contenteditable="true"]')
       || !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) return
     beginUserScroll()
+    if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) browseFromTop()
     scheduleUserScrollEnd()
   }
   function handleScrollAreaMouseDown(event) {
@@ -356,6 +385,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     touching = userScrolling = false
     clearTimeout(userScrollTimer)
     followingBottom.value = true
+    browsingHistory = false
     readingAnchor = null
     scheduleTranscriptLayout()
   }
@@ -370,6 +400,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     cancelLayout()
     positionLoadFailed.value = false
     revealMessageId = routeMessageId.value
+    browsingHistory = false
     if (sessionId !== previous[0] || routeSessionId.value !== previous[1]) {
       positionSessionId = sessionId || null
       stalledHistoryCursor = null
@@ -377,6 +408,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
       clearTimeout(userScrollTimer)
       window.removeEventListener('mouseup', scheduleUserScrollEnd)
       touching = userScrolling = false
+      touchStartY = null
       readingAnchor = sessionId ? tabs.readingPositions[sessionId] || null : null
       followingBottom.value = !readingAnchor
       transcriptPreparing.value = Boolean(sessionId)

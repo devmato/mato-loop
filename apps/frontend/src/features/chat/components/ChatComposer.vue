@@ -24,15 +24,15 @@
       <VoicePanel ref="voicePanel" />
       <q-form v-show="!voice.active" @submit.prevent="submit">
         <q-input
-          :key="session?.sessionProfile?.messageSize || 'standard'"
+          :key="`${draftScopeKey || ''}:${session?.sessionProfile?.messageSize || 'standard'}`"
           ref="input"
           :model-value="draftText"
-          borderless dense autogrow :autofocus="autofocus && !$q.platform.has?.touch" type="textarea" rows="1"
+          borderless dense autogrow :autofocus="autofocus && canAutofocus()" type="textarea" rows="1"
           class="chat-composer__input"
           :class="{ 'chat-composer__input--small': session?.sessionProfile?.messageSize === 'small' }"
           :placeholder="draftHasContent ? undefined : inputPlaceholder"
           :aria-label="inputPlaceholder"
-          :disable="inputDisabled || editingQuote !== null"
+          :disable="draftDisabled || editingQuote !== null"
           role="combobox" aria-autocomplete="list" :aria-expanded="paletteOpen"
           :aria-controls="paletteOpen ? paletteId : undefined" :aria-activedescendant="paletteOpen ? commandList?.activeId : undefined"
           @update:model-value="updateDraft($event || '')"
@@ -87,6 +87,7 @@
           />
           <q-space />
           <input
+            :key="draftScopeKey"
             ref="attachmentInput"
             class="composer-file-input"
             type="file"
@@ -258,6 +259,8 @@ const props = defineProps({
   session: { type: Object, default: null },
   draft: { type: String, default: '' },
   readDraft: { type: Function, default: null },
+  draftScopeKey: { type: String, default: null },
+  draftDisabled: { type: Boolean, default: undefined },
   disabled: Boolean,
   running: Boolean,
   stopping: Boolean,
@@ -268,6 +271,7 @@ const emit = defineEmits(['add-attachments', 'remove-attachment', 'send', 'stop'
 const stopLocked = ref(false)
 let stopLockTimer
 const $q = useQuasar()
+const canAutofocus = () => !$q.platform?.has?.touch && !$q.platform?.is?.mobile
 const identity = useAgentIdentityStore()
 const agentProfiles = useAgentProfileStore()
 const chat = useChatStore()
@@ -297,7 +301,10 @@ const draftBlocks = computed(() => parseQuotedMessage(draft.value))
 const draftText = computed(() => draftBlocks.value.filter(block => block.type === 'text' && block.text).map(block => block.text).join('\n\n'))
 const draftQuotes = computed(() => draftBlocks.value.filter(block => block.type === 'quote'))
 const messageContent = computed(() => quotedMessage([{ type: 'text', text: draftText.value }, ...draftQuotes.value]))
-const draftScope = computed(() => [chat.draftOwnerUserId, props.session?.id, chat.sessionsProjectId, props.session?.sessionProfile?.messageSize].join(':'))
+const draftScope = computed(() => [
+  props.draftScopeKey ?? [chat.draftOwnerUserId, props.session?.id, chat.sessionsProjectId].join(':'),
+  props.session?.sessionProfile?.messageSize || 'standard'
+].join(':'))
 watch(draftScope, () => { editingQuote.value = null })
 const slashDismissed = ref(false)
 const slashQuery = computed(() => /^\/[a-z0-9_-]*$/iu.test(draftText.value) ? draftText.value : null)
@@ -357,6 +364,7 @@ const transcriptionUnavailableReason = computed(() => {
   return ''
 })
 const inputDisabled = computed(() => !props.session || props.disabled)
+const draftDisabled = computed(() => props.draftDisabled ?? inputDisabled.value)
 const attachmentsDisabled = computed(() => inputDisabled.value || starting.value || recording.value || finalizing.value)
 watch([attachmentsDisabled, () => props.session?.id, () => chat.sessionsProjectId, () => chat.draftOwnerUserId], () => {
   fileDragDepth.value = 0
@@ -406,7 +414,8 @@ function selectCommand(command) {
 }
 
 function updateDraft(text, quotes = draftQuotes.value) {
-  emit('update:draft', quotedMessage([{ type: 'text', text }, ...quotes]))
+  if (draftDisabled.value) return
+  emit('update:draft', quotedMessage([{ type: 'text', text }, ...quotes]), props.draftScopeKey)
 }
 
 function updateQuote(index, quote) {
@@ -418,7 +427,7 @@ function removeQuote(index) {
 }
 
 function focusInput({ automatic = false } = {}) {
-  if (!automatic || !$q.platform.has?.touch) input.value?.focus()
+  if (!draftDisabled.value && (!automatic || canAutofocus())) input.value?.focus()
 }
 
 function focusInputFromBackground(event) {
@@ -480,7 +489,7 @@ function handleComposerKeydown(event) {
     return
   }
   if (
-    event.defaultPrevented || event.repeat || event.isComposing || event.altKey
+    inputDisabled.value || event.defaultPrevented || event.repeat || event.isComposing || event.altKey
     || event.ctrlKey === event.metaKey || event.code !== 'Period'
   ) return
   if (event.shiftKey) {
@@ -510,7 +519,7 @@ async function finishAndSendRecording(fromSendButton) {
   try {
     const recordedFile = await finishVoiceRecording()
     if (
-      !recordedFile || unmounted || scope.ownerUserId !== chat.draftOwnerUserId
+      !recordedFile || unmounted || inputDisabled.value || scope.ownerUserId !== chat.draftOwnerUserId
       || scope.sessionId !== (chat.current?.id || null)
       || scope.sessionId !== audioScope.value.sessionId
       || scope.projectId !== chat.sessionsProjectId
@@ -525,7 +534,7 @@ async function finishAndSendRecording(fromSendButton) {
 
 function selectAttachmentFiles(event) {
   const files = Array.from(event.target.files || [])
-  if (files.length) emit('add-attachments', files)
+  if (!attachmentsDisabled.value && files.length) emit('add-attachments', files)
   event.target.value = ''
 }
 
@@ -564,7 +573,7 @@ function handlePaste(event) {
   const files = clipboardAttachmentFiles(event)
   if (!files.length) return
   event.preventDefault()
-  emit('add-attachments', files)
+  if (!attachmentsDisabled.value) emit('add-attachments', files)
 }
 
 async function startVoiceRecording() {
@@ -594,7 +603,7 @@ function finishVoiceRecording() {
       $q.notify({ type: 'negative', message: 'Die Aufnahme konnte nicht verarbeitet werden.' })
     } finally {
       finishingRequest = null
-      focusInput()
+      if (!inputDisabled.value) focusInput()
     }
   })()
   return finishingRequest

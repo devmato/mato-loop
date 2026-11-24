@@ -16,6 +16,7 @@ export const DEFAULT_CONTROL_CENTER_SPLIT_RATIO = 60
 export const MIN_CONTROL_CENTER_SPLIT_RATIO = 30
 export const MAX_CONTROL_CENTER_SPLIT_RATIO = 70
 const SPLIT_STORAGE_KEY = 'matoLoopWorkspaceSplitRatio'
+const visibilityMode = () => Screen.lt.md ? 'mobile' : 'desktop'
 
 function defaultState() {
   return {
@@ -251,7 +252,7 @@ export const useControlCenterStore = defineStore('control-center', {
     saving: false,
     requestGeneration: 0,
     pendingState: null,
-    pendingReveal: false,
+    pendingReveal: null,
     mobileOpen: false,
     confirmedState: defaultState(),
     requestedAppId: null,
@@ -259,7 +260,8 @@ export const useControlCenterStore = defineStore('control-center', {
     fileDiffModes: {}
   }),
   getters: {
-    open: (state) => Screen.lt.md ? state.mobileOpen : useSessionTabsStore().controlCenterOpen,
+    open: (state) => state.pendingReveal?.mode === visibilityMode()
+      || (Screen.lt.md ? state.mobileOpen : useSessionTabsStore().controlCenterOpen),
     activeContentId: (state) => state.activeGlobalSectionId || state.activeAppId,
     activeTab: (state) => state.tabs.find((tab) => tab.tabId === state.activeAppId) || null,
     fileTabs: (state) => state.tabs.filter((tab) => tab.kind === 'file'),
@@ -283,14 +285,15 @@ export const useControlCenterStore = defineStore('control-center', {
       const sessionId = session?.id || null
       if (this.sessionId !== sessionId) this.fileDiffModes = {}
       if (this.sessionId !== sessionId) this.activeGlobalSectionId = null
-      const requestedAppId = this.sessionId === sessionId ? this.requestedAppId : null
+      const requestedAppId = this.sessionId === sessionId && this.pendingReveal?.mode === visibilityMode()
+        ? this.requestedAppId : null
       this.requestGeneration += 1
       this.ready = true
       this.saving = false
       this.pendingState = null
       this.requestedAppId = null
       this.sessionId = sessionId
-      this.pendingReveal = false
+      this.pendingReveal = null
       this.confirmedState = normalizeState(session?.controlCenter || defaultState())
       this.applyState(this.confirmedState)
       if (requestedAppId) void this.openApp(requestedAppId).catch(() => {})
@@ -302,12 +305,11 @@ export const useControlCenterStore = defineStore('control-center', {
       this.ready = false
       this.saving = false
       this.pendingState = null
-      this.pendingReveal = false
       if (this.sessionId !== sessionId) {
         this.fileDiffModes = {}
-        this.requestedAppId = null
         this.activeGlobalSectionId = null
       }
+      if (this.sessionId !== sessionId || !this.requestedAppId) this.cancelPendingReveal()
       this.sessionId = sessionId
       this.confirmedState = normalizeState(session?.controlCenter || defaultState())
       this.applyState(this.confirmedState)
@@ -321,7 +323,7 @@ export const useControlCenterStore = defineStore('control-center', {
       this.pendingState = null
       this.requestedAppId = null
       this.sessionId = null
-      this.pendingReveal = false
+      this.pendingReveal = null
       this.confirmedState = defaultState()
       this.applyState(this.confirmedState)
     },
@@ -331,6 +333,7 @@ export const useControlCenterStore = defineStore('control-center', {
       this.ready = true
       this.saving = false
       this.pendingState = null
+      this.pendingReveal = null
       this.sessionId = sessionId
       this.confirmedState = normalizeState(serverState)
       if (JSON.stringify(latest) === JSON.stringify(this.confirmedState)) {
@@ -353,7 +356,7 @@ export const useControlCenterStore = defineStore('control-center', {
         return copyState(next)
       }
       this.pendingState = copyState(next)
-      this.pendingReveal ||= reveal
+      if (reveal) this.pendingReveal = { mode: visibilityMode() }
       if (this.saving) return copyState(next)
       const sessionId = this.sessionId
       const generation = this.requestGeneration
@@ -376,7 +379,7 @@ export const useControlCenterStore = defineStore('control-center', {
       } catch (error) {
         if (this.sessionId === sessionId && this.requestGeneration === generation) {
           this.pendingState = null
-          this.pendingReveal = false
+          this.pendingReveal = null
           this.applyState(this.confirmedState)
         }
         throw error
@@ -386,10 +389,28 @@ export const useControlCenterStore = defineStore('control-center', {
         }
       }
       if (this.sessionId !== sessionId || this.requestGeneration !== generation) return null
-      const revealPending = this.pendingReveal
-      this.pendingReveal = false
-      if (revealPending) await this.setOpen(true)
+      if (this.pendingReveal) await this.commitReveal()
       return copyState(this.confirmedState)
+    },
+    async commitReveal() {
+      // The preview is local until the app state succeeds; close and navigation cancel it.
+      const reveal = this.pendingReveal
+      if (!reveal) return
+      const current = () => this.pendingReveal === reveal && !this.saving
+      try {
+        if (reveal.mode !== visibilityMode()) return
+        if (reveal.mode === 'desktop') {
+          const workspace = useSessionTabsStore()
+          if (workspace.owner && !workspace.loaded) {
+            const generation = workspace.generation
+            await workspace.fetchWorkspace()
+            if (generation !== workspace.generation || !workspace.loaded) return
+          }
+        }
+        if (current() && reveal.mode === visibilityMode()) await this.setOpen(true)
+      } finally {
+        if (current()) this.pendingReveal = null
+      }
     },
     async autoAddGit(repository) {
       if (!repository || this.gitAutoAdded || !this.ready) return
@@ -402,8 +423,8 @@ export const useControlCenterStore = defineStore('control-center', {
       if (controlCenterGlobalSectionIds.has(appId)) {
         this.activeGlobalSectionId = appId
         if (!this.ready) {
-          await this.setOpen(true)
           this.requestedAppId = appId
+          this.pendingReveal = { mode: visibilityMode() }
           return null
         }
         this.requestedAppId = null
@@ -420,18 +441,19 @@ export const useControlCenterStore = defineStore('control-center', {
         if (this.sessionId !== session.id) return null
         if (this.activeAppId === appId) { await this.setOpen(true); return copyState(this) }
       }
-      if (this.tabs.some((tab) => tab.tabId === appId)) {
-        this.activeGlobalSectionId = null
-        return this.save({ tabs: this.tabs, activeAppId: appId, fileView: this.fileView }, { reveal: true })
-      }
-      if (!controlCenterIntegrationIds.has(appId)) return
+      const exists = this.tabs.some((tab) => tab.tabId === appId)
+      if (!exists && !controlCenterIntegrationIds.has(appId)) return
       this.activeGlobalSectionId = null
       if (!this.ready) {
-        await this.setOpen(true)
         this.requestedAppId = appId
+        this.pendingReveal = { mode: visibilityMode() }
         return null
       }
-      const exists = this.tabs.some((tab) => tab.appId === appId)
+      if (!this.saving && this.activeAppId === appId && this.confirmedState.activeAppId === appId) {
+        this.pendingReveal = { mode: visibilityMode() }
+        await this.commitReveal()
+        return copyState(this)
+      }
       return this.save({
         tabs: exists ? this.tabs : [...this.tabs, appTab(appId)],
         activeAppId: appId,
@@ -446,10 +468,20 @@ export const useControlCenterStore = defineStore('control-center', {
         fileView: this.fileView
       })
     },
+    cancelPendingReveal() {
+      this.pendingReveal = null
+      this.requestedAppId = null
+    },
     setOpen(open) {
-      if (!open) this.pendingReveal = false
-      if (Screen.lt.md) { this.mobileOpen = open; return Promise.resolve() }
-      return useSessionTabsStore().setControlCenterOpen(open)
+      if (!open) this.cancelPendingReveal()
+      if (Screen.lt.md) {
+        this.mobileOpen = open
+        if (open) this.pendingReveal = null
+        return Promise.resolve()
+      }
+      const saving = useSessionTabsStore().setControlCenterOpen(open)
+      if (open) this.pendingReveal = null
+      return saving
     },
     setFileView(fileView) {
       const normalized = normalizeFileView(fileView)
@@ -517,8 +549,7 @@ export const useControlCenterStore = defineStore('control-center', {
       this.fileDiffModes[tabId] = diff && target.scope === 'filesystem'
       try {
         if (existing) {
-          await this.activate(tabId)
-          if (!this.open) await this.setOpen(true)
+          await this.openApp(tabId)
         } else {
           await this.save({
             tabs: [...this.tabs, { tabId, kind: 'file', appId: 'file-viewer', pinned: false, fileTarget: target }],

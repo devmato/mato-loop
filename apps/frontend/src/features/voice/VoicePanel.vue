@@ -116,7 +116,6 @@ watch(() => chat.current?.id, (id) => {
   clearTaskExpiry()
   if (voice.active && voice.sessionId !== id) void voice.end()
   storedTasks.value = []
-  void refreshTasks()
 }, { immediate: true })
 watch(availableTasks, (items) => {
   const completed = new Set(items.filter((task) => !task.active && task.status === 'completed').map((task) => task.taskId))
@@ -134,7 +133,10 @@ watch(availableTasks, (items) => {
     }, 5000))
   }
 }, { immediate: true, deep: true })
-watch(() => chat.current?.messages?.length, () => { void refreshTasks() })
+watch([
+  () => chat.loading ? null : chat.current?.id,
+  () => chat.loading ? null : chat.current?.messages?.at(-1)?.id
+], ([id]) => { if (id) void refreshTasks() }, { immediate: true })
 watch(() => voice.active, (active) => { if (!active && voice.sessionId) void refreshTasks() })
 onBeforeUnmount(() => {
   disposed = true
