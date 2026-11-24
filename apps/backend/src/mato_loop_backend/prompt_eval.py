@@ -1434,25 +1434,30 @@ CASES = (
         id="explicit_automation_create_uses_tool",
         kind="general",
         user=(
-            "Erstelle jetzt die aktive Automation Tagesbericht mit der Aufgabe "
-            '"Erstelle den Tagesbericht", täglich um 08:00 Uhr in Europe/Berlin. '
-            "Führe den Auftrag in dieser Session aus."
+            "Erstelle jetzt die aktive Automation Statusprüfung: Prüfe alle 30 Minuten in Europe/Berlin, "
+            "ob auf https://status.example.com Störungen der letzten 24 Stunden gemeldet wurden."
         ),
         tools=("create_automation",),
         expected_tool="create_automation",
+        argument_contains={"task": ("status.example.com", "24 Stunden")},
+        argument_excludes={"task": ("30", "halbstünd", "halbe Stunde")},
         expected_arguments={
-            "name": "Tagesbericht",
-            "task": "Erstelle den Tagesbericht",
+            "name": "Statusprüfung",
             "enabled": True,
-            "schedules": [
-                {
-                    "cron": "0 8 * * *",
-                    "timezone": "Europe/Berlin",
-                    "run_at": None,
-                    "valid_until": None,
-                    "enabled": True,
-                }
-            ],
+        },
+        argument_options={
+            "schedules": tuple(
+                [
+                    {
+                        "cron": cron,
+                        "timezone": "Europe/Berlin",
+                        "run_at": None,
+                        "valid_until": None,
+                        "enabled": True,
+                    }
+                ]
+                for cron in ("*/30 * * * *", "0,30 * * * *")
+            ),
         },
     ),
     PromptCase(

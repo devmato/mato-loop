@@ -346,6 +346,8 @@ Browser setup guidance appears only for eligible main chats; it is omitted where
 
 The shared prompt explains optional `_reason` fields once; tools retain any action-specific guidance and the same argument limits. File-reference instructions live on `provide_file`. These text changes affect the provider prefix once, not tool eligibility, approval behavior, or history serialization.
 
+The automation create and edit schemas put start timing in `schedules` and per-run instructions in `task`. Time windows used by the work itself stay in `task`. The field descriptions change the affected provider prefix once; existing automations and scheduler behavior are unchanged.
+
 Integration-scoped discovery adds stable connection IDs to the catalog and an optional ID filter to `search_tools`. Readable MCP model names and source descriptions intentionally invalidate the former tool/schema and catalog prefixes once. Discovery replay resolves current eligible bindings without rewriting historical exchanges; subsequent unchanged offers retain deterministic ordering. See [tool loading](integrations.md#tool-loading).
 
 Paperless document-link guidance intentionally changes the account/search/read tool-description prefix. Configured web roots and generated document links are returned as tool data; historical results are not enriched from current configuration.

@@ -1314,10 +1314,17 @@ class AutomationScheduleArguments(ToolArguments):
 
 class AutomationDefinitionArguments(ToolArguments):
     name: str = Field(min_length=1, max_length=240)
-    task: str = Field(min_length=1, max_length=40_000)
+    task: str = Field(
+        min_length=1, max_length=40_000,
+        description=(
+            "What to do in one run. Put start times and recurrence only in schedules. "
+            "Keep time constraints that affect the work itself, such as checking the last 24 hours."
+        ),
+    )
     enabled: bool = True
     schedules: list[AutomationScheduleArguments] = Field(
-        max_length=50, description="Empty when no time-based starts are needed."
+        max_length=50,
+        description="When to start runs. Empty when no time-based starts are needed.",
     )
     triggers: list[Literal["agent_response", "agent_error"]] = Field(
         default_factory=list, max_length=2,
