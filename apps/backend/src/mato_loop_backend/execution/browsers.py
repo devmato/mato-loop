@@ -39,6 +39,7 @@ from mato_loop_backend.execution.browser_contracts import (
     BrowserOpenResult,
     BrowserOrigin,
     BrowserResizeResult,
+    BrowserRestoreResult,
 )
 from mato_loop_backend.execution.client import (
     ExecutionClient,
@@ -215,6 +216,11 @@ class BrowserConnection:
     ready: bool = False
     manual_enabled: bool = True
     navigation: BrowserNavigationResult | None = None
+    restored_tabs: int = 0
+    restore_incomplete: bool = False
+    replaced_browser_id: UUID | None = None
+    restore_notice_pending: bool = False
+    restore_pending: bool = False
     downloads: list[dict[str, Any]] = field(default_factory=list)
     origins: dict[str, tuple[BrowserOrigin, int]] = field(default_factory=dict)
     control_epoch: int = 0
@@ -249,11 +255,14 @@ class BrowserConnection:
                 if not self.closed and (view_id is None or key == view_id)
             ))
 
-    async def state(self, *, view_id: UUID | None = None) -> None:
+    async def state(self, *, view_id: UUID | None = None, report_restore: bool = False) -> None:
+        restored_tabs = self.restored_tabs if report_restore else 0
         await self.send({
             "type": "state", "browserId": str(self.browser_id), "viewId": str(self.view_id),
             "busy": self.busy or not self.manual_enabled,
             "downloads": self.downloads,
+            **({"restoredTabs": restored_tabs} if restored_tabs else {}),
+            **({"restoreIncomplete": True} if report_restore and self.restore_incomplete else {}),
         }, view_id=view_id)
 
     def origin(self, kind: str, *, run_id: UUID | None = None) -> dict[str, Any]:
@@ -358,26 +367,35 @@ class BrowserCoordinator:
         agent_id = instance.execution_agent_id
         async with self.lock:
             previous = self.connections.get((session_id, agent_id))
+            client = browser_client(agent_id)
+            restore = client.supports("integration.browser.openview")
             if expected_browser_id is not None and (
-                previous is None or previous.browser_id != expected_browser_id
-                or previous.closed or not previous.ready
-                or previous.generation != execution_agent_connections.generation(agent_id)
+                (previous is None and not restore)
+                or (previous is not None
+                    and expected_browser_id not in {previous.browser_id, previous.replaced_browser_id}
+                    and not (previous.restore_pending or previous.restored_tabs or previous.restore_incomplete))
             ):
                 raise ExecutionClientError("browser.notConnected")
             if previous is not None:
                 if previous.integration_id != integration_id or previous.owner_id != owner_id:
                     raise ExecutionClientError("browser.busy")
+                if previous.closed or previous.generation != execution_agent_connections.generation(agent_id):
+                    raise ExecutionClientError("browser.unavailable")
                 connection = previous
             else:
                 if len(self.connections) >= MAX_BROWSERS:
                     raise ExecutionClientError("browser.busy")
                 connection = BrowserConnection(
-                    owner_id, integration_id, agent_id, session_id, browser_client(agent_id),
+                    owner_id, integration_id, agent_id, session_id, client,
                     execution_agent_connections.generation(agent_id), run_id=run_id,
                     model_available=model_available,
+                    replaced_browser_id=expected_browser_id,
                 )
                 self.connections[(session_id, agent_id)] = connection
-                connection.task = asyncio.create_task(self._start(connection, color_scheme))
+                connection.task = asyncio.create_task(self._start(
+                    connection, color_scheme, restore=restore,
+                    recover_only=expected_browser_id is not None,
+                ))
             opening = connection.task if not connection.ready else None
         if opening is not None:
             await asyncio.shield(opening)
@@ -385,24 +403,53 @@ class BrowserCoordinator:
             connection.run_id = run_id
         await connection.check_access()
         if websocket is not None:
+            if connection.restore_pending:
+                async with connection.action_lock:
+                    await connection.check_access(login_id=login_id)
+                    await self._restore_tabs(connection)
+                    await connection.check_access(login_id=login_id)
             connection.sockets[uuid4()] = (websocket, login_id)
         return connection
 
+    async def _restore_tabs(self, connection: BrowserConnection) -> None:
+        # Called under the action lock, after validating the human view or authorizing the tool.
+        if not connection.restore_pending:
+            return
+        result = await connection.request(
+            "integration.browser.control", {
+                "browserId": str(connection.browser_id), "manual": True, "restoreTabs": True,
+            }, BrowserRestoreResult, timeout=30,
+        )
+        if not result.ok:
+            raise ExecutionClientError("browser.actionFailed")
+        connection.restore_pending = False
+        self._record_restore(connection, result)
+
+    @staticmethod
+    def _record_restore(connection: BrowserConnection, result: BrowserOpenResult | BrowserRestoreResult) -> None:
+        connection.restored_tabs = result.restored_tabs
+        connection.restore_incomplete = result.restore_incomplete
+        connection.restore_notice_pending = bool(result.restored_tabs or result.restore_incomplete)
+
     async def _start(self, connection: BrowserConnection,
-                      color_scheme: str = "light") -> BrowserConnection:
+                      color_scheme: str = "light", *, restore: bool = False,
+                      recover_only: bool = False) -> BrowserConnection:
         try:
             result = await connection.request(
-                "integration.browser.open",
+                "integration.browser.openview" if restore else "integration.browser.open",
                 {
                     "ownerId": str(connection.owner_id),
                     "browserId": str(connection.browser_id),
                     "sessionId": str(connection.session_id),
                     "colorScheme": color_scheme,
+                    **({"recoverOnly": recover_only, "deferRestore": True} if restore else {}),
                 },
                 BrowserOpenResult, timeout=60,
             )
             if result.browser_id != connection.browser_id:
                 raise ExecutionClientError("executionAgent.protocolError")
+            connection.restore_pending = result.restore_pending
+            self._record_restore(connection, result)
             await connection.check_access()
             result = await connection.request(
                 "integration.browser.control",
@@ -447,7 +494,13 @@ class BrowserCoordinator:
                 if not connection.action_lock.locked():
                     async with connection.action_lock:
                         await connection.check_access()
-                        changed = await self.poll_downloads(connection)
+                        try:
+                            changed = await self.poll_downloads(connection)
+                        except ExecutionClientError as exc:
+                            if exc.code == "browser.notConnected":
+                                raise
+                            # A failed background observation need not end a live browser.
+                            continue
                     if changed:
                         await connection.state()
         except asyncio.CancelledError:
@@ -455,7 +508,7 @@ class BrowserCoordinator:
         except Exception as exc:
             code = exc.code if isinstance(exc, ExecutionClientError) else "browser.unavailable"
             with suppress(Exception):
-                await connection.send({"type": "error", "error": describe_error(code).payload()})
+                await connection.send({"type": "error", "error": describe_error(code).payload(), "operation": "runtime"})
             await self.close(
                 connection,
                 reason=("agentDisconnected" if execution_agent_connections.generation(connection.agent_id)
@@ -488,7 +541,11 @@ class BrowserCoordinator:
             async with connection.action_lock:
                 with suppress(Exception):
                     await connection.request(
-                        "integration.browser.close", {"browserId": str(connection.browser_id)},
+                        "integration.browser.close", {
+                            "browserId": str(connection.browser_id),
+                            **({"preserveTabs": True} if reason != "manualClose"
+                               and connection.client.supports("integration.browser.openview") else {}),
+                        },
                         BrowserControlResult, timeout=15,
                     )
         finally:
@@ -645,9 +702,16 @@ class BrowserCoordinator:
                                 or not connection.model_available):
                             raise ExecutionClientError("browser.bindingChanged")
                     check_binding()
+                    # A guarded action must still target the page that was approved, not a restored page.
+                    if connection.restore_pending and expected_snapshot is not None:
+                        raise ExecutionClientError("browser.bindingChanged")
                     result = None
                     try:
                         async with self._model_action(connection, run_id):
+                            if connection.restore_pending:
+                                await self._restore_tabs(connection)
+                                await connection.check_access()
+                                check_binding()
                             if expected_snapshot is not None:
                                 try:
                                     BrowserInspectionData(snapshotSha256=expected_snapshot)

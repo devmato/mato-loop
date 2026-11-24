@@ -74,6 +74,15 @@ class BrowserOpenArguments(BrowserOwnerArguments, BrowserIdArguments):
     color_scheme: Literal["light", "dark"] = Field(default="light", alias="colorScheme")
 
 
+class BrowserOpenViewArguments(BrowserOpenArguments):
+    recover_only: bool = Field(default=False, alias="recoverOnly")
+    defer_restore: bool = Field(default=False, alias="deferRestore")
+
+
+class BrowserCloseArguments(BrowserIdArguments):
+    preserve_tabs: bool = Field(default=False, alias="preserveTabs")
+
+
 class BrowserViewArguments(BrowserIdArguments):
     relay_id: Id = Field(alias="relayId")
     relay_token: str = Field(alias="relayToken", min_length=16, max_length=8192)
@@ -112,6 +121,7 @@ class BrowserInput(StrictModel):
 
 class BrowserControlArguments(BrowserIdArguments):
     manual: bool
+    restore_tabs: bool = Field(default=False, alias="restoreTabs")
     origin: str | None = Field(default=None, min_length=1, max_length=255)
     control_epoch: int | None = Field(default=None, alias="controlEpoch", ge=0)
 
@@ -583,8 +593,9 @@ BROWSER_ARGUMENT_MODELS = {
     "integration.browser.setupwrite": BrowserSetupWriteArguments,
     "integration.browser.setupresize": BrowserSetupResizeArguments,
     "integration.browser.open": BrowserOpenArguments,
+    "integration.browser.openview": BrowserOpenViewArguments,
     "integration.browser.view": BrowserViewArguments,
-    "integration.browser.close": BrowserIdArguments,
+    "integration.browser.close": BrowserCloseArguments,
     "integration.browser.execute": BrowserExecuteArguments,
     "integration.browser.file": BrowserFileArguments,
     "integration.browser.files": BrowserFilesArguments,

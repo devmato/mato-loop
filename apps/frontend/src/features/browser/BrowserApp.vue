@@ -12,7 +12,7 @@
        <q-btn flat round dense icon="add" aria-label="Neuer Tab" :disable="!browser.canNavigate || navigation?.tabs.length >= 32" @click="browser.navigate('new')"><q-tooltip>Neuer Tab</q-tooltip></q-btn>
     </div>
     <q-toolbar class="q-px-sm no-wrap" aria-label="Browsersteuerung">
-      <q-btn v-if="browser.displayStatus === 'closed'" flat round dense icon="refresh" aria-label="Browser erneut verbinden" :disable="!available || !confirmed" @click="open">
+      <q-btn v-if="browser.displayStatus === 'closed' && !connectionHint" flat round dense icon="refresh" aria-label="Browser erneut verbinden" :disable="!available || !confirmed" @click="open">
         <q-tooltip>Browser erneut verbinden</q-tooltip>
       </q-btn>
       <q-btn flat round dense icon="arrow_back" aria-label="Zurück" :disable="!browser.canNavigate || !navigation?.canGoBack" @click="browser.navigate('back')"><q-tooltip>Zurück</q-tooltip></q-btn>
@@ -47,8 +47,13 @@
         </AppMenu>
       </q-btn>
     </q-toolbar>
-    <q-linear-progress v-if="browser.displayStatus === 'connecting' || (browser.displayStatus === 'open' && !browser.ready)" indeterminate aria-label="Browser wird verbunden" />
-    <div ref="host" class="browser-app__view col overflow-hidden" @pointerdown.capture="focusViewer" @keydown.capture="viewerKey" @keyup.capture="viewerKey" @paste.capture="nativePaste" @focusout="leaveViewer" />
+    <div v-if="visible && browser.ready && browser.restoreIncomplete" class="q-px-sm q-py-sm app-muted" role="status">Nicht alle Browser-Tabs konnten geladen werden.</div>
+    <AppStateMessage v-if="visible && connectionHint" class="col q-pa-md" icon="language" title="Browser nicht erreichbar" :description="connectionHint" role="status">
+      <template v-if="available && confirmed && viewAvailable" #actions>
+        <q-btn flat no-caps color="primary" label="Erneut verbinden" @click="open" />
+      </template>
+    </AppStateMessage>
+    <div v-show="!connectionHint" ref="host" class="browser-app__view col overflow-hidden" @pointerdown.capture="focusViewer" @keydown.capture="viewerKey" @keyup.capture="viewerKey" @paste.capture="nativePaste" @focusout="leaveViewer" />
 
     <q-dialog v-model="clipboardOpen" :transition-duration="0" :maximized="$q.screen.lt.sm">
       <q-card class="integration-dialog app-surface column no-wrap">
@@ -66,7 +71,7 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
-    <q-dialog :model-value="Boolean(browser.dialog) && browser.manual" :transition-duration="0" persistent :maximized="$q.screen.lt.sm">
+    <q-dialog :model-value="Boolean(browser.dialog) && browser.canRespondDialog" :transition-duration="0" persistent :maximized="$q.screen.lt.sm">
       <q-card class="integration-dialog app-surface">
         <q-card-section class="text-h6">Webseiten-Dialog</q-card-section>
         <q-card-section class="scroll">
@@ -144,6 +149,7 @@
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
+import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
@@ -212,6 +218,15 @@ const visible = computed(() => route.name === 'chat' && route.query.session === 
   && controlCenter.open && controlCenter.activeContentId === 'browser')
 const confirmed = computed(() => controlCenter.confirmedState.activeAppId === 'browser'
   && controlCenter.confirmedState.tabs.some((tab) => tab.appId === 'browser'))
+const connectionHint = computed(() => {
+  const context = JSON.stringify([selectedId.value, chat.current?.id, chat.current?.preferredExecutionAgentId])
+  if (!browser.ownsDisplay && selectedAgent.value && !selectedAgent.value.connected) return 'Der Computer ist offline. Sobald er wieder erreichbar ist, kann der Browser wieder verbunden werden.'
+  if (!browser.connectionError || browser.stoppedContext !== context) return ''
+  const code = browser.connectionError.code
+  if (code === 'browser.notConnected') return 'Der Browser wurde beendet.'
+  if (code === 'browser.unavailable') return 'Die Verbindung konnte nicht wiederhergestellt werden.'
+  return apiErrorMessage({ error: browser.connectionError })
+})
 let observer
 let contentSize = { width: 0, height: 0 }
 let pasteTimer
@@ -337,7 +352,9 @@ function browserShortcut(event) {
 }
 
 function open() {
-  if (available.value && confirmed.value && visible.value) browser.connect({ integrationId: selectedId.value, sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId })
+  if (available.value && confirmed.value && visible.value && viewAvailable.value) {
+    browser.connect({ integrationId: selectedId.value, sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId }, { eligible: !document.hidden })
+  }
 }
 function focusedViewer() {
   return measurable() && browser.manual && browser.viewParent === host.value && host.value.contains(document.activeElement)
@@ -464,7 +481,7 @@ async function paste() {
 }
 async function refreshDownloads() { try { await browser.transfer('downloads') } catch { /* Central API toast. */ } }
 function respondDialog(accept) {
-  if (browser.manual && clipboardFits(dialogText.value)) browser.viewer?.send({ kind: 'dialog', accept, text: dialogText.value })
+  if (browser.canRespondDialog && clipboardFits(dialogText.value)) browser.viewer?.send({ kind: 'dialog', accept, text: dialogText.value })
 }
 function openFiles(downloads = false) {
   if (!browser.openPicker(pickerContext.value)) return

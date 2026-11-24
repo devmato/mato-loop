@@ -7,6 +7,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from time import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
@@ -21,11 +22,19 @@ from matoloop_agent.browser_contracts import (
     BrowserFileArguments,
     BrowserIdArguments,
     BrowserInput,
+    BrowserNavigationArguments,
     BrowserOpenArguments,
+    BrowserOpenViewArguments,
     BrowserResizeArguments,
     BrowserSetupReadArguments,
     BrowserSetupResizeArguments,
     BrowserViewArguments,
+)
+from matoloop_agent.browser_storage import (
+    TAB_RETENTION_SECONDS,
+    read_tabs,
+    tab_checkpoint,
+    write_tabs,
 )
 from matoloop_agent.browser_worker import BrowserWorker
 from matoloop_agent.config import AgentConfig
@@ -58,6 +67,54 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             config, TerminalManager(config, ProcessRunner(config, filesystem)), filesystem
         )
         self.addAsyncCleanup(self.manager.close)
+
+    def test_expired_tab_checkpoint_is_pruned_without_a_worker(self):
+        root = self.manager.runtime_root(self.manager.storage(self.owner_id))
+        expired = tab_checkpoint(root, str(uuid4()))
+        recent = tab_checkpoint(root, str(uuid4()))
+        for path in (expired, recent):
+            write_tabs(path, ["https://example.test/"], 0)
+        interrupted = root / ".tabs-interrupted"
+        interrupted.write_bytes(expired.read_bytes())
+        old = time() - TAB_RETENTION_SECONDS - 1
+        os.utime(expired, (old, old))
+        os.utime(interrupted, (old, old))
+        self.manager.prune_tab_checkpoints()
+        self.assertEqual(list(root.glob("tabs-*.json")), [recent])
+        self.assertFalse(interrupted.exists())
+
+    def test_empty_live_browser_discards_the_checkpoint(self):
+        worker = BrowserWorker(self.root)
+        worker.checkpoint = tab_checkpoint(self.root, str(uuid4()))
+        connected = Mock(return_value=False)
+        worker.context = SimpleNamespace(browser=SimpleNamespace(is_connected=connected))
+        write_tabs(worker.checkpoint, ["https://example.test/"], 0)
+        worker.save_tabs()
+        self.assertTrue(worker.checkpoint.exists())
+        connected.return_value = True
+        worker.save_tabs()
+        self.assertFalse(worker.checkpoint.exists())
+
+    async def test_failed_restore_keeps_the_original_address(self):
+        worker = BrowserWorker(self.root)
+        loaded = Mock(url="https://example.test/ok", goto=AsyncMock())
+        failed = Mock(
+            url="about:blank",
+            goto=AsyncMock(side_effect=PlaywrightError("offline")),
+            bring_to_front=AsyncMock(),
+        )
+        failed.is_closed.return_value = False
+        worker.context = SimpleNamespace(
+            pages=[loaded],
+            new_page=AsyncMock(return_value=failed),
+            browser=SimpleNamespace(is_connected=lambda: True),
+        )
+        worker.tabs = {"one": loaded, "two": failed}
+        worker.checkpoint = tab_checkpoint(self.root, str(uuid4()))
+        urls = [loaded.url, "https://example.test/offline"]
+        await worker.restore_tabs(urls, 1)
+        worker.save_tabs()
+        self.assertEqual(read_tabs(worker.checkpoint), (urls, 1))
 
     def test_contract_and_native_view_availability(self):
         with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "0"}):
@@ -286,6 +343,32 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             await worker.stream_views()
         self.assertEqual(messages[-1]["tabId"], "next")
 
+    async def test_stream_acknowledges_skipped_images(self):
+        worker = BrowserWorker(self.root)
+        page = Mock()
+        worker.tabs = {"active": page}
+        worker.active_tab_id = "active"
+        acknowledged = []
+
+        async def send(method, params=None):
+            if method == "Page.screencastFrameAck":
+                acknowledged.append(params["sessionId"])
+
+        def on(_name, listener):
+            for frame_id in (1, 2):
+                listener({"data": "image", "sessionId": frame_id})
+
+        session = Mock(send=send, on=on, detach=AsyncMock())
+        worker.context = Mock(new_cdp_session=AsyncMock(return_value=session))
+
+        async def drain():
+            worker.viewers.clear()
+
+        worker.viewers.add(Mock(drain=drain))
+        async with asyncio.timeout(2):
+            await worker.stream_views()
+        self.assertEqual(acknowledged, [1, 2])
+
     async def test_resize_releases_held_modifiers_before_fencing_old_keyup(self):
         worker = BrowserWorker(self.root)
         page = Mock(is_closed=Mock(return_value=False), set_viewport_size=AsyncMock())
@@ -495,6 +578,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(close_server)
         url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/"
         ids = [self.browser_id, str(uuid4())]
+        sessions = {browser_id: str(uuid4()) for browser_id in ids}
         old_profile = self.manager.runtime_root(self.manager.storage(self.owner_id)) / "profile"
         previous_profile = self.root / "previous-profile"
         previous_profile.mkdir()
@@ -504,7 +588,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             await self.manager.dispatch(
                 "integration.browser.open",
                 BrowserOpenArguments(
-                    ownerId=self.owner_id, browserId=browser_id, sessionId=str(uuid4())
+                    ownerId=self.owner_id, browserId=browser_id, sessionId=sessions[browser_id]
                 ),
             )
 
@@ -540,11 +624,12 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         reader, writer = await asyncio.open_unix_connection(socket)
         self.addCleanup(writer.close)
 
-        async def frame(reader=reader):
+        async def frame(source=None):
+            source = source or reader
             async with asyncio.timeout(10):
                 while True:
-                    size = struct.unpack(">I", await reader.readexactly(4))[0]
-                    value = json.loads(await reader.readexactly(size))
+                    size = struct.unpack(">I", await source.readexactly(4))[0]
+                    value = json.loads(await source.readexactly(size))
                     if value["type"] == "frame":
                         return value
 
@@ -624,6 +709,31 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             )["script"]["value"] != "x\n":
                 await asyncio.sleep(0.05)
 
+        await execute(
+            ids[0],
+            "evaluate",
+            function="() => {document.body.style.minHeight='200vh'; window.scrollTo(0, 200);}",
+        )
+        writer.close()
+        await writer.wait_closed()
+        reader, writer = await asyncio.open_unix_connection(socket)
+        self.addCleanup(writer.close)
+        image = await frame()
+        preserved = await execute(
+            ids[0],
+            "evaluate",
+            function="() => [document.querySelector('textarea').value, window.scrollY]",
+        )
+        self.assertEqual(preserved["script"]["value"], ["x\n", 200])
+        await send_input(kind="text", text="y")
+        async with asyncio.timeout(5):
+            while (
+                await execute(
+                    ids[0], "evaluate", function="() => document.querySelector('textarea').value"
+                )
+            )["script"]["value"] != "x\ny":
+                await asyncio.sleep(0.05)
+        await execute(ids[0], "evaluate", function="() => {window.scrollTo(0, 0);}")
         for phase in ("down", "up"):
             await send_input(kind="mouse", event=phase, x=button["x"] + 5, y=button["y"] + 5)
         async with asyncio.timeout(5):
@@ -651,6 +761,17 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.manager.dispatch(
             "integration.browser.close", BrowserIdArguments(browserId=ids[0])
         )
+        with self.assertRaises(AgentError) as closed:
+            await self.manager.dispatch(
+                "integration.browser.openview",
+                BrowserOpenViewArguments(
+                    ownerId=self.owner_id,
+                    browserId=str(uuid4()),
+                    sessionId=sessions[ids[0]],
+                    recoverOnly=True,
+                ),
+            )
+        self.assertEqual(closed.exception.code, "browser.notConnected")
         self.assertIn(ids[1], self.manager.runtimes)
         self.assertEqual((old_profile / "sentinel").read_text(), "untouched")
         await self.manager.dispatch(
@@ -660,3 +781,42 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         await execute(ids[0], "navigate", url=url)
         reset = await execute(ids[0], "evaluate", function="() => document.cookie")
         self.assertEqual(reset["script"]["value"], "")
+
+        second_url = f"{url}second"
+        await execute(ids[1], "newtab", url=second_url)
+        # Losing the worker without running its cleanup still preserves the other chat's addresses.
+        checkpoint = tab_checkpoint(old_profile.parent, sessions[ids[1]])
+        async with asyncio.timeout(5):
+            while read_tabs(checkpoint) != ([url, second_url], 1):
+                await asyncio.sleep(0.05)
+        lost = self.manager.runtimes[ids[1]]
+        lost.worker.kill()
+        await lost.worker.wait()
+        recovered_id = str(uuid4())
+        result = await self.manager.dispatch(
+            "integration.browser.openview",
+            BrowserOpenViewArguments(
+                ownerId=self.owner_id,
+                browserId=recovered_id,
+                sessionId=sessions[ids[1]],
+                recoverOnly=True,
+                deferRestore=True,
+            ),
+        )
+        self.assertTrue(result.get("restorePending"))
+        before = await self.manager.dispatch(
+            "integration.browser.navigation",
+            BrowserNavigationArguments(browserId=recovered_id, action="state"),
+        )
+        self.assertEqual([tab["url"] for tab in before["tabs"]], ["about:blank"])
+        result = await self.manager.dispatch(
+            "integration.browser.control",
+            BrowserControlArguments(browserId=recovered_id, manual=True, restoreTabs=True),
+        )
+        self.assertEqual(result.get("restoredTabs"), 2)
+        restored = await self.manager.dispatch(
+            "integration.browser.navigation",
+            BrowserNavigationArguments(browserId=recovered_id, action="state"),
+        )
+        self.assertEqual([tab["url"] for tab in restored["tabs"]], [url, second_url])
+        self.assertEqual(restored["activeTabId"], restored["tabs"][1]["id"])

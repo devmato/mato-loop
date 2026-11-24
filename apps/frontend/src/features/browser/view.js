@@ -1,4 +1,8 @@
 // The private relay carries length-prefixed JSON, not a public CDP connection.
+// Opening a relay can wait for a browser tool holding the action lock.
+const STREAM_OPEN_TIMEOUT = 200000
+const FRAME_TIMEOUT = 8000
+
 export class BrowserView extends EventTarget {
   constructor(host, url) {
     super()
@@ -66,12 +70,25 @@ export class BrowserView extends EventTarget {
         if (!['frame', 'state'].includes(message.type) || typeof message.inputEpoch !== 'string'
           || typeof message.manual !== 'boolean' || !(message.width >= 320 && message.width <= 3840)
           || !(message.height >= 240 && message.height <= 2160)) throw new Error('Invalid browser frame')
+        if (!this.state) {
+          clearTimeout(this.frameTimer)
+          this.frameTimer = null
+        }
         if (this.state?.inputEpoch !== message.inputEpoch || this.state?.tabId !== message.tabId) this.releaseInput()
         this.state = message
+        this.watchFrame()
         this.updateCursor()
         this.dispatchEvent(new Event('state'))
         if (!this.connected) { this.connected = true; this.dispatchEvent(new Event('connect')) }
-        if (message.type === 'frame') {
+        if (!message.tabId) {
+          // An empty browser has no image to wait for, but its tab controls must work.
+          if (!this.hasCurrentFrame) {
+            this.pending = null
+            this.canvas.width = 0
+            this.drawn = message
+            this.dispatchEvent(new Event('ready'))
+          }
+        } else if (message.type === 'frame') {
           if (typeof message.data !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/u.test(message.data)) throw new Error('Invalid browser image')
           this.pending = message
           this.draw()
@@ -93,9 +110,10 @@ export class BrowserView extends EventTarget {
         this.canvas.width = image.naturalWidth
         this.canvas.height = image.naturalHeight
         this.canvas.getContext('2d').drawImage(image, 0, 0)
-        const firstFrame = !this.drawn
+        const wasCurrent = this.hasCurrentFrame
         this.drawn = frame
-        if (firstFrame) this.dispatchEvent(new Event('ready'))
+        this.watchFrame()
+        if (!wasCurrent) this.dispatchEvent(new Event('ready'))
       }
       this.drawing = false
       this.draw()
@@ -104,10 +122,31 @@ export class BrowserView extends EventTarget {
     image.src = `data:image/jpeg;base64,${frame.data}`
   }
 
+  watchFrame(visible = this.visible) {
+    this.visible = visible
+    // Static pages need no new image. A website dialog can pause the screencast.
+    const waiting = visible && !this.closed && !this.state?.dialog
+      && (!this.state || (this.state.tabId && !this.hasCurrentFrame))
+    if (!waiting) {
+      clearTimeout(this.frameTimer)
+      this.frameTimer = null
+    } else if (this.frameTimer == null) {
+      this.frameTimer = setTimeout(() => {
+        this.frameTimer = null
+        if (!document.hidden) this.disconnect(true)
+      }, this.state ? FRAME_TIMEOUT : STREAM_OPEN_TIMEOUT)
+    }
+  }
+
+  get hasCurrentFrame() {
+    return this.drawn && this.drawn.tabId === this.state?.tabId
+      && this.drawn.inputEpoch === this.state?.inputEpoch
+  }
+
   send(event) {
-    if (this.closed || this.readOnly || !this.state?.manual || this.socket.readyState !== 1) return
-    if (event.kind === 'dialog' ? !this.state.dialog : !this.drawn
-      || this.drawn.tabId !== this.state.tabId || this.drawn.inputEpoch !== this.state.inputEpoch) return
+    if (this.closed || !this.state?.manual || !this.state.tabId || this.socket.readyState !== 1) return
+    if (event.kind === 'dialog' ? (!this.state.dialog || (this.readOnly && !this.dialogEnabled))
+      : this.readOnly || !this.hasCurrentFrame) return
     const payload = new TextEncoder().encode(JSON.stringify({ tabId: this.state.tabId, inputEpoch: this.state.inputEpoch, ...event }))
     if (payload.length > 32768 || this.socket.bufferedAmount > 65536) return
     const packet = new Uint8Array(payload.length + 4)
@@ -131,6 +170,7 @@ export class BrowserView extends EventTarget {
   disconnect(failed = false) {
     this.releaseInput()
     this.closed = true
+    this.watchFrame(false)
     this.socket.close()
     if (failed) this.dispatchEvent(new Event('disconnect'))
   }

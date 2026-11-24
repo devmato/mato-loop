@@ -40,6 +40,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "integration.browser.setupwrite",
         "integration.browser.setupresize",
         "integration.browser.open",
+        "integration.browser.openview",
         "integration.browser.control",
         "integration.browser.resize",
         "integration.browser.navigation",

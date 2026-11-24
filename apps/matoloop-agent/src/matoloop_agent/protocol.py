@@ -158,7 +158,7 @@ class Hello(StrictModel):
     computer_name: str = Field(alias="computerName", min_length=1, max_length=255)
     platform: str = Field(min_length=1, max_length=80)
     home_directory: str = Field(alias="homeDirectory", min_length=1, max_length=4096)
-    operations: list[str] = Field(max_length=64)
+    operations: list[str] = Field(max_length=128)
     system_info: SystemInfo | None = Field(default=None, alias="systemInfo")
 
     _home_is_absolute = field_validator("home_directory")(_absolute_path)

@@ -65,7 +65,7 @@ def disconnect_error_code(
         return "mcp.outcomeUnknown"
     if operation in {
         "integration.browser.execute", "integration.browser.setup",
-        "integration.browser.setupwrite", "integration.browser.open",
+        "integration.browser.setupwrite", "integration.browser.open", "integration.browser.openview",
         "integration.browser.close",
         "integration.browser.file", "integration.browser.navigation",
         "integration.browser.files", "integration.browser.upload",

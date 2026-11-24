@@ -23,9 +23,9 @@ Markiere Text mit Maus oder Tastatur und verwende **Strg/Cmd+C** und **Strg/Cmd+
 
 ### Verbindung wiederherstellen
 
-Bei kurzen Verbindungsabbrüchen verbindet sich die sichtbare Browser-App bis zu dreimal automatisch mit demselben laufenden Browser. Zugeklappte Ansichten pausieren die Versuche. Klicks und Eingaben werden nicht wiederholt.
+Bei kurzen Verbindungsabbrüchen bleibt das letzte Bild sichtbar. Die Browser-App verbindet sich bis zu dreimal automatisch mit demselben laufenden Browser, ohne die Seite neu zu laden oder Eingaben zu wiederholen. Zugeklappte Ansichten pausieren die Versuche.
 
-Scheitert die Wiederverbindung, klicke auf **Browser erneut verbinden** links in der Browserleiste. Ein Neuladen der WebUI ist dafür nicht nötig. Wurde die Browserlaufzeit beendet, etwa durch einen Agent-Neustart oder **Browser schließen** in einer anderen Ansicht, öffnet erst dein ausdrücklicher Neuversuch einen neuen Browser; vorherige Tabs, Anmeldungen und ungespeicherte Eingaben sind verloren.
+Ist die Browserlaufzeit nicht mehr vorhanden, öffnet MatoLoop die gespeicherten Webadressen automatisch in einem neuen Browser. Beim ersten Start durch ein Browser-Tool lädt MatoLoop die Seiten erst nach der Freigabe. Die Adressen werden auf dem ausgewählten Computer bis zu sieben Tage nach der letzten Änderung aufbewahrt. Website-Anmeldungen und ungespeicherte Eingaben werden nicht wiederhergestellt. Scheitert die Verbindung, klicke direkt in der Browseransicht auf **Erneut verbinden**; du musst die WebUI nicht neu laden.
 
 ### Dateien hochladen und herunterladen
 
@@ -59,4 +59,4 @@ Die URL muss vom ausgewählten Computer aus erreichbar sein. `localhost` bezeich
 
 Jeder Chat besitzt einen eigenen Browser. Andere Chats erhalten dessen Cookies, Tabs und Anmeldungen nicht. Mehrere Ansichten desselben Chats teilen dagegen denselben Browser. Nach Agent-Neustart musst du dich erneut an Websites anmelden.
 
-Abbruch macht bereits ausgeführte Website-Aktionen nicht rückgängig. Muss der Browserprozess für einen sicheren Abbruch beendet werden, gehen auch temporäre Tabs und Anmeldungen verloren. Prüfe vor dem Wiederholen einer unklaren Änderung zuerst den tatsächlichen Websitezustand.
+Abbruch macht bereits ausgeführte Website-Aktionen nicht rückgängig. Prüfe vor dem Wiederholen einer unklaren Änderung zuerst den tatsächlichen Websitezustand.

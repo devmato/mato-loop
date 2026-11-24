@@ -68,6 +68,15 @@ it.each([[1400, false], [390, true]])('keeps website navigation available in the
   expect(root.textContent).not.toContain('Browseroberfläche anzeigen')
 })
 
+it('offers a reconnect action in the existing empty state after retries fail', async () => {
+  await mount()
+  browser.connectionFailed()
+  await nextTick()
+  const reconnect = vi.spyOn(browser, 'connect').mockImplementation(() => {})
+  root.querySelector('.app-state-message button').click()
+  expect(reconnect).toHaveBeenCalledOnce()
+})
+
 it('opens saved downloads while the agent controls the browser', async () => {
   await mount()
   browser.busy = true

@@ -25,7 +25,42 @@ beforeEach(() => {
   view.socket.open()
   view.readOnly = false
 })
-afterEach(() => { view.disconnect(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { view.disconnect(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+it('retries a missing expected image, not an idle static page', () => {
+  vi.useFakeTimers()
+  const disconnected = vi.fn()
+  view.addEventListener('disconnect', disconnected)
+  view.watchFrame(true)
+  view.receive(packet(frame).buffer)
+  images[0].onload()
+  vi.advanceTimersByTime(30000)
+  expect(disconnected).not.toHaveBeenCalled()
+  view.receive(packet({ ...frame, type: 'state', inputEpoch: 'epoch-2' }).buffer)
+  vi.advanceTimersByTime(8000)
+  expect(disconnected).toHaveBeenCalledOnce()
+})
+
+it('allows a long relay setup before starting the frame deadline', () => {
+  vi.useFakeTimers()
+  const disconnected = vi.fn()
+  view.addEventListener('disconnect', disconnected)
+  view.watchFrame(true)
+  vi.advanceTimersByTime(160000)
+  expect(disconnected).not.toHaveBeenCalled()
+  view.receive(packet({ ...frame, type: 'state' }).buffer)
+  vi.advanceTimersByTime(7999)
+  expect(disconnected).not.toHaveBeenCalled()
+  vi.advanceTimersByTime(1)
+  expect(disconnected).toHaveBeenCalledOnce()
+})
+
+it('makes the tab controls available when the browser has no page to draw', () => {
+  const ready = vi.fn()
+  view.addEventListener('ready', ready)
+  view.receive(packet({ ...frame, type: 'state', tabId: null }).buffer)
+  expect(ready).toHaveBeenCalledOnce()
+})
 
 it('reassembles split frames and gates input on the image actually displayed', () => {
   const ready = vi.fn()

@@ -58,7 +58,8 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(execution, "RootFileService", root_files)
     case = SimpleNamespace(user=user, agent=agent, session=session, login=login, instance=instance,
                            objects=objects, documents=documents, profile=profile, coordinator=coordinator,
-                           calls=[], reply=None, generation=1, operations=SUPPORTED_OPERATIONS,
+                           calls=[], reply=None, generation=1,
+                           operations=SUPPORTED_OPERATIONS - {"integration.browser.openview"},
                            setup_id=uuid4(), file_id=str(uuid4()), file_size=0, file_offset=0,
                             manual=True, clipboard="")
     case.navigation = {

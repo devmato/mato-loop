@@ -35,6 +35,11 @@ existing process cleanup and IPC boundaries rather than adding shared-browser co
 
 The runtime keeps its profile in a private temporary directory, not a workspace or backend
 session directory. Cookies are not restored after runtime close or Agent restart.
+The Agent checkpoints supported tab URLs, order and active tab in private browser storage.
+An authorized Browser view or tool can reopen those addresses after runtime loss. A failed
+navigation keeps its saved address. Explicit browser close discards the checkpoint; otherwise
+it expires seven days after its last write and is pruned by the Agent even without a worker.
+Profiles, page scripts and previous inputs are not replayed.
 Existing backend/Agent/owner binding checks remain. Old persistent profiles are neither loaded,
 migrated, nor deleted automatically. They may still contain sensitive credentials on disk and
 require explicit operator cleanup. There is no persistent-profile reset API or UI.
@@ -200,12 +205,15 @@ queue limits and transport cleanup remain enforced. No arbitrary CDP method or u
 is exposed. See [the Agent runtime contract](../apps/matoloop-agent/BROWSER.md).
 
 The WebUI retries interrupted viewers after 1, 2 and 3 seconds while the Browser app is visible
-and eligible. A failed page stream replaces only that stream. Control reconnects send
-`expectedBrowserId` and may subscribe only to that live runtime; they never create a replacement.
+and eligible. A failed page stream replaces only that stream and keeps the last image visible
+until a current one is drawn. Relay setup has a separate deadline so it can wait for an active
+browser action. After the first stream message, missing expected images trigger a retry; idle
+pages and website dialogs do not. Control reconnects send
+`expectedBrowserId`. A live runtime is reused; a replacement during reconnect requires saved tabs on a supporting Agent.
 Each new control subscription receives a fresh login-bound view ID. Inputs and mutations are not
 replayed. The retry count resets only after the first matching page image is drawn, not on metadata
 alone. Hidden views pause retries. Exhausted retries or terminal access/runtime errors require
-**Browser erneut verbinden**; closing a browser in another view cannot automatically reopen it.
+**Erneut verbinden** in the Browser app. Background retries do not show error toasts.
 
 API errors use the central error catalog and German frontend formatter. No raw Chromium,
 Playwright or installer exception is exposed. Technical latency logs and durable browser

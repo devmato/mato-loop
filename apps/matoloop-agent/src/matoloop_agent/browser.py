@@ -30,11 +30,12 @@ from .browser_contracts import (
     BrowserFilesResult,
     BrowserIdArguments,
     BrowserNavigationResult,
+    BrowserOpenViewArguments,
     BrowserResizeResult,
     BrowserSetupReadResult,
     BrowserStatus,
 )
-from .browser_storage import browser_file
+from .browser_storage import browser_file, prune_tabs, read_tabs, tab_checkpoint
 from .errors import AgentError
 from .platform import FilesystemAdapter
 from .terminal import MAX_BUFFER_BYTES, TerminalManager
@@ -605,6 +606,13 @@ class BrowserRuntime:
             if action.startswith("setup") and action != "setup":
                 return await self.setup_io(action, args)
             async with self.lock:
+                if action == "close" and args.browser_id == self.browser_id:
+                    session_id = self.session_id
+                    await self.close()
+                    if session_id and not getattr(args, "preserve_tabs", False):
+                        checkpoint = tab_checkpoint(self.runtime_root(self.storage()), session_id)
+                        checkpoint.unlink(missing_ok=True)
+                    return {"ok": True}
                 if self.worker is not None and self.worker.returncode is not None:
                     await self.close()
                 if action == "status":
@@ -613,7 +621,7 @@ class BrowserRuntime:
                     raise AgentError("browser.unsupported", "Browser host is unsupported")
                 if action == "setup":
                     return await self.start_setup(args.owner_id)
-                if action == "open":
+                if action in {"open", "openview"}:
                     root = self.storage(args.owner_id)
                     if self.setup and self.setup.exit_code is None:
                         raise AgentError("browser.busy", "Browser setup is active")
@@ -626,10 +634,25 @@ class BrowserRuntime:
                             return {"browserId": self.browser_id, "protocol": "chat-browser-v1"}
                         raise AgentError("browser.busy", "Another browser is active")
                     try:
-                        await self.spawn(self.runtime_root(root))
-                        self.last_status = BrowserStatus.model_validate(
-                            await self.rpc("start", colorScheme=args.color_scheme)
+                        worker_root = self.runtime_root(root)
+                        checkpoint = tab_checkpoint(worker_root, args.session_id)
+                        restore = isinstance(args, BrowserOpenViewArguments)
+                        tabs, active = read_tabs(checkpoint) if restore else ([], 0)
+                        if restore and args.recover_only and not tabs:
+                            raise AgentError("browser.notConnected", "No saved browser tabs")
+                        await self.spawn(worker_root)
+                        started = await self.rpc(
+                            "start",
+                            colorScheme=args.color_scheme,
+                            checkpoint=checkpoint.name,
+                            tabs=tabs,
+                            active=active,
+                            deferRestore=restore and args.defer_restore,
                         )
+                        restored_tabs = started.pop("restoredTabs", 0)
+                        restore_incomplete = started.pop("restoreIncomplete", False)
+                        restore_pending = started.pop("restorePending", False)
+                        self.last_status = BrowserStatus.model_validate(started)
                         if self.last_status.state != "ready":
                             raise AgentError(
                                 self.last_status.error_code or "browser.notReady",
@@ -640,14 +663,17 @@ class BrowserRuntime:
                     except BaseException:
                         await self.close()
                         raise
-                    return {"browserId": self.browser_id, "protocol": "chat-browser-v1"}
+                    return {
+                        "browserId": self.browser_id,
+                        "protocol": "chat-browser-v1",
+                        **({"restoredTabs": restored_tabs} if restored_tabs else {}),
+                        **({"restoreIncomplete": True} if restore_incomplete else {}),
+                        **({"restorePending": True} if restore_pending else {}),
+                    }
                 if action == "close" and self.browser_id is None:
                     return {"ok": True}
                 if args.browser_id != self.browser_id:
                     raise AgentError("browser.notConnected", "Browser identifier is unavailable")
-                if action == "close":
-                    await self.close()
-                    return {"ok": True}
                 if action == "view":
                     result = await self.rpc("view")
                     ready = asyncio.get_running_loop().create_future()
@@ -661,6 +687,8 @@ class BrowserRuntime:
                     return {"ok": True, "protocol": "page-stream-v1"}
                 if action == "files":
                     return await self.rpc("files")
+                if action == "control" and args.restore_tabs:
+                    return {"ok": True, **await self.rpc("restore")}
                 if action == "upload":
                     return await self.stage_upload(args)
                 if action in {"resize", "navigation"}:
@@ -677,7 +705,9 @@ class BrowserRuntime:
                                 await asyncio.shield(pending)
                         pending.result()
                         raise
-                return await self.rpc(action, args=args.model_dump(by_alias=True))
+                return await self.rpc(
+                    action, args=args.model_dump(by_alias=True, exclude={"restore_tabs"})
+                )
         except AgentError as exc:
             if exc.code.startswith("browser.") or (
                 action == "publish" and exc.code == "path.exists"
@@ -777,6 +807,19 @@ class BrowserManager(BrowserRuntime):
     def __init__(self, config, terminal, filesystem=None):
         super().__init__(config, terminal, filesystem)
         self.runtimes: dict[str, BrowserRuntime] = {}
+        self._next_tab_cleanup = 0.0
+
+    def prune_tab_checkpoints(self) -> None:
+        now = monotonic()
+        if now < self._next_tab_cleanup:
+            return
+        self._next_tab_cleanup = now + 3600
+        if not (self.config.data_dir / "tools" / "browser").exists():
+            return
+        try:
+            prune_tabs(self.runtime_root(self.storage()))
+        except (OSError, AgentError):
+            logger.warning("Browser tab checkpoints could not be pruned")
 
     @property
     def maintenance_busy(self) -> bool:
@@ -796,7 +839,7 @@ class BrowserManager(BrowserRuntime):
             if runtime is None:
                 if action == "close":
                     return {"ok": True}
-                if action != "open":
+                if action not in {"open", "openview"}:
                     raise AgentError("browser.notConnected", "Browser identifier is unavailable")
                 if len(self.runtimes) >= 8 or (self.setup and self.setup.exit_code is None):
                     raise AgentError("browser.busy", "Browser runtime capacity is unavailable")

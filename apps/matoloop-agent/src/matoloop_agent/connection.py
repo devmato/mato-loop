@@ -574,6 +574,7 @@ class MatoLoopAgent:
             delay = 1.0
             async with self.transfer:
                 while True:
+                    self.browser.prune_tab_checkpoints()
                     connected = asyncio.Event()
                     try:
                         if access_key_loader is not None:
@@ -697,6 +698,7 @@ class MatoLoopAgent:
             async def report_maintenance() -> None:
                 while True:
                     await sleep(30)
+                    self.browser.prune_tab_checkpoints()
                     await replay_maintenance_results(self.config, self._access_key)
 
             reporter = asyncio.create_task(report_maintenance())

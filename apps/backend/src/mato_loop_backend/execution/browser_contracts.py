@@ -81,10 +81,18 @@ class BrowserOpenResult(BrowserResult):
     upgrade_fields = frozenset({"protocol"})
     browser_id: UUID = Field(strict=False)
     protocol: Literal["chat-browser-v1"]
+    restored_tabs: int = Field(default=0, ge=0, le=32)
+    restore_incomplete: bool = False
+    restore_pending: bool = False
 
 
 class BrowserControlResult(BrowserResult):
     ok: bool
+
+
+class BrowserRestoreResult(BrowserControlResult):
+    restored_tabs: int = Field(default=0, ge=0, le=32)
+    restore_incomplete: bool = False
 
 
 class BrowserStreamResult(BrowserControlResult):

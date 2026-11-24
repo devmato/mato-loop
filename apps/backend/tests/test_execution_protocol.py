@@ -201,6 +201,7 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "integration.browser.setupwrite",
         "integration.browser.setupresize",
         "integration.browser.open",
+        "integration.browser.openview",
         "integration.browser.control",
         "integration.browser.resize",
         "integration.browser.navigation",

@@ -56,7 +56,7 @@ from .browser_contracts import (
     BrowserStatus,
     decode_chunk,
 )
-from .browser_storage import browser_file
+from .browser_storage import browser_file, restorable_url, write_tabs
 from .errors import AgentError
 
 
@@ -133,6 +133,11 @@ class BrowserWorker:
         self.control_epoch = None
         self.view_token = os.urandom(32)
         self.view_endpoint = None
+        self.checkpoint: Path | None = None
+        self.deferred_tabs: tuple[Path, list[str], int] | None = None
+        self.failed_tab_urls: dict[object, str] = {}
+        self.saved_tabs: tuple[list[str], int] | None = None
+        self.tab_save: asyncio.TimerHandle | None = None
 
     def task(self, coroutine) -> None:
         task = asyncio.create_task(coroutine)
@@ -242,6 +247,70 @@ class BrowserWorker:
             browserVersion=self.context.browser.version,
             playwrightVersion=version("playwright"),
         ).model_dump(by_alias=True)
+
+    async def restore_tabs(self, urls: list[str], active: int) -> int:
+        pages = [self.context.pages[0]]
+        for _ in urls[1:]:
+            pages.append(await self.context.new_page())
+        selected = pages[active]
+        await selected.bring_to_front()
+        self.active_tab_id = next(key for key, page in self.tabs.items() if page is selected)
+
+        async def load(page, url):
+            if url == "about:blank":
+                return False
+            try:
+                await page.goto(url, wait_until="commit", timeout=8_000)
+            except PlaywrightError:
+                if not page.is_closed():
+                    self.failed_tab_urls[page] = url
+                return False
+            return True
+
+        opened = await asyncio.gather(
+            *(load(page, url) for page, url in zip(pages, urls, strict=True))
+        )
+        return sum(opened)
+
+    async def finish_tab_restore(self) -> dict:
+        if self.deferred_tabs is None:
+            return {}
+        checkpoint, urls, active = self.deferred_tabs
+        restored = await self.restore_tabs(urls, active) if urls else 0
+        self.deferred_tabs = None
+        self.checkpoint = checkpoint
+        if not urls:
+            return {}
+        self.schedule_tab_save()
+        return {
+            "restoredTabs": restored,
+            "restoreIncomplete": restored < sum(url != "about:blank" for url in urls),
+        }
+
+    def schedule_tab_save(self) -> None:
+        if self.checkpoint is not None and self.tab_save is None:
+            self.tab_save = asyncio.get_running_loop().call_later(0.15, self.save_tabs)
+
+    def save_tabs(self) -> None:
+        if self.tab_save is not None:
+            self.tab_save.cancel()
+            self.tab_save = None
+        if self.checkpoint is None or not self.context.browser.is_connected():
+            return
+        keys = list(self.tabs)
+        urls = [
+            self.failed_tab_urls.get(page) or restorable_url(page.url)
+            for page in self.tabs.values()
+        ]
+        active = keys.index(self.active_tab_id) if self.active_tab_id in keys else 0
+        if self.saved_tabs == (urls, active):
+            return
+        try:
+            write_tabs(self.checkpoint, urls, active)
+        except OSError:
+            self.diagnostics.append("Browser tab checkpoint could not be saved")
+        else:
+            self.saved_tabs = urls, active
 
     async def resize(self, width: int, height: int) -> dict:
         geometry = BrowserResizeResult(width=width, height=height).model_dump()
@@ -495,14 +564,18 @@ class BrowserWorker:
     async def stream_views(self) -> None:
         session = None
         current = None
-        frames = deque(maxlen=1)
+        newest_frame = None
+        frame_acks = []
         ready = asyncio.Event()
         previous = epoch = latest = None
         cursor = "default"
         cursor_sampled = 0
 
         def frame(event):
-            frames.append(event)
+            nonlocal newest_frame
+            newest_frame = event["data"]
+            # Chromium limits unacknowledged frames. Even skipped images need an ACK.
+            frame_acks.append(event["sessionId"])
             ready.set()
 
         async def write(writer, packet):
@@ -523,7 +596,8 @@ class BrowserWorker:
                         with contextlib.suppress(PlaywrightError):
                             await self.dispatch_input(current, session.send("Page.stopScreencast"))
                             await self.dispatch_input(current, session.detach())
-                    frames.clear()
+                    newest_frame = None
+                    frame_acks.clear()
                     session = latest = None
                     current = page
                     epoch = self.input_epoch
@@ -581,11 +655,11 @@ class BrowserWorker:
                     else None,
                 }
                 refresh, self.view_refresh = self.view_refresh, False
-                event = frames.pop() if frames else None
-                if event is not None:
-                    latest = event["data"]
-                if event is not None or state != previous or refresh:
-                    image = latest if event is not None or refresh else None
+                image, newest_frame = newest_frame, None
+                if image is not None:
+                    latest = image
+                if image is not None or state != previous or refresh:
+                    image = latest if image is not None or refresh else None
                     payload = json.dumps(
                         {
                             **state,
@@ -598,14 +672,14 @@ class BrowserWorker:
                     packet = struct.pack(">I", len(payload)) + payload
                     await asyncio.gather(*(write(writer, packet) for writer in list(self.viewers)))
                     previous = state
-                    if event is not None:
+                    acks, frame_acks = frame_acks, []
+                    for session_id in acks:
                         try:
-                            await session.send(
-                                "Page.screencastFrameAck", {"sessionId": event["sessionId"]}
-                            )
+                            await session.send("Page.screencastFrameAck", {"sessionId": session_id})
                         except PlaywrightError:
                             if not page.is_closed():
                                 raise
+                            break
                 ready.clear()
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(ready.wait(), 0.1)
@@ -722,6 +796,7 @@ class BrowserWorker:
         self.document_ids[page] = str(uuid4())
         self.loading_frames[page] = set()
         self.pending_requests[page] = set()
+        self.schedule_tab_save()
 
         def request_started(request):
             if page in self.pending_requests and request.resource_type in {
@@ -764,12 +839,18 @@ class BrowserWorker:
             self.page_history.pop(page, None)
             self.page_sessions.pop(page, None)
             self.dialogs.pop(page, None)
+            self.failed_tab_urls.pop(page, None)
+            self.schedule_tab_save()
 
         def navigated(frame):
             self.pending_choosers.pop(page, None)
             if frame == page.main_frame:
+                # Chromium can commit its internal error page after a failed load.
+                if not frame.url.startswith("chrome-error:"):
+                    self.failed_tab_urls.pop(page, None)
                 self.document_ids[page] = str(uuid4())
                 self.task(self.reset_input())
+                self.schedule_tab_save()
 
         def dialog_opened(dialog):
             if self.manual:
@@ -1862,6 +1943,9 @@ class BrowserWorker:
 
             async def close() -> None:
                 deadline = asyncio.get_running_loop().time() + 10
+                if self.tab_save is not None:
+                    self.save_tabs()
+                self.checkpoint = None
                 self.pending_choosers.clear()
                 self.document_ids.clear()
                 tasks = set(self.tasks) | set(self.page_sessions.values())
@@ -1942,6 +2026,15 @@ async def serve(root: Path) -> None:
                     result = await worker.start(
                         color_scheme=request.get("colorScheme", "light"),
                     )
+                    if result["state"] == "ready" and (checkpoint := request.get("checkpoint")):
+                        urls, active = request.get("tabs", []), request.get("active", 0)
+                        worker.deferred_tabs = root / checkpoint, urls, active
+                        if urls and request.get("deferRestore"):
+                            result["restorePending"] = True
+                        else:
+                            result.update(await worker.finish_tab_restore())
+                elif op == "restore":
+                    result = await worker.finish_tab_restore()
                 elif op == "execute":
                     args = BrowserExecuteArguments.model_validate(request["args"])
                     started = monotonic()
@@ -1950,12 +2043,13 @@ async def serve(root: Path) -> None:
                     finally:
                         elapsed_ms = max(0, (monotonic() - started) * 1000)
                 elif op == "navigation":
-                    result = await worker.navigation(
-                        BrowserNavigationArguments.model_validate(request["args"])
-                    )
+                    args = BrowserNavigationArguments.model_validate(request["args"])
+                    result = await worker.navigation(args)
                 elif op == "file":
                     result = await worker.file(BrowserFileArguments.model_validate(request["args"]))
                 elif op == "files":
+                    if not worker.context or not worker.context.browser.is_connected():
+                        raise fail("notConnected")
                     result = worker.file_status()
                 elif op == "control":
                     args = BrowserControlArguments.model_validate(request["args"])
@@ -1979,6 +2073,11 @@ async def serve(root: Path) -> None:
                     break
                 else:
                     raise fail("invalidTarget")
+                if (op == "navigation" and args.action != "state") or (
+                    op == "execute"
+                    and args.action not in {"tabs", "inspect", "diagnostics", "screenshot"}
+                ):
+                    worker.schedule_tab_save()
                 response = {"ok": True, "result": result}
             except AgentError as exc:
                 response = {"ok": False, "error": exc.code}

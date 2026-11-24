@@ -52,7 +52,7 @@ class PlatformBoundaryTests(unittest.IsolatedAsyncioTestCase):
                     homeDirectory="/home/test",
                     operations=sorted(all_operations - {excluded}),
                 )
-                self.assertLessEqual(len(hello.operations), 64)
+                self.assertLessEqual(len(hello.operations), 128)
                 self.assertEqual(
                     {op for op in hello.operations if op.startswith("integration.mcp.")},
                     {"integration.mcp.discover", "integration.mcp.call", "integration.mcp.manage"},

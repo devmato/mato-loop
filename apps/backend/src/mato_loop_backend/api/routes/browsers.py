@@ -168,7 +168,11 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
         )
         view_id = next(key for key, (socket, _) in connection.sockets.items() if socket is websocket)
         await connection.check_view(view_id)
-        await connection.state(view_id=view_id)
+        report_restore = connection.restore_notice_pending or (
+            expected_browser_id is not None and connection.browser_id != expected_browser_id
+        )
+        connection.restore_notice_pending = False
+        await connection.state(view_id=view_id, report_restore=report_restore)
 
         async def check_login():
             while True:

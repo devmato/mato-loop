@@ -218,6 +218,68 @@ def test_resume_never_opens_a_replacement_browser(env, target):
     assert sum(op == "integration.browser.open" for op, _ in env.calls) == 1
 
 
+def test_resume_recovers_saved_tabs_after_runtime_loss(env):
+    with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
+        state = control.receive_json()
+    old = env.coordinator.connections[(env.session.id, env.agent.id)]
+    env.client.portal.call(lambda: env.coordinator.close(old, reason="watchFailed"))
+    env.operations |= {"integration.browser.openview"}
+
+    async def restore(operation, arguments):
+        if operation == "integration.browser.openview":
+            assert arguments["recoverOnly"] is True
+            assert arguments["deferRestore"] is True
+            return {"browserId": arguments["browserId"], "protocol": "chat-browser-v1", "restorePending": True}
+        if operation == "integration.browser.control" and arguments.get("restoreTabs"):
+            return {"ok": True, "restoredTabs": 2}
+
+    env.reply = restore
+    for _ in range(2):
+        with env.client.websocket_connect(env.url + f"&expectedBrowserId={state['browserId']}", headers=ORIGIN) as resumed:
+            recovered = resumed.receive_json()
+            assert recovered["browserId"] != state["browserId"] and recovered["restoredTabs"] == 2
+    assert sum(op == "integration.browser.openview" for op, _ in env.calls) == 1
+    assert sum(bool(args.get("restoreTabs")) for _, args in env.calls) == 1
+
+
+@pytest.mark.parametrize("decision", [PermissionDecision.DENY, PermissionDecision.ALLOW])
+def test_tool_start_defers_restoration_until_authorized(env, monkeypatch, decision):
+    integrations = IntegrationSettings(instances=[env.instance])
+    monkeypatch.setattr(execution, "browser_coordinator", env.coordinator)
+    monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
+    monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(return_value=ToolSettings()))
+    env.operations |= {"integration.browser.openview"}
+    events = []
+
+    async def reply(operation, arguments):
+        if operation == "integration.browser.openview":
+            assert arguments["deferRestore"] is True
+            return {"browserId": arguments["browserId"], "protocol": "chat-browser-v1", "restorePending": True}
+        if operation == "integration.browser.control" and arguments.get("restoreTabs"):
+            events.append("restore")
+            return {"ok": True, "restoredTabs": 2}
+
+    async def authorize(*_args, **_kwargs):
+        events.append("permission")
+        return decision
+
+    env.reply = reply
+    call = ToolCall("browser-recover", "browser_tabs", {"action": "list"})
+    context = ToolContext(
+        db=AsyncMock(), run_id=uuid4(), session=env.session, tool_call=call,
+        root_files=Mock(), integration_settings=integrations,
+        execution_client=execution.browser_client(env.agent.id), ask_handler=authorize,
+    )
+    context.db.get.return_value = SimpleNamespace(
+        execution_agent_id=env.agent.id, execution_operations=["integration.browser.execute"],
+    )
+    env.objects[AgentRun, context.run_id] = AgentRun(id=context.run_id, session_id=env.session.id, status="completed")
+    registry = mock_tools_catalog.ToolRegistry([]).effective(integrations)
+    result = env.client.portal.call(registry.execute, call, context)
+    assert result.is_error == (decision == PermissionDecision.DENY), result.content
+    assert events == (["permission", "restore"] if decision == PermissionDecision.ALLOW else ["permission"])
+
+
 @pytest.mark.parametrize("gate", ["default", "explicit", "missing-profile"])
 def test_profile_gate_allows_manual_view_but_not_model_actions(env, monkeypatch, gate):
     if gate == "default":

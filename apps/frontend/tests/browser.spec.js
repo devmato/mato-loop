@@ -8,9 +8,10 @@ import { browserNavigationUrl, browserSocketUrl, clipboardFits } from '../src/fe
 import { FakeWebSocket } from './terminal-websocket'
 import BrowserSetupDialog from '../src/features/browser/BrowserSetupDialog.vue'
 
-const { api, notifyError, viewers, terminals } = vi.hoisted(() => ({
-  api: { get: vi.fn(), put: vi.fn(), post: vi.fn() }, notifyError: vi.fn(), viewers: [], terminals: []
+const { api, notify, notifyError, viewers, terminals } = vi.hoisted(() => ({
+  api: { get: vi.fn(), put: vi.fn(), post: vi.fn() }, notify: vi.fn(), notifyError: vi.fn(), viewers: [], terminals: []
 }))
+vi.mock('quasar', async (original) => ({ ...await original(), Notify: { create: notify } }))
 vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: vi.fn() }) }))
@@ -116,6 +117,7 @@ it('binds a viewer without a model attachment handshake', async () => {
 it.each(['view', 'control'])('restores the same browser after a %s disconnect without replaying navigation', async (target) => {
   vi.useFakeTimers()
   const viewer = await open()
+  const imageHost = browser.viewHost
   browser.navigate('reload')
   socket.send.mockClear()
   if (target === 'view') viewer.dispatchEvent(new Event('disconnect'))
@@ -129,6 +131,7 @@ it.each(['view', 'control'])('restores the same browser after a %s disconnect wi
     await browser.mountView(browser.viewParent)
   }
   viewers.at(-1).dispatchEvent(new Event('connect'))
+  expect([browser.viewParent.firstChild, viewers.at(-1).readOnly]).toEqual([imageHost, true])
   viewers.at(-1).dispatchEvent(new Event('ready'))
   socket.message({ ...navigation, completed: true })
   expect({ ready: browser.ready, browserId: browser.browserId, attempts: browser.reconnectAttempts, commands: socket.send.mock.calls.map(([raw]) => JSON.parse(raw).action) })
@@ -148,7 +151,7 @@ it('limits reconnects that receive state but never display an image', async () =
   browser.activate(JSON.stringify(context), context, true)
   await vi.advanceTimersByTimeAsync(10000)
   expect({ status: browser.status, attempts: viewers.length, notices: notifyError.mock.calls.length })
-    .toEqual({ status: 'closed', attempts: 4, notices: 1 })
+    .toEqual({ status: 'closed', attempts: 4, notices: 0 })
 })
 
 it('pauses retries while parked and resumes them when the view becomes eligible', async () => {
@@ -187,6 +190,21 @@ it('does not reopen a browser after the backend refuses its previous runtime', a
   browser.activate(JSON.stringify(context), context, true)
   await vi.advanceTimersByTimeAsync(10000)
   expect(FakeWebSocket.instances).toHaveLength(2)
+})
+
+it('recovers after the computer becomes available and only notifies about restored tabs', async () => {
+  vi.useFakeTimers()
+  await open()
+  browser.syncContext({ ...context, available: false, tabPresent: true })
+  browser.activate(JSON.stringify(context), context, true)
+  await vi.advanceTimersByTimeAsync(1000)
+  expect(browser.socket.url).toContain('expectedBrowserId=runtime-1')
+  browser.socket.open()
+  const restored = { ...state, browserId: 'runtime-2', viewId: 'view-2', restoredTabs: 2 }
+  browser.socket.message(restored)
+  browser.socket.message(restored)
+  expect(notify.mock.calls).toEqual([[{ type: 'info', message: 'Browser-Tabs wiederhergestellt.' }]])
+  expect(notifyError).not.toHaveBeenCalled()
 })
 
 it('retains a parked viewer on remount but never exposes another chat as its own', async () => {
