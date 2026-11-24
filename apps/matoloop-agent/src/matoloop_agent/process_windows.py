@@ -197,16 +197,25 @@ class WindowsProcess:
             raise AgentError(
                 "process.inspectionLimitExceeded", "Shell inspection exceeds its limits"
             )
-        parsed = subprocess.run(
-            [self.shell, "-NoProfile", "-NonInteractive", "-EncodedCommand", _encoded(_INSPECTOR)],
-            input=command,
-            text=True,
-            encoding="utf-8",
-            capture_output=True,
-            timeout=15,
-            cwd=native(current_directory),
-            check=False,
-        )
+        try:
+            parsed = subprocess.run(
+                [
+                    self.shell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-EncodedCommand",
+                    _encoded(_INSPECTOR),
+                ],
+                input=command,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                timeout=15,
+                cwd=native(current_directory),
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AgentError("process.unavailable", "PowerShell inspection timed out") from exc
         if parsed.returncode or len(parsed.stdout) > 256 * 1024:
             raise AgentError("process.unavailable", "PowerShell inspection failed")
         try:

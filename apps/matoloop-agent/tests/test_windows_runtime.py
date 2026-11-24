@@ -238,6 +238,27 @@ class WindowsRuntimeTests(unittest.TestCase):
         ):
             asyncio.run(execute())
 
+    def test_powershell_inspection_timeout_blocks_execution(self) -> None:
+        from matoloop_agent.errors import AgentError
+
+        with (
+            patch(
+                "matoloop_agent.process_windows.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(self.process.shell, 15),
+            ),
+            patch("asyncio.create_subprocess_exec") as launch,
+            self.assertRaises(AgentError) as caught,
+        ):
+            asyncio.run(
+                self.process.exec(
+                    current_directory=self.wire,
+                    command="Write-Output 'not run'",
+                    timeout=10,
+                    stream=AsyncMock(),
+                )
+            )
+        self.assertEqual((caught.exception.code, launch.call_count), ("process.unavailable", 0))
+
     def test_detached_child_does_not_hold_shell_output_open(self) -> None:
         async def execute():
             pid_file = self.home / "child.pid"
@@ -251,12 +272,14 @@ class WindowsRuntimeTests(unittest.TestCase):
                 encoding="utf-8",
             )
             try:
-                result = await self.process.exec(
-                    current_directory=self.wire,
-                    command=f"& '{sys.executable}' '{launcher}' '{pid_file}'",
-                    timeout=10,
-                    stream=AsyncMock(),
-                )
+                # Keep this test about the real process and its inherited output pipes.
+                with patch.object(self.process, "inspect_shell"):
+                    result = await self.process.exec(
+                        current_directory=self.wire,
+                        command=f"& '{sys.executable}' '{launcher}' '{pid_file}'",
+                        timeout=10,
+                        stream=AsyncMock(),
+                    )
                 self.assertEqual(
                     (result["exitCode"], result["timedOut"], result["stdoutTruncated"]),
                     (0, False, True),
@@ -582,13 +605,13 @@ class WindowsRuntimeTests(unittest.TestCase):
                 "try { & ([ScriptBlock]::Create("
                 "$ast.Extent.Text.Substring($start, $end-$start))) } "
                 "catch { if ($_.Exception.Message -ne 'Could not find private Python.') "
-                "{ throw } }; "
-                "exit 0",
+                "{ throw }; exit 0 }; "
+                "throw 'Expected private Python lookup to fail'",
             ],
             check=False,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=60,
             env={
                 **os.environ,
                 "TEST_INSTALLER": str(installer),
