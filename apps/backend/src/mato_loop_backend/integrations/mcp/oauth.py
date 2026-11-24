@@ -16,6 +16,8 @@ from mcp.client.auth.utils import issuers_match
 from mcp.shared.auth import OAuthClientInformationFull, OAuthMetadata, OAuthToken
 from mcp.shared.auth_utils import check_resource_allowed
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, ValidationError, model_validator
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.integrations.mcp.client import (
@@ -34,6 +36,7 @@ from mato_loop_backend.security import (
 from mato_loop_backend.settings import IntegrationInstance
 
 OAUTH_CREDENTIAL_KIND = "mcp.oauth"
+OAUTH_CLIENT_CREDENTIAL_KIND = "mcp.oauth.client"
 LOGIN_TTL = 300
 MAX_LOGIN_ATTEMPTS = 32
 CALLBACK_PATH = "/api/mcp/oauth/callback"
@@ -50,12 +53,32 @@ class OAuthConfig(BaseModel):
     scope: str | None = Field(
         default=None, min_length=1, max_length=1024, pattern=r"^[\x21\x23-\x5b\x5d-\x7e ]+$"
     )
+    user_scoped: bool = False
 
     @model_validator(mode="after")
     def validate_client(self):
         if not self.client_id and self.token_endpoint_auth_method != "none":
             raise ValueError("A confidential OAuth client requires a client ID")
+        if self.user_scoped and not self.client_id:
+            raise ValueError("User-scoped OAuth requires a registered client ID")
         return self
+
+
+def _is_microsoft_entra_v2_issuer(value: str) -> bool:
+    try:
+        issuer = httpx.URL(value)
+    except (httpx.InvalidURL, TypeError, ValueError):
+        return False
+    return (
+        issuer.host
+        in {
+            "login.chinacloudapi.cn",
+            "login.microsoftonline.com",
+            "login.microsoftonline.us",
+            "login.partner.microsoftonline.cn",
+        }
+        and issuer.path.rstrip("/").endswith("/v2.0")
+    )
 
 
 def validate_oauth_url(value: str) -> str:
@@ -131,6 +154,12 @@ class _LoginProvider(OAuthClientProvider):
             raise McpClientError("mcp.oauthConfigurationInvalid")
         if method != "none" and not context.client_info.client_secret:
             raise McpClientError("mcp.oauthConfigurationInvalid")
+        if _is_microsoft_entra_v2_issuer(str(metadata.issuer)):
+            context.should_include_resource_param = lambda _protocol_version=None: False
+            scopes = list(dict.fromkeys((context.client_metadata.scope or "").split()))
+            if "offline_access" not in scopes:
+                scopes.append("offline_access")
+            context.client_metadata.scope = " ".join(scopes)
         context.client_info.issuer = str(metadata.issuer)
         return await super()._perform_authorization_code_grant()
 
@@ -143,6 +172,7 @@ class LoginAttempt:
     draft: dict[str, Any]
     integration_id: UUID | None
     revision: dict[str, Any] | None
+    bootstrap: bool = False
     id: str = field(default_factory=lambda: secrets.token_urlsafe(24))
     created_at: float = field(default_factory=time.monotonic)
     authorization_url: str | None = None
@@ -453,8 +483,9 @@ async def refresh_oauth_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "grant_type": "refresh_token",
         "refresh_token": payload["tokens"]["refresh_token"],
         "client_id": client.client_id,
-        "resource": payload["resource"],
     }
+    if not _is_microsoft_entra_v2_issuer(payload["issuer"]):
+        data["resource"] = payload["resource"]
     auth = None
     if method == "client_secret_basic":
         auth = httpx.BasicAuth(
@@ -490,6 +521,8 @@ async def refresh_oauth_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _save_oauth_credential(db, credential, payload):
+    if credential.metadata_json.get("integration_id"):
+        payload = oauth_payload_without_shared_secret(payload)
     await store_credential(
         db,
         owner_id=credential.user_id,
@@ -528,20 +561,107 @@ async def rebind_oauth_endpoint(db, instance: IntegrationInstance, endpoint: str
     )
 
 
-async def oauth_token(instance: IntegrationInstance) -> str:
+def user_scoped_oauth(instance: IntegrationInstance) -> bool:
+    config = instance.config.get("oauth")
+    return isinstance(config, dict) and config.get("user_scoped") is True
+
+
+async def find_user_oauth_credential(
+    db: AsyncSession, instance: IntegrationInstance, user_id: UUID, *, for_update: bool = False
+) -> Credential | None:
+    statement = (
+        scoped_credentials(user_id)
+        .where(
+            Credential.kind == OAUTH_CREDENTIAL_KIND,
+            Credential.metadata_json["integration_id"].astext == str(instance.id),
+        )
+        .execution_options(populate_existing=True)
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    return await db.scalar(statement)
+
+
+async def lock_user_oauth_credential(
+    db: AsyncSession, integration_id: UUID, user_id: UUID
+) -> None:
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+        {"scope": f"mcp.oauth:{integration_id}:{user_id}"},
+    )
+
+
+def oauth_payload_without_shared_secret(payload: dict[str, Any]) -> dict[str, Any]:
+    result = {**payload}
+    client_info = dict(payload.get("client_info") or {})
+    client_info.pop("client_secret", None)
+    result["client_info"] = client_info
+    return result
+
+
+async def delete_user_oauth_credentials(
+    db: AsyncSession, integration_id: UUID, *, user_id: UUID | None = None
+) -> int:
+    statement = select(Credential).where(
+        Credential.kind == OAUTH_CREDENTIAL_KIND,
+        Credential.metadata_json["integration_id"].astext == str(integration_id),
+    )
+    if user_id is not None:
+        statement = statement.where(Credential.user_id == user_id)
+    credentials = list((await db.scalars(statement)).all())
+    for credential in credentials:
+        await db.delete(credential)
+    return len(credentials)
+
+
+def client_template_catalog_ready(payload: dict[str, Any], instance: IntegrationInstance) -> bool:
+    initialized = payload.get("catalog_initialized")
+    if isinstance(initialized, bool):
+        return initialized
+    return bool(instance.config.get("tools"))
+
+
+async def oauth_token(instance: IntegrationInstance, user_id: UUID | None = None) -> str:
     if instance.credential_id is None:
         raise McpClientError("mcp.authorizationRequired")
     # A separate transaction commits only OAuth state, not a caller's pending work.
     async with AsyncSessionFactory() as db:
-        credential = await db.scalar(
-            scoped_credentials(instance.owner_id)
-            .where(Credential.id == instance.credential_id)
-            .with_for_update()
-        )
+        if user_scoped_oauth(instance):
+            if user_id is None:
+                raise McpClientError("mcp.authorizationRequired")
+            credential = await find_user_oauth_credential(
+                db, instance, user_id, for_update=True
+            )
+        else:
+            credential = await db.scalar(
+                scoped_credentials(instance.owner_id)
+                .where(Credential.id == instance.credential_id)
+                .with_for_update()
+            )
         if credential is None or credential.kind != OAUTH_CREDENTIAL_KIND:
             raise McpClientError("mcp.authorizationRequired")
         try:
             payload = read_credential(credential)
+            if user_scoped_oauth(instance):
+                template = await load_credential(
+                    db, instance.credential_id, owner_id=None, populate_existing=True
+                )
+                if template is None or template.kind != OAUTH_CLIENT_CREDENTIAL_KIND:
+                    raise McpClientError("mcp.oauthConfigurationInvalid")
+                client_template = {
+                    key: value
+                    for key, value in (
+                        read_credential(template).get("client_info") or {}
+                    ).items()
+                    if key != "redirect_uris"
+                }
+                payload = {
+                    **payload,
+                    "client_info": {
+                        **payload.get("client_info", {}),
+                        **client_template,
+                    },
+                }
             if str(httpx.URL(payload["endpoint"])) != str(
                 httpx.URL(instance.config["endpoint"])
             ) or not check_resource_allowed(
@@ -563,13 +683,22 @@ async def oauth_token(instance: IntegrationInstance) -> str:
         return refreshed["tokens"]["access_token"]
 
 
-async def mark_authorization_required(instance: IntegrationInstance, token: str):
+async def mark_authorization_required(
+    instance: IntegrationInstance, token: str, user_id: UUID | None = None
+):
     async with AsyncSessionFactory() as db:
-        credential = await db.scalar(
-            scoped_credentials(instance.owner_id)
-            .where(Credential.id == instance.credential_id)
-            .with_for_update()
-        )
+        if user_scoped_oauth(instance):
+            if user_id is None:
+                return
+            credential = await find_user_oauth_credential(
+                db, instance, user_id, for_update=True
+            )
+        else:
+            credential = await db.scalar(
+                scoped_credentials(instance.owner_id)
+                .where(Credential.id == instance.credential_id)
+                .with_for_update()
+            )
         if credential is not None and credential.kind == OAUTH_CREDENTIAL_KIND:
             payload = read_credential(credential)
             if payload.get("tokens", {}).get("access_token") != token:
@@ -579,9 +708,11 @@ async def mark_authorization_required(instance: IntegrationInstance, token: str)
             )
 
 
-async def connection_token(db, instance: IntegrationInstance) -> str | None:
+async def connection_token(
+    db, instance: IntegrationInstance, *, user_id: UUID | None = None
+) -> str | None:
     if instance.config.get("oauth") is not None:
-        return await oauth_token(instance)
+        return await oauth_token(instance, user_id)
     if instance.credential_id is None:
         return None
     try:

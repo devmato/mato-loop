@@ -296,4 +296,8 @@ Der Leerlauf-Timeout beträgt standardmäßig **30 Minuten**. Er beendet wartend
 2. Wähle **Anmeldung öffnen** und bestätige beim Anbieter.
 3. Beende die Anmeldung in MatoLoop.
 
+Administratoren können unter **OAuth-Anmeldung je Benutzer** einen Server zentral konfigurieren. Endpoint, Client-ID, Client-Secret und die Tool-Berechtigungen gehören dann zur globalen Verbindung. Die Zugangs- und Erneuerungs-Token gehören dagegen dem jeweiligen Benutzer. Nach dem Speichern führt zuerst ein Administrator **Mit Konto verbinden** aus; dabei prüft MatoLoop Endpoint und Tool-Katalog. Danach sieht jeder berechtigte Benutzer den Server in seinen MCP-Einstellungen und wählt einmal **Mit Konto verbinden**. **Abmelden** entfernt nur dessen eigenen OAuth-Zugang; der globale Server und die Anmeldungen anderer Benutzer bleiben bestehen.
+
+Diese Variante ist für Remote-Dienste mit benutzerspezifischen Rechten vorgesehen. Eine normale globale OAuth-Verbindung verwendet weiterhin ein einziges gemeinsames Konto und darf nicht für unterschiedliche Benutzerrechte eingesetzt werden.
+
 Der Server muss MCP-Authentifizierungsmetadaten und Bearer-Zugriff unterstützen; Browser-SSO allein reicht nicht. Ein vorregistrierter Client benötigt `<ursprung>/api/mcp/oauth/callback`. Nach Ablauf oder Backend-Neustart starte den Anmeldeversuch erneut. Gespeicherte Verbindungen bleiben erhalten; nach abgelehnter Token-Erneuerung ist eine neue Anmeldung nötig. Tool-Aufrufe werden nicht automatisch wiederholt.

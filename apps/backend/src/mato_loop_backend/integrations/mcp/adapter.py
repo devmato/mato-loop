@@ -204,7 +204,8 @@ def mcp_tool_contribution(
             return await execute_stdio_tool(current, item, arguments, context)
         try:
             config = McpConfig.model_validate(current.config)
-            token = await connection_token(context.db, current)
+            user_id = getattr(getattr(context, "session", None), "user_id", None)
+            token = await connection_token(context.db, current, user_id=user_id)
             if config.oauth:
                 latest = next(
                     (
@@ -221,7 +222,9 @@ def mcp_tool_contribution(
             payload, is_error = await McpClient(
                 str(config.endpoint),
                 token,
-                authentication_failed=(lambda: mark_authorization_required(current, token))
+                authentication_failed=(
+                    lambda: mark_authorization_required(current, token, user_id)
+                )
                 if config.oauth
                 else None,
             ).call_tool(item.name, arguments, item.output_schema)

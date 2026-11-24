@@ -57,7 +57,7 @@
               <q-chip v-if="server.deletedComputer" dense outline color="warning">Computer entfernt</q-chip>
               <q-chip v-else-if="server.available === false" dense outline color="warning">Nicht verfügbar</q-chip>
               <q-chip v-if="server.status && server.status !== 'ready'" dense outline color="warning">{{ statusLabel(server.status) }}</q-chip>
-              <q-chip v-if="server.oauth" dense outline :color="server.authStatus === 'authorized' ? 'positive' : 'warning'">{{ server.authStatus === 'authorized' ? 'OAuth angemeldet' : 'Anmeldung erforderlich' }}</q-chip>
+              <q-chip v-if="server.oauth" dense outline :color="server.authStatus === 'authorized' ? 'positive' : 'warning'">{{ server.authStatus === 'authorized' ? 'OAuth angemeldet' : server.bootstrapRequired ? 'Admin-Einrichtung erforderlich' : 'Anmeldung erforderlich' }}</q-chip>
             </div>
             <q-item-label caption lines="1">{{ server.transport === 'stdio' ? computerName(server) : server.endpoint }}</q-item-label>
             <q-item-label caption>{{ server.tools?.length || server.toolCount || 0 }} erkannte Tools</q-item-label>
@@ -65,6 +65,8 @@
           <q-item-section side top class="settings-list-actions">
             <div class="row items-center no-wrap q-gutter-sm">
               <q-toggle dense :model-value="server.enabled" :aria-label="`${server.name} ${server.enabled ? 'deaktivieren' : 'aktivieren'}`" :disable="!canEdit(server) || togglingId !== null" @update:model-value="toggleServer(server, $event)" />
+              <q-btn v-if="canConnect(server) && server.authStatus !== 'authorized'" outline no-caps color="primary" icon="login" label="Mit Konto verbinden" @click="connectServer(server)" />
+              <q-btn v-else-if="canConnect(server)" flat no-caps color="negative" icon="logout" label="Abmelden" @click="disconnectServer(server)" />
               <div class="row items-center no-wrap q-gutter-xs">
                 <q-btn flat round dense icon="construction" :aria-label="`${server.name}: Tools und Berechtigungen anzeigen`" :disable="!canEdit(server)" :to="{ name: admin ? 'admin-mcp-tools' : 'settings-mcp-tools', params: { serverId: server.id } }" />
                 <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${server.name}`" :loading="refreshingId === server.id || removingId === server.id">
@@ -135,7 +137,9 @@ const showManagement = computed(() => !admin || section.value === 'management')
 const refreshingId = ref(null)
 const removingId = ref(null)
 const togglingId = ref(null)
-const visibleServers = computed(() => servers.visibleServers.filter((server) => server.scope === (admin ? 'instance' : 'personal')))
+const visibleServers = computed(() => servers.visibleServers.filter((server) => (
+  admin ? server.scope === 'instance' : server.scope === 'personal' || server.oauth?.user_scoped === true
+)))
 const personalBlocked = computed(() => !admin && !auth.isAdmin && servers.settingsLoaded && !servers.personalAllowed)
 const personalUnavailable = computed(() => (
   !servers.settingsLoaded || servers.settingsLoadFailed || !servers.personalAllowed && !auth.isAdmin
@@ -144,6 +148,10 @@ const personalUnavailable = computed(() => (
 const canModifyScope = (server) => server.scope === 'instance' ? auth.isAdmin : !personalUnavailable.value
 const canEdit = (server) => !server.deletedComputer && server.available !== false && canModifyScope(server)
 const canRemove = (server) => canEdit(server) || (server.deletedComputer && canModifyScope(server))
+const canConnect = (server) => server.available !== false
+  && server.enabled
+  && server.oauth?.user_scoped === true
+  && (!server.bootstrapRequired || auth.isAdmin)
 const canManageSessions = canEdit
 function openSessions(server) { sessionsServer.value = server; sessionsOpen.value = true }
 function computerName(server) { return agentDisplayName(computers.byId(server.executionAgentId)) || server.executionAgentName || 'Nicht verfügbarer Computer' }
@@ -176,6 +184,32 @@ async function refreshServer(server) {
     await load()
     $q.notify({ type: 'positive', message: 'MCP-Tools aktualisiert' })
   } finally { refreshingId.value = null }
+}
+async function connectServer(server) {
+  servers.selectScope(server.scope)
+  try {
+    const attempt = await servers.startOAuth({
+      name: server.name,
+      endpoint: server.endpoint,
+      enabled: server.enabled,
+      oauth: server.oauth,
+      integrationId: server.id
+    })
+    window.location.assign(attempt.authorizationUrl)
+  } catch {
+    // The central API interceptor displays the error.
+  }
+}
+async function disconnectServer(server) {
+  if (!await confirm(`OAuth-Anmeldung für „${server.name}“ entfernen?`, 'Abmelden', { okLabel: 'Abmelden' })) return
+  servers.selectScope(server.scope)
+  try {
+    await servers.disconnectOAuth(server)
+    await load()
+    $q.notify({ type: 'positive', message: 'OAuth-Anmeldung entfernt' })
+  } catch {
+    // The central API interceptor displays the error.
+  }
 }
 async function toggleServer(server, enabled) {
   togglingId.value = server.id

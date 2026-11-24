@@ -73,6 +73,15 @@ class Credential(Base):
             unique=True,
             postgresql_where=text("kind = 'personal_variable'"),
         ),
+        Index(
+            "uq_credentials_mcp_oauth_integration",
+            "user_id",
+            text("(metadata ->> 'integration_id')"),
+            unique=True,
+            postgresql_where=text(
+                "kind = 'mcp.oauth' AND metadata ? 'integration_id'"
+            ),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
