@@ -340,6 +340,11 @@ async def test_debug_mcp_postgres_isolates_two_admins(request) -> None:
             ).all()
         )
     assert event_types == {"test.recorded"}
+    for tool, code in (("run_tool_script", "tool.scriptStepFailed"), ("run_tool_script", None), ("read", "file.notFound")):
+        await record_diagnostic_event(
+            first.id, "tool.completed", component="tool", session_id=own.id,
+            payload={"name": tool, "errorCode": code},
+        )
 
     server, mcp_app = diagnostics_mcp.create_debug_mcp()
     app = Starlette(routes=[Mount("/api/debug", app=mcp_app)])
@@ -357,6 +362,9 @@ async def test_debug_mcp_postgres_isolates_two_admins(request) -> None:
                     async with ClientSession(read, write) as mcp_session:
                         await mcp_session.initialize()
                         result = await mcp_session.call_tool("list_sessions", {"limit": 100})
+                        filtered = await mcp_session.call_tool("get_diagnostics", {
+                            "session_id": str(own.id), "tool_name": "run_tool_script", "errors_only": True, "limit": 1,
+                        })
                         first_page = await mcp_session.call_tool(
                             "get_messages", {"session_id": str(own.id), "page_size": 2}
                         )
@@ -371,6 +379,9 @@ async def test_debug_mcp_postgres_isolates_two_admins(request) -> None:
         titles = {item["title"] for item in result.structuredContent["items"]}
         assert "Own diagnostic session" in titles
         assert "Foreign diagnostic session" not in titles
+        assert [event["payload"] for event in filtered.structuredContent["items"]] == [
+            {"name": "run_tool_script", "errorCode": "tool.scriptStepFailed"},
+        ]
         assert [item["id"] for item in first_page.structuredContent["items"]] == [
             str(messages[2].id),
             str(messages[3].id),

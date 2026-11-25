@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from runtime_helpers import (
     _assistant_messages,
     _runtime_setup,
@@ -39,6 +40,7 @@ from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.registry import ToolRegistry
 from mato_loop_backend.tools.secrets import resolve_sudo_password
+from mato_loop_backend.tools.validation import argument_error
 
 pytestmark = pytest.mark.usefixtures("skill_library")
 
@@ -100,6 +102,55 @@ async def test_repeated_distinct_empty_scripts_end_with_answer_only_after_eviden
     if failure == "steps":
         outcome = json.loads(_tool_messages(db)[-1].content)
         assert (outcome["result"], outcome["error"]["code"]) == (42, "tool.scriptStepFailed")
+
+
+async def test_script_diagnostics_distinguish_validation_from_child_failure(monkeypatch):
+    source = "await callTool('read', {root: 'files', path: 'facts.txt'}); return await callTool('session_read', {}); /* private-script-marker */"
+    db, run, *_ = await _runtime_setup(monkeypatch, [
+        ProviderResult(tool_calls=[ToolCall("invalid", SCRIPT_TOOL, {"code": source, "_reason": "private-reason-marker"}, "parsed")]),
+        ProviderResult(tool_calls=[ToolCall("valid", SCRIPT_TOOL, {"code": source}, "parsed")]),
+        ProviderResult(content="Done."),
+    ], search_policy=WebSearchPolicy.DISABLED, scripted_tools_enabled=True)
+    monkeypatch.setattr("mato_loop_backend.agent.model_turn.diagnostic_access_active", AsyncMock(return_value=True))
+    schedule = Mock()
+    for module in ("model_turn", "loop", "tool_round"):
+        monkeypatch.setattr(f"mato_loop_backend.agent.{module}.schedule_diagnostic_event", schedule)
+
+    async def execute(call, context, tool):
+        if call.name == "read":
+            return ToolResult.json({"content": "Evidence"})
+        if call.name == "session_read":
+            return ToolResult.error("tool.cursorInvalid", field="around_message_id", params={"retryArguments": {"session_id": "private-session-marker"}})
+        try:
+            args = tool.definition.validate_arguments(call.arguments)
+        except ValidationError as exc:
+            result = argument_error(exc, call.arguments)
+            result.metadata["argumentsRejected"] = True
+            return result
+        return await tool.definition.handler(args, context)
+
+    async def assign_ids():
+        for message in _tool_messages(db):
+            if message.id is None:
+                message.id = uuid4()
+
+    db.flush.side_effect = assign_ids
+    tool_registry._execute_definition.side_effect = execute
+    await AgentRuntime._execute_loop(db, run)
+
+    invalid, child, parent = [
+        event.kwargs["payload"] for event in schedule.call_args_list
+        if event.args[1] == "tool.completed" and event.kwargs["payload"]["errorCode"]
+    ]
+    assert (invalid["errorPhase"], invalid["errorField"], invalid["errorReason"], invalid["argumentsStatus"]) == (
+        "validation", "_reason", "extra_field", "parsed",
+    )
+    assert (parent["errorCode"], parent["errorPhase"], parent["failedSteps"]) == (
+        "tool.scriptStepFailed", "script_step",
+        [{"tool": "session_read", "messageId": child["messageId"], "status": "error", "errorCode": "tool.cursorInvalid"}],
+    )
+    assert (child["scriptParent"], child["errorField"]) == ("valid", "around_message_id")
+    assert "private-" not in str(schedule.call_args_list)
 
 
 @pytest.mark.parametrize("retry", ["script", "direct", "unrelated"])

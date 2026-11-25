@@ -337,6 +337,43 @@ async def test_chat_stream_routes_tagged_reasoning_separately(monkeypatch, expli
     assert result.provider_data.get("chat_reasoning_content") == ("Planen" if explicit else None)
 
 
+@pytest.mark.parametrize("api", ["chat", "responses"])
+@pytest.mark.parametrize(("argument_parts", "status", "arguments"), [
+    ([], "missing", {}), ([""], "empty", {}), (["{"], "invalid_json", {"_raw": "{"}),
+    (['{"code":', '"return null;"}'], "parsed", {"code": "return null;"}),
+])
+async def test_stream_records_argument_status_before_normalization(monkeypatch, api, argument_parts, status, arguments):
+    if api == "chat":
+        fragments = [{"id": "call", "function": {"name": "run_tool_script"}}]
+        fragments.extend({"function": {"arguments": part}} for part in argument_parts)
+        events = [{"choices": [{"delta": {"tool_calls": [fragment]}}]} for fragment in fragments]
+    else:
+        item = {"type": "function_call", "id": "item", "call_id": "call", "name": "run_tool_script"}
+        events = [{"type": "response.output_item.added", "item": item}]
+        events.extend({"type": "response.function_call_arguments.delta", "item_id": "item", "delta": part}
+                      for part in argument_parts)
+        events.append({"type": "response.output_item.done", "item": item})
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda _: httpx.Response(200, text=body))
+    monkeypatch.setattr(
+        "mato_loop_backend.providers.openai_compatible.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+    request = ProviderRequest(model="local", messages=[])
+    if api == "chat":
+        result = await chat_completions(
+            base_url="https://provider.test/v1",
+            api_key=None,
+            request=request, on_delta=None,
+        )
+    else:
+        result = await responses_api(
+            url="https://provider.test/v1/responses", headers={}, request=request, on_delta=None,
+        )
+    assert (result.tool_calls[0].arguments_status, result.tool_calls[0].arguments) == (status, arguments)
+
+
 async def test_chat_stream_stops_at_done_without_waiting_for_eof(monkeypatch) -> None:
     stream = _OpenAfterTerminalEvent(
         'data: {"choices":[{"delta":{"content":"Antwort"},"finish_reason":"stop"}]}\n\n'

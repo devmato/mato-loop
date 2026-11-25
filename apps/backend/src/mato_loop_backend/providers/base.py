@@ -23,6 +23,10 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, Any]
+    # Host-only observation before adapter normalization; never sent to the provider.
+    arguments_status: Literal["missing", "empty", "invalid_json", "non_object", "parsed"] | None = field(
+        default=None, compare=False,
+    )
 
 
 @dataclass(slots=True)

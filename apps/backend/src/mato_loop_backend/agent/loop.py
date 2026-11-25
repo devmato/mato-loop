@@ -759,6 +759,7 @@ async def execute_loop_body(
                 id=call.id or f"call-{uuid4()}",
                 name=call.name,
                 arguments=call.arguments,
+                arguments_status=call.arguments_status,
             )
             for call in result.tool_calls
         ]
@@ -825,7 +826,9 @@ async def execute_loop_body(
                     "finishReason": result.finish_reason,
                     "usage": result.usage,
                     "toolCalls": [
-                        {"id": call.id, "name": call.name} for call in normalized_calls
+                        {"id": call.id, "name": call.name, **(
+                            {"argumentsStatus": call.arguments_status} if call.arguments_status is not None else {}
+                        )} for call in normalized_calls
                     ],
                     "performance": performance,
                 },

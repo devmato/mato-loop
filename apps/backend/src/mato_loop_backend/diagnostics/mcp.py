@@ -796,8 +796,10 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
         run_id: UUID | None = None,
         event_type: Annotated[str | None, Field(default=None, max_length=120)] = None,
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
+        tool_name: Annotated[str | None, Field(min_length=1, max_length=200)] = None,
+        errors_only: bool = False,
     ) -> dict[str, Any]:
-        """List recent durable diagnostic events for the authenticated user."""
+        """List recent owned diagnostics. Filter by exact tool name or show only failure events and recorded errors."""
         user_id = _user_id()
         statement = select(DiagnosticEvent).where(
             DiagnosticEvent.user_id == user_id,
@@ -815,10 +817,18 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
                 statement = statement.where(DiagnosticEvent.run_id == run_id)
             if event_type:
                 statement = statement.where(DiagnosticEvent.event_type == event_type)
+            if tool_name is not None:
+                statement = statement.where(
+                    DiagnosticEvent.component == "tool", DiagnosticEvent.payload["name"].astext == tool_name,
+                )
+            if errors_only:
+                statement = statement.where(
+                    DiagnosticEvent.event_type.endswith(".failed") | DiagnosticEvent.payload["errorCode"].astext.is_not(None)
+                )
             events = list(
                 (
                     await db.scalars(
-                        statement.order_by(DiagnosticEvent.created_at.desc()).limit(limit)
+                        statement.order_by(DiagnosticEvent.created_at.desc(), DiagnosticEvent.id.desc()).limit(limit)
                     )
                 ).all()
             )

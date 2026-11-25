@@ -634,12 +634,21 @@ def _normalize_usage(raw_usage: Any) -> dict[str, int]:
 def _tool_call(id_: Any, name: Any, arguments: Any) -> ToolCall:
     if isinstance(arguments, dict):
         parsed_arguments = arguments
+        status = "parsed"
+    elif arguments is None or arguments == "":
+        parsed_arguments = {}
+        status = "missing" if arguments is None else "empty"
     else:
         try:
             parsed_arguments = json.loads(arguments or "{}")
         except (json.JSONDecodeError, TypeError):
             parsed_arguments = {"_raw": str(arguments or "")}
-    return ToolCall(id=str(id_ or ""), name=str(name or ""), arguments=parsed_arguments)
+            status = "invalid_json"
+        else:
+            status = "parsed" if isinstance(parsed_arguments, dict) else "non_object"
+    return ToolCall(
+        id=str(id_ or ""), name=str(name or ""), arguments=parsed_arguments, arguments_status=status,
+    )
 
 
 def _retry_after(response: httpx.Response) -> float | None:
@@ -962,7 +971,7 @@ async def chat_completions(
         explicit_reasoning_parts: list[str] = []
         reasoning_details: list[dict[str, Any]] = []
         splitter = TaggedReasoningStream()
-        calls: dict[int, dict[str, str]] = {}
+        calls: dict[int, dict[str, Any]] = {}
         usage: dict[str, int] = {}
         finish_reason: str | None = None
         reasoning_started_at: float | None = None
@@ -1005,11 +1014,12 @@ async def chat_completions(
                             await on_delta(answer_delta)
                 for fragment in delta.get("tool_calls") or []:
                     index = int(fragment.get("index", 0))
-                    call = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                    call = calls.setdefault(index, {"id": "", "name": "", "arguments": None})
                     call["id"] += fragment.get("id") or ""
                     function = fragment.get("function") or {}
                     call["name"] += function.get("name") or ""
-                    call["arguments"] += function.get("arguments") or ""
+                    if (part := function.get("arguments")) is not None:
+                        call["arguments"] = (call["arguments"] or "") + (part or "")
 
     final_content, tagged_reasoning = splitter.finish()
     if final_content != "".join(content_parts):
@@ -1070,7 +1080,7 @@ async def responses_api(
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         splitter = TaggedReasoningStream()
-        calls: dict[str, dict[str, str]] = {}
+        calls: dict[str, dict[str, Any]] = {}
         provider_data: dict[str, Any] = {}
         usage: dict[str, int] = {}
         finish_reason: str | None = None
@@ -1117,7 +1127,7 @@ async def responses_api(
                         calls[str(key)] = {
                             "id": item.get("call_id") or str(key),
                             "name": item.get("name") or "",
-                            "arguments": item.get("arguments") or "",
+                            "arguments": item.get("arguments"),
                         }
                     elif item.get("type") == "reasoning" and item.get("encrypted_content"):
                         provider_data["reasoning_encrypted_content"] = item["encrypted_content"]
@@ -1128,20 +1138,22 @@ async def responses_api(
                         {
                             "id": event.get("call_id") or key,
                             "name": event.get("name") or "",
-                            "arguments": "",
+                            "arguments": None,
                         },
                     )
-                    call["arguments"] += event.get("delta") or ""
+                    if (part := event.get("delta")) is not None:
+                        call["arguments"] = (call["arguments"] or "") + (part or "")
                 elif event_type == "response.output_item.done":
                     item = event.get("item") or {}
                     replay_items.extend(_responses_replay_items([item]))
                     if item.get("type") == "function_call":
                         key = str(item.get("id") or item.get("call_id"))
+                        arguments = item.get("arguments")
+                        previous = calls.get(key, {}).get("arguments")
                         calls[key] = {
                             "id": item.get("call_id") or key,
                             "name": item.get("name") or "",
-                            "arguments": item.get("arguments")
-                            or calls.get(key, {}).get("arguments", ""),
+                            "arguments": arguments or (previous if previous is not None else arguments),
                         }
                     elif item.get("type") == "reasoning" and item.get("encrypted_content"):
                         provider_data["reasoning_encrypted_content"] = item["encrypted_content"]

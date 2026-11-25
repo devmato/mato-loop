@@ -71,6 +71,7 @@ from mato_loop_backend.skills import RunSkillState
 from mato_loop_backend.tools.arguments import EditFileArguments
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import (
+    PERMISSION_REASON_ARGUMENT,
     RepositoryInstructionsChanged,
     ToolAttachment,
     ToolCallSuperseded,
@@ -81,6 +82,49 @@ from mato_loop_backend.tools.contracts import (
 from mato_loop_backend.tools.display import tool_display
 from mato_loop_backend.tools.registry import EffectiveToolSet
 from mato_loop_backend.tools.secrets import effective_sudo_reference
+
+
+def _diagnostic_tool_error(
+    content: str, metadata: dict[str, Any], definition: ToolDefinition | None,
+) -> dict[str, Any]:
+    code = metadata.get("errorCode")
+    validation = metadata.get("argumentsRejected") is True and code == "tool.invalidArguments"
+    if code == "tool.scriptStepFailed":
+        return {"errorPhase": "script_step"}
+    if code == "tool.scriptJavaScriptFailed":
+        phase = "script"
+    elif validation:
+        phase = "validation"
+    elif code == "tool.cursorInvalid":
+        phase = "tool"
+    elif code in ("tool.scriptFailed", "tool.scriptNoProgress", "tool.scriptOutputLimit", "tool.scriptTimedOut"):
+        return {"errorPhase": "script"}
+    else:
+        return {}
+    details = {"errorPhase": phase}
+    try:
+        descriptor = json.loads(content)["error"]
+    except (ValueError, KeyError, TypeError):
+        return details
+    if not isinstance(descriptor, dict):
+        return details
+    params = descriptor.get("params")
+    params = params if isinstance(params, dict) else {}
+    field = descriptor.get("field")
+    if isinstance(field, str):
+        # Keep only known top-level schema names, never arbitrary keys or nested paths.
+        root_field = field.split(".", 1)[0].split("[", 1)[0]
+        properties = definition.schema()["parameters"].get("properties", {}) if definition else {}
+        if root_field in properties or (validation and root_field == PERMISSION_REASON_ARGUMENT):
+            details["errorField"] = root_field
+    if validation and params.get("reason") in (
+        "missing", "extra_field", "invalid_type", "invalid_value", "invalid_choice", "invalid_uuid",
+        "invalid_format", "invalid_json", "too_short", "too_long", "too_large", "below_minimum", "above_maximum",
+    ):
+        details["errorReason"] = params["reason"]
+    if code == "tool.scriptJavaScriptFailed" and params.get("stage") in ("compilation", "execution", "evaluation"):
+        details["scriptStage"] = params["stage"]
+    return details
 
 
 async def persist_tool_result(
@@ -447,6 +491,8 @@ async def execute_tool_batch(
         nonlocal superseded, repository_deferred
         script: ScriptRound | None = None
         read_started = False
+        started_at = None
+        user_denied = False
         bound_tool = toolset.tools.get(call.name) if toolset is not None else None
         tool_label = bound_tool.definition.label if bound_tool else None
         async def record_script_call(arguments):
@@ -763,20 +809,9 @@ async def execute_tool_batch(
                 if tool_result.metadata.get("errorCode") != "permission.userDenied":
                     tool_result = ToolResult.error("permission.userDenied")
                 state.user_denied_batch = True
+                user_denied = True
             content = tool_result.content
             metadata = tool_result.metadata
-            if diagnostics_active:
-                schedule_diagnostic_event(
-                    session.user_id, "tool.completed", component="tool",
-                    session_id=session.id, run_id=run.id, correlation_id=call.id,
-                    payload={
-                        "name": call.name, "errorCode": metadata.get("errorCode"),
-                        "resultCharacters": len(content),
-                        "attachmentCount": len(tool_result.attachments),
-                        "durationMs": round((time.monotonic() - started_at) * 1_000),
-                        "userDenied": tool_context.user_denied,
-                    },
-                )
             if metadata.get("privateIntegrationData") is True:
                 session.private_integration_data_used = True
             attachments = tool_result.attachments
@@ -865,6 +900,7 @@ async def execute_tool_batch(
             previous_repair = pending_tool_repairs.pop(repair_key, None)
         if repairable:
             metadata["toolRepair"] = "pending"
+        duration_ms = round((time.monotonic() - started_at) * 1_000) if diagnostics_active and started_at is not None else None
         tool_message, content, metadata = await persist_tool_result(
             db, run, session, call, content=content, metadata=metadata,
             attachments=attachments, file_actions=file_actions,
@@ -873,6 +909,22 @@ async def execute_tool_batch(
             execution_binding=(execution_binding if script_parent is None else
                                {**execution_binding, "scriptParent": script_parent}),
         )
+        if diagnostics_active:
+            failed_steps = [step for step in script.steps if step["status"] == "error"] if script else []
+            schedule_diagnostic_event(
+                session.user_id, "tool.completed", component="tool",
+                session_id=session.id, run_id=run.id, correlation_id=call.id,
+                payload={
+                    "name": call.name, "errorCode": metadata.get("errorCode"),
+                    "messageId": str(tool_message.id), "resultCharacters": len(content),
+                    "attachmentCount": len(attachments), "durationMs": duration_ms, "userDenied": user_denied,
+                    **({"scriptParent": script_parent} if script_parent is not None else {}),
+                    **({"failedSteps": failed_steps} if failed_steps else {}),
+                    **({"argumentsStatus": call.arguments_status}
+                       if metadata.get("errorCode") and call.arguments_status is not None else {}),
+                    **_diagnostic_tool_error(content, metadata, bound_tool.definition if bound_tool else None),
+                },
+            )
         if call.name != SCRIPT_TOOL:
             state.recorded_tool_calls += 1
             if not error_code and not metadata.get("repositoryInstructionsDeferred") and not metadata.get("alreadyCompleted"):
