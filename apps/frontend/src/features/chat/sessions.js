@@ -873,13 +873,16 @@ export const sessionsActions = {
       this.updateCachedSession(id, (session) => ({ ...session, ...data }))
       if (this.current?.id === id) this.current = { ...this.current, ...data }
     },
-    async moveSession(id, projectId) {
+    async moveSession(id, projectId, { newProjectName, applyProjectDefaults = false } = {}) {
       const catalogHadSession = this.sessionCatalog.some((session) => session.id === id)
-      const { data } = await api.patch(`/sessions/${id}`, { project_id: projectId || null })
+      const { data } = await api.patch(`/sessions/${id}`, newProjectName
+        ? { new_project_name: newProjectName }
+        : { project_id: projectId || null, ...(applyProjectDefaults && projectId ? { apply_project_defaults: true } : {}) })
+      const targetProjectId = data.projectId || null
       const summary = { ...this.findCachedSession(id), ...data }
       const queued = this.queuedMessages[id] || []
       for (const entry of queued) {
-        entry.projectId = projectId || null
+        entry.projectId = targetProjectId
       }
       if (queued.length) {
         try {
@@ -892,8 +895,8 @@ export const sessionsActions = {
       }
       this.removeCachedSession(id, { preserveTab: true })
       const tab = useSessionTabsStore().items.find(tab => tab.sessionId === id)
-      if (tab) Object.assign(tab, { projectId: projectId || null, title: data.title || tab.title })
-      const targetList = this.sessionLists[sessionScopeKey(projectId)]
+      if (tab) Object.assign(tab, { projectId: targetProjectId, title: data.title || tab.title })
+      const targetList = this.sessionLists[sessionScopeKey(targetProjectId)]
       if (targetList?.loadRequest) {
         try {
           await targetList.loadRequest

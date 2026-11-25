@@ -26,6 +26,7 @@ from pydantic import (
     Field,
     StrictBool,
     StrictInt,
+    StringConstraints,
     ValidationError,
 )
 from sqlalchemy import and_, select, update
@@ -170,6 +171,8 @@ class SessionUpdateRequest(BaseModel):
     pinned: bool | None = None
     todos_collapsed: StrictBool | None = None
     project_id: UUID | None = None
+    new_project_name: Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=240)] | None = None
+    apply_project_defaults: StrictBool = False
     model_id: UUID | None = None
     agent_profile_id: UUID | None = Field(
         default=None,

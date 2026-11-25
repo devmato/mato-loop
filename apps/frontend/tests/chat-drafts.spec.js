@@ -3027,8 +3027,11 @@ describe('chat drafts', () => {
   })
 
   it.each([
-    [null, 'project-2'], ['project-1', 'project-2'], ['project-1', null]
-  ])('preserves chat recency when moving from %s to %s', async (sourceId, targetId) => {
+    [null, 'project-2', {}],
+    ['project-1', 'project-2', { applyProjectDefaults: true }],
+    ['project-1', null, {}],
+    ['project-1', 'new-project', { newProjectName: 'New project' }]
+  ])('preserves chat recency when moving from %s to %s', async (sourceId, targetId, options) => {
     const chat = useChatStore()
     const session = {
       id: 'session-1', projectId: sourceId,
@@ -3049,8 +3052,11 @@ describe('chat drafts', () => {
       ...patchResult, projectId: targetId, updatedAt: '2026-07-25T12:00:00Z'
     } })
 
-    await chat.moveSession(session.id, targetId)
+    await chat.moveSession(session.id, options.newProjectName ? null : targetId, options)
 
+    expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', options.newProjectName
+      ? { new_project_name: 'New project' }
+      : { project_id: targetId, ...(options.applyProjectDefaults ? { apply_project_defaults: true } : {}) })
     expect(source.items).toEqual([])
     expect(target.items.map((item) => item.id)).toEqual(['session-2', 'session-1', 'session-3'])
     expect(target.items[1].lastMessageAt).toBe(lastMessageAt)

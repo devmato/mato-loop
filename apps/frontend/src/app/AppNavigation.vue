@@ -282,7 +282,7 @@
     v-model:move-project-id="moveProjectId"
     :renaming="renaming"
     :moving-session="movingSession"
-    :move-source-project-id="moveSourceProjectId"
+    :move-source-session="moveSourceSession"
     :project-options="projectOptions"
     :required-rule="requiredRule"
     @rename="renameSession"
@@ -366,7 +366,7 @@ const accountDialogOpen = ref(false)
 const {
   projectOptions, standaloneSessionList, sessionStatuses,
   renameDialogOpen, renameTitle, renaming, pinningSessionId,
-  moveDialogOpen, moveSourceProjectId, moveProjectId, movingSession,
+  moveDialogOpen, moveSourceSession, moveProjectId, movingSession,
   sessionDropTarget, openRenameDialog, projectSessionList, loadProjectSessions,
   loadStandaloneSessions, startSessionDrag, endSessionDrag, dragSessionOver,
   leaveSessionDropTarget, dropSession, openMoveDialog, moveSession,

@@ -66,7 +66,7 @@
     <SessionDialogs
       v-model:rename-open="renameDialogOpen" v-model:rename-title="renameTitle"
       v-model:move-open="moveDialogOpen" v-model:move-project-id="moveProjectId"
-      :renaming="renaming" :moving-session="movingSession" :move-source-project-id="moveSourceProjectId"
+      :renaming="renaming" :moving-session="movingSession" :move-source-session="moveSourceSession"
       :project-options="projectOptions" :required-rule="requiredRule" @rename="renameSession" @move="moveSession"
     />
   </section>
@@ -116,7 +116,7 @@ const openSessionMenuId = ref(null)
 const openAutomationMenuId = ref(null)
 const {
   projectOptions, renameDialogOpen, renameTitle, renaming, pinningSessionId,
-  moveDialogOpen, moveSourceProjectId, moveProjectId, movingSession,
+  moveDialogOpen, moveSourceSession, moveProjectId, movingSession,
   openRenameDialog, openMoveDialog, moveSession, renameSession, toggleSessionPinned,
   removeSession, archiveSession, openSession
 } = useSidebarSessions({

@@ -707,6 +707,102 @@ async def test_standalone_project_move_preserves_managed_file_identity(monkeypat
     assert session.project_id == project_id
 
 
+@pytest.mark.parametrize("fail", [False, True])
+async def test_create_project_and_move_share_one_commit(monkeypatch, fail) -> None:
+    from mato_loop_backend.api.routes import sessions as route
+
+    user = _user()
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Move")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session.id, 0]
+    db.scalars.return_value = MagicMock(all=lambda: [])
+    storage = MagicMock()
+    if fail:
+        storage.stage_session_move.side_effect = OSError
+    monkeypatch.setattr(route, "SessionStorage", lambda: storage)
+    monkeypatch.setattr(route, "_mutable_session", AsyncMock(return_value=session))
+    monkeypatch.setattr(route, "_session_payload", AsyncMock(return_value={}))
+    request = SessionUpdateRequest(new_project_name="  New project  ")
+
+    if fail:
+        with pytest.raises(ApiError) as exc_info:
+            await update_session(session.id, request, user, db)
+        assert exc_info.value.code == "session.storageUnavailable"
+        assert session.project_id is None
+        db.commit.assert_not_awaited()
+        db.rollback.assert_awaited_once()
+    else:
+        await update_session(session.id, request, user, db)
+        project = db.add.call_args.args[0]
+        assert (project.name, project.user_id, project.id) == ("New project", user.id, session.project_id)
+        db.commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize("mode", ["off", "local", "worktree", "failure"])
+async def test_move_adopts_destination_workspace_only_if_requested(monkeypatch, mode) -> None:
+    from mato_loop_backend.api.routes import sessions as route
+    from mato_loop_backend.sessions import coding, service, templates
+    from mato_loop_backend.settings.session_profiles import SessionTemplate
+
+    user = _user()
+    session = ChatSession(
+        id=uuid4(), user_id=user.id, title="Move", project_id=uuid4(),
+        session_profile={"worktrees_enabled": True}, current_directory="/old", workspace_mode="worktree",
+    )
+    template = SessionTemplate(name="Destination template", agent_ids=[PLAN_PROFILE_ID],
+                               start_agent_id=PLAN_PROFILE_ID, worktrees_enabled=True, memory_mode="disabled")
+    project = Project(id=uuid4(), user_id=user.id, name="Destination",
+                      git_workspace_mode="local" if mode == "local" else "worktree",
+                      default_session_template_id=template.id,
+                      default_execution_agent_id=uuid4(), default_current_directory="/target")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session.id, None, project, 0]
+    db.scalars.return_value = MagicMock(all=lambda: [])
+    storage = MagicMock()
+    monkeypatch.setattr(route, "SessionStorage", lambda: storage)
+    monkeypatch.setattr(route, "_mutable_session", AsyncMock(return_value=session))
+    monkeypatch.setattr(route, "_session_payload", AsyncMock(return_value={}))
+    monkeypatch.setattr(service, "validate_execution_preferences", AsyncMock(return_value=("/target", None)))
+    monkeypatch.setattr(service, "load_effective_ai", AsyncMock(return_value=AiSettings()))
+    monkeypatch.setattr(service, "add_directory_grant", AsyncMock())
+    monkeypatch.setattr(service, "validate_agent_profile", AsyncMock())
+    monkeypatch.setattr(service, "model_available", lambda *_: True)
+    monkeypatch.setattr(service, "model_supports_tools", lambda *_: True)
+    monkeypatch.setattr(templates, "validate_session_profile", AsyncMock())
+    monkeypatch.setattr(templates, "load_template", AsyncMock(return_value=template))
+    monkeypatch.setattr(coding, "grant_session_workspace", AsyncMock())
+
+    async def select_workspace(_db, item, target, **kwargs):
+        assert item.preferred_execution_agent_id == target.default_execution_agent_id
+        assert target is project and kwargs["create"] and kwargs["worktree_id"]
+        if mode == "failure":
+            raise SessionServiceError(409, "git.configurationRequired")
+        item.current_directory = "/target-worktree"
+
+    select = AsyncMock(side_effect=select_workspace)
+    monkeypatch.setattr(coding, "select_session_workspace", select)
+    request = SessionUpdateRequest(project_id=project.id, apply_project_defaults=mode != "off")
+    if mode == "failure":
+        with pytest.raises(ApiError) as exc_info:
+            await update_session(session.id, request, user, db)
+        assert exc_info.value.code == "git.configurationRequired"
+        db.rollback.assert_awaited_once()
+        db.commit.assert_not_awaited()
+        storage.stage_session_move.assert_not_called()
+    else:
+        await update_session(session.id, request, user, db)
+        assert session.project_id == project.id
+        assert session.current_directory == {"off": "/old", "local": "/target", "worktree": "/target-worktree"}[mode]
+        assert session.workspace_mode == ("local" if mode == "local" else "worktree")
+        if mode != "off":
+            assert session.session_profile["template_id"] == str(template.id)
+            assert session.memory_mode == "disabled"
+        db.commit.assert_awaited_once()
+    if mode == "off":
+        templates.load_template.assert_not_awaited()
+    assert select.await_count == int(mode in {"worktree", "failure"})
+
+
 async def test_project_move_rejects_files_referenced_by_another_session(monkeypatch) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
 

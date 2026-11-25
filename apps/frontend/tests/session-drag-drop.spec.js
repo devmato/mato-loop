@@ -45,7 +45,10 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
       setSessionScope: vi.fn().mockResolvedValue(),
       fetchPersonalChatBinding: vi.fn().mockResolvedValue(),
       loadSession: vi.fn().mockResolvedValue(),
-      moveSession: vi.fn().mockResolvedValue(),
+      moveSession: vi.fn(async function (id, projectId) {
+        if (this.current?.id === id) this.current = { ...this.current, projectId }
+        return { id, projectId }
+      }),
       setSessionPinned: vi.fn().mockResolvedValue(),
       findCachedSession: vi.fn((id) => sessions.find((session) => session.id === id)),
       fetchSession: vi.fn(),
@@ -190,7 +193,7 @@ beforeEach(async () => {
   app.use(createPinia())
   app.config.globalProperties.$q = quasar
   const container = { render() { return h('div', this.$slots.default?.()) } }
-  for (const name of ['QLayout', 'QDrawer', 'QToolbar', 'QSpace', 'QSeparator', 'QScrollArea', 'QItem', 'QItemSection', 'QItemLabel', 'QIcon', 'QList', 'QAvatar', 'QBadge', 'QCard', 'QCardSection', 'QCardActions', 'QBanner', 'QPageContainer', 'RouterLink']) {
+  for (const name of ['QLayout', 'QDrawer', 'QToolbar', 'QSpace', 'QSeparator', 'QScrollArea', 'QItem', 'QItemSection', 'QItemLabel', 'QIcon', 'QList', 'QAvatar', 'QBadge', 'QCard', 'QCardSection', 'QCardActions', 'QCheckbox', 'QBanner', 'QPageContainer', 'RouterLink']) {
     app.component(name, container)
   }
   for (const name of ['QTooltip', 'QInput', 'QSkeleton', 'QSpinner', 'QSpinnerDots', 'QSpinnerGrid', 'RouterView']) app.component(name, { render: () => null })
@@ -753,7 +756,7 @@ it.each([
   expect(chat.moveSession).not.toHaveBeenCalled()
   dialog.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
   await nextTick()
-  expect(chat.moveSession).toHaveBeenCalledExactlyOnceWith(id, destination)
+  expect(chat.moveSession).toHaveBeenCalledExactlyOnceWith(id, destination, { applyProjectDefaults: !!destination })
 })
 
 it('keeps a move dialog active after closing the mobile drawer', async () => {
@@ -769,11 +772,11 @@ it('keeps a move dialog active after closing the mobile drawer', async () => {
   expect(dialog.textContent).toContain('Session verschieben')
   dialog.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
   await nextTick()
-  expect(chat.moveSession).toHaveBeenCalledExactlyOnceWith('standalone', 'a')
+  expect(chat.moveSession).toHaveBeenCalledExactlyOnceWith('standalone', 'a', { applyProjectDefaults: true })
 })
 
 it('moves the current session to another project without guarding its unchanged file root', async () => {
-  useChatStore().current = { id: 'project-session', projectId: 'b' }
+  useChatStore().current = { id: 'project-session', projectId: 'a' }
   useRoute().query = { session: 'project-session', project: 'a' }
   workspace.hasDirtyEditors = true
   const transfer = { setData: vi.fn() }

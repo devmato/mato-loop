@@ -24,6 +24,12 @@ Die Seitenleiste bleibt nach deiner letzten Nachricht sortiert, neueste zuerst; 
 
 Beim Zurückkehren zu Home wird die Auswahl neu geladen und einmal sortiert angezeigt. Bis die Session- und Anfragestatus geladen sind, erscheint eine Ladeanzeige statt einer alten Liste, die anschließend umspringt.
 
+### Session in ein anderes Projekt verschieben
+
+Wähle im Sessionmenü **Verschieben** und dann das Zielprojekt. Über **Neues Projekt anlegen** kannst du stattdessen einen Namen eingeben und mit **Anlegen und verschieben** beides in einem Schritt erledigen. **Ohne Projekt** löst die bisherige Zuordnung.
+
+Für bestehende Zielprojekte ist **Projektvorgaben übernehmen** vorausgewählt. Damit kann die Session ihre Vorlage, ihren Computer und ihren Arbeitsbereich wechseln. Ein bisheriger Worktree bleibt unverändert; Änderungen werden nicht in den Ziel-Worktree übertragen. Entferne den Haken, um die bisherigen Session-Einstellungen zu behalten. Anweisungen des Zielprojekts gelten unabhängig davon.
+
 ### Session-Tabs
 
 Aktiviere **Einstellungen > Grundeinstellungen > Session-Tab-Leiste anzeigen**, wenn du mehrere Unterhaltungen als Tabs offen halten möchtest. Unter **Position der Session-Tab-Leiste** wählst du **Oben** oder **Unten** am gemeinsamen Chat-/Control-Center-Bereich; die Auswahl wird für dein Konto gespeichert, Vorgabe ist **Unten**. Die Leiste erscheint ab Tabletbreite (600 Pixel); auf dem Handy bleibt sie ausgeblendet. Standardmäßig ist sie ausgeschaltet.

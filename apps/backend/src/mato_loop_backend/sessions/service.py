@@ -1870,6 +1870,16 @@ async def update_session(
     session_serializer: PayloadSerializer,
 ) -> dict[str, Any]:
     fields = payload.model_fields_set
+    new_project_name = payload.new_project_name
+    apply_project_defaults = payload.apply_project_defaults
+    if new_project_name is not None:
+        if "project_id" in fields or apply_project_defaults:
+            raise SessionServiceError(422, "validation.invalid", field="newProjectName")
+        # Use the same move guards as for an existing project.
+        payload = payload.model_copy(update={"project_id": uuid4()})
+        fields = payload.model_fields_set
+    if apply_project_defaults and ("project_id" not in fields or payload.project_id is None):
+        raise SessionServiceError(422, "validation.invalid", field="applyProjectDefaults")
     execution_fields = {
         "preferred_execution_agent_id",
         "current_directory",
@@ -1887,7 +1897,7 @@ async def update_session(
         "current_directory",
     }
     if fields & (policy_fields | {"control_center", "todos_collapsed", "trust_level"}):
-        if fields & execution_fields:
+        if fields & execution_fields or apply_project_defaults:
             await db.execute(select(UserAccount.id).where(UserAccount.id == user.id).with_for_update(key_share=True))
         await db.scalar(
             select(ChatSession.id)
@@ -1901,23 +1911,6 @@ async def update_session(
 
     if fields & (policy_fields | {"trust_level"}) and await active_connection(db, session_id):
         raise SessionServiceError(409, "voice.busy")
-    if "session_template_id" in fields:
-        from mato_loop_backend.sessions.templates import load_template
-
-        template = await load_template(db, user.id, payload.session_template_id)
-        payload = payload.model_copy(update={
-            "session_profile": template.snapshot(),
-            "agent_profile_id": template.start_agent_id,
-            "model_id": template.model_id,
-            "reasoning_effort": template.reasoning_effort,
-            "memory_mode": MemoryMode(template.memory_mode),
-        })
-        fields = payload.model_fields_set
-    target_profile_id = (
-        payload.agent_profile_id or await default_agent_profile_id(db)
-        if "agent_profile_id" in fields
-        else item.agent_profile_id
-    )
     original_settings = None
     active_run_ids = []
     if fields & policy_fields:
@@ -1940,9 +1933,14 @@ async def update_session(
     target_project_id = (
         payload.project_id if "project_id" in fields else source_project_id
     )
-    if target_project_id is not None and target_project_id != source_project_id:
-        project = await db.scalar(
-            select(Project.id)
+    if apply_project_defaults and target_project_id == source_project_id:
+        raise SessionServiceError(422, "validation.invalid", field="applyProjectDefaults")
+    target_project = None
+    if new_project_name is not None:
+        target_project = Project(id=target_project_id, user_id=user.id, name=new_project_name)
+    elif target_project_id is not None and target_project_id != source_project_id:
+        target_project = await db.scalar(
+            select(Project)
             .where(
                 Project.id == target_project_id,
                 Project.user_id == user.id,
@@ -1951,8 +1949,40 @@ async def update_session(
             )
             .with_for_update()
         )
-        if project is None:
+        if target_project is None:
             raise SessionServiceError(404, "project.notFound", field="projectId")
+    switch_workspace = False
+    create_worktree = False
+    if apply_project_defaults and target_project is not None:
+        defaults = {}
+        if target_project.default_session_template_id is not None:
+            defaults["session_template_id"] = target_project.default_session_template_id
+        create_worktree = target_project.git_workspace_mode == "worktree"
+        switch_workspace = create_worktree or target_project.default_execution_agent_id is not None
+        if switch_workspace:
+            defaults.update(
+                preferred_execution_agent_id=target_project.default_execution_agent_id,
+                current_directory=target_project.default_current_directory,
+            )
+        payload = payload.model_copy(update=defaults)
+        fields = payload.model_fields_set
+    if "session_template_id" in fields:
+        from mato_loop_backend.sessions.templates import load_template
+
+        template = await load_template(db, user.id, payload.session_template_id)
+        payload = payload.model_copy(update={
+            "session_profile": template.snapshot(),
+            "agent_profile_id": template.start_agent_id,
+            "model_id": template.model_id,
+            "reasoning_effort": template.reasoning_effort,
+            "memory_mode": MemoryMode(template.memory_mode),
+        })
+        fields = payload.model_fields_set
+    target_profile_id = (
+        payload.agent_profile_id or await default_agent_profile_id(db)
+        if "agent_profile_id" in fields
+        else item.agent_profile_id
+    )
     if target_project_id != source_project_id:
         await _ensure_session_move_has_no_external_file_references(db, session_id)
     if target_project_id != source_project_id:
@@ -2050,7 +2080,12 @@ async def update_session(
             if not model_supports_tools(ai, model_id):
                 raise SessionServiceError(409, "session.modelToolsUnavailable")
         item.web_search_policy = payload.web_search_policy.value
-    if fields & execution_fields:
+    if create_worktree:
+        if not payload.preferred_execution_agent_id or not payload.current_directory:
+            raise SessionServiceError(409, "git.projectWorkspaceRequired")
+        if not (item.session_profile or {}).get("worktrees_enabled", False):
+            raise SessionServiceError(409, "sessionTemplate.worktreesDisabled")
+    elif fields & execution_fields:
         ai = apply_session_ai(await load_effective_ai(db, user.id), item, target_profile_id)
         model = model_for_session(ai, ai.default_model_id)
         provider = provider_for_session(ai, model)
@@ -2077,6 +2112,13 @@ async def update_session(
             db, user.id, agent_id, current_directory
         )
         item.preferred_execution_agent_id = agent_id
+        if switch_workspace:
+            item.workspace_mode = "local"
+            item.coding_workspace = {
+                "mode": "local", "repository": item.current_directory, "path": item.current_directory,
+                "remote": target_project.git_remote, "targetBranch": target_project.git_target_branch,
+                "executionAgentId": str(agent_id),
+            } if item.current_directory else None
         await add_directory_grant(
             db,
             item.id,
@@ -2150,6 +2192,23 @@ async def update_session(
 
     commit_task: asyncio.Task[None] | None = None
     try:
+        if new_project_name is not None:
+            db.add(target_project)
+            await db.flush()
+        if create_worktree:
+            from mato_loop_backend.sessions.coding import (
+                grant_session_workspace,
+                persist_worktree_warning,
+                select_session_workspace,
+            )
+
+            item.preferred_execution_agent_id = payload.preferred_execution_agent_id
+            item.coding_workspace = None
+            # Retry in the destination without ever reusing the source project's worktree.
+            worktree_id = uuid5(item.id, f"move-worktree:{target_project_id}:{payload.current_directory}")
+            policy = await select_session_workspace(db, item, target_project, create=True, worktree_id=worktree_id)
+            await persist_worktree_warning(db, item)
+            await grant_session_workspace(db, item, policy)
         if target_project_id != source_project_id:
             stage_task = asyncio.create_task(
                 asyncio.to_thread(

@@ -21,7 +21,7 @@ export function useSidebarSessions({
 }) {
   const projectOptions = computed(() => [
     { label: 'Ohne Projekt', value: null },
-    ...projects.items.map((project) => ({ label: project.name, value: project.id }))
+    ...projects.items.map((project) => ({ label: project.name, value: project.id, project }))
   ])
   const standaloneSessionList = computed(() => projectSessionList(null))
   const sidebarLists = new WeakMap()
@@ -39,8 +39,7 @@ export function useSidebarSessions({
   const renaming = ref(false)
   const pinningSessionId = ref(null)
   const moveDialogOpen = ref(false)
-  const moveSessionId = ref(null)
-  const moveSourceProjectId = ref(null)
+  const moveSourceSession = ref(null)
   const moveProjectId = ref(null)
   const movingSession = ref(false)
   const draggedSession = ref(null)
@@ -139,35 +138,43 @@ export function useSidebarSessions({
   }
 
   function openMoveDialog(session, projectId = session.projectId || null) {
-    moveSessionId.value = session.id
-    moveSourceProjectId.value = session.projectId || null
+    moveSourceSession.value = (chat.current?.id === session.id ? chat.current : chat.findCachedSession(session.id)) || session
     moveProjectId.value = projectId
     moveDialogOpen.value = true
   }
 
-  async function moveSession() {
-    if (!moveSessionId.value || moveProjectId.value === moveSourceProjectId.value) return
-    const sessionId = moveSessionId.value
-    const targetProjectId = moveProjectId.value || null
+  async function moveSession(options = {}) {
+    const { newProjectName, applyProjectDefaults } = options
+    const sessionId = moveSourceSession.value?.id
+    const projectId = moveProjectId.value || null
+    if (movingSession.value || !sessionId || (!newProjectName && projectId === (moveSourceSession.value.projectId || null))) return
+    const targetProject = applyProjectDefaults ? projects.items.find(project => project.id === projectId) : null
+    const switchesWorkspace = targetProject?.defaultExecutionAgentId || targetProject?.gitWorkspaceMode === 'worktree'
+    if (switchesWorkspace && workspace.hasDirtyFiles(moveSourceSession.value.preferredExecutionAgentId, moveSourceSession.value.currentDirectory)) {
+      $q.notify({ type: 'warning', message: 'Bitte zuerst die ungespeicherten Editoränderungen im bisherigen Arbeitsbereich speichern oder verwerfen.' })
+      return
+    }
     const affectedTabs = controlCenter.fileTabs.filter((tab) => (
       tab.fileTarget.scope === 'session'
       && (workspace.sessionId === sessionId
         ? tab.fileTarget.rootIdentity !== sessionId
         : tab.fileTarget.rootIdentity === sessionId)
     ))
-    if (
-      affectedTabs.some((tab) => workspace.fileTabDirty(tab.tabId))
-      && !await confirmDiscardedEdit({ discard: false })
-    ) return
     movingSession.value = true
     try {
-      await chat.moveSession(sessionId, targetProjectId)
+      if (
+        affectedTabs.some((tab) => workspace.fileTabDirty(tab.tabId))
+        && !await confirmDiscardedEdit({ discard: false })
+      ) return
+      const moved = await chat.moveSession(sessionId, newProjectName ? null : projectId, options)
+      const targetProjectId = moved.projectId || null
       if (affectedTabs.length) {
         affectedTabs.forEach((tab) => workspace.discardFileTab(tab.tabId))
         void controlCenter.removeFileTabs(affectedTabs.map((tab) => tab.tabId)).catch(() => {})
       }
       moveDialogOpen.value = false
-      $q.notify({ type: 'positive', message: 'Session verschoben.' })
+      $q.notify({ type: 'positive', message: newProjectName ? 'Projekt angelegt und Session verschoben.' : 'Session verschoben.' })
+      void projects.fetchAll().catch(() => {})
       if (route.query.session === sessionId) {
         await router.push({
           name: 'chat',
@@ -177,7 +184,7 @@ export function useSidebarSessions({
           }
         })
       }
-      void projects.fetchAll().catch(() => {})
+      if (applyProjectDefaults && moved.codingWorkspace?.warningCode) void chat.refreshSession(sessionId).catch(() => {})
     } catch {
       // The central API interceptor displays the error; the dialog remains open.
     } finally {
@@ -353,7 +360,7 @@ export function useSidebarSessions({
   return {
     projectOptions, standaloneSessionList, sessionStatuses,
     renameDialogOpen, renameTitle, renaming, pinningSessionId,
-    moveDialogOpen, moveSourceProjectId, moveProjectId, movingSession,
+    moveDialogOpen, moveSourceSession, moveProjectId, movingSession,
     sessionDropTarget, openRenameDialog, projectSessionList, loadProjectSessions,
     loadStandaloneSessions, startSessionDrag, endSessionDrag, dragSessionOver,
     leaveSessionDropTarget, dropSession, openMoveDialog, moveSession,
