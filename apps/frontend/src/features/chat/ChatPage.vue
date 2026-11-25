@@ -11,26 +11,27 @@
         : { display: 'none' }"
     >
       <template #before>
-        <SubagentInspector
-          v-if="routeSessionId && routeSubagentId"
-          :parent-id="routeSessionId"
-          :child-id="routeSubagentId"
-        />
-        <div v-show="!routeSubagentId" class="chat-page__pane column no-wrap full-height">
-    <q-banner v-if="chat.current?.archived" class="app-surface-tonal" dense>
+        <div class="chat-page__pane column no-wrap full-height">
+          <SubagentInspector
+            v-if="routeSessionId && routeSubagentId"
+            :parent-id="routeSessionId"
+            :child-id="routeSubagentId"
+          />
+    <q-banner v-if="!routeSubagentId && chat.current?.archived" class="app-surface-tonal" dense>
       Diese Session ist archiviert. Zum Weiterarbeiten bitte wiederherstellen.
       <template #action>
         <q-btn v-if="chat.running" flat no-caps label="Lauf stoppen" @click="chat.stop()" />
         <q-btn flat no-caps color="primary" label="Archiv öffnen" :to="{ name: 'archive' }" />
       </template>
     </q-banner>
-    <q-banner v-if="positionLoadFailed" dense class="app-surface-tonal" role="alert">
+    <q-banner v-if="!routeSubagentId && positionLoadFailed" dense class="app-surface-tonal" role="alert">
       Die gewünschte Stelle im Verlauf konnte nicht geladen werden.
       <template #action>
         <q-btn flat dense no-caps color="primary" label="Erneut versuchen" @click="retryPositionLoad" />
       </template>
     </q-banner>
     <q-scroll-area
+      v-show="!routeSubagentId"
       id="chat-scroll-area"
       ref="scrollArea"
       class="chat-page__content col"
@@ -186,9 +187,11 @@
       </div>
     </q-scroll-area>
 
+    <div :ref="setAppNoticeTarget" class="app-notice-anchor" />
+
     <div
       v-if="!chat.loadError && (audioNavigationPending || (!composerReadOnly && (chat.loading || !routeSessionId || routeSession || chat.current)))"
-      v-show="!composerReadOnly"
+      v-show="!routeSubagentId && !composerReadOnly"
       class="chat-composer-region"
     >
       <transition name="chat-scroll-jump">
@@ -298,7 +301,7 @@
         />
       </div>
     </div>
-    <span class="app-sr-only" role="status" aria-live="polite" aria-atomic="true">
+    <span v-show="!routeSubagentId" class="app-sr-only" role="status" aria-live="polite" aria-atomic="true">
       {{ announcedRunStatus }}
     </span>
         </div>
@@ -340,7 +343,7 @@
 
 <script setup>
 import AppSelect from 'src/shared/ui/AppSelect.vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import RequestDock from 'src/features/chat/components/RequestDock.vue'
@@ -400,6 +403,7 @@ const router = useRouter()
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const chat = useChatStore()
+const setAppNoticeTarget = inject('setAppNoticeTarget', () => {})
 const { enabled: sessionTabsEnabled, tabs: sessionTabs, position: sessionTabsPosition, activeKey: activeSessionTabKey } = useSessionTabs({ chat, route })
 const subagents = useSubagentStore()
 const agentProfiles = useAgentProfileStore()

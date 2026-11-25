@@ -32,22 +32,43 @@
   height: auto;
 }
 
-.app-notice-host { flex: none; min-width: 0; }
+.app-notice-anchor {
+  position: relative;
+  flex: none;
+  height: 0;
+}
 
-body:has(.app-notices .app-notice-card) .q-dialog[aria-modal='true'] > .q-dialog__inner {
-  top: var(--app-notice-height, 0px);
-
-  > div { max-height: 100%; }
+// Let the notice reach the modal layer instead of trapping it inside the splitter.
+body:has(.q-dialog[aria-modal='true']) .chat-workspace-splitter > .q-splitter__before {
+  z-index: auto;
 }
 
 .app-notices {
+  --notice-right: max(12px, env(safe-area-inset-right));
+  --notice-left: max(12px, env(safe-area-inset-left));
+  position: absolute;
+  z-index: 2;
+  right: var(--notice-right);
+  bottom: 12px;
+  width: min(380px, calc(100% - var(--notice-left) - var(--notice-right)));
   &:not(:has(.app-notice-card)) { display: none; }
   display: grid;
   gap: 6px;
   max-height: min(48dvh, 300px);
   overflow: auto;
   overscroll-behavior: contain;
-  padding: calc(8px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+
+  &--fixed,
+  body:has(.q-dialog[aria-modal='true']) & {
+    position: fixed;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    z-index: 3000;
+  }
+
+  // Dialog errors must not be hidden behind the portalled modal.
+  body:has(.q-dialog[aria-modal='true']) & {
+    z-index: 9500; // Match Quasar Notify's layer.
+  }
 
   .q-notifications__list {
     position: static !important;
@@ -55,6 +76,7 @@ body:has(.app-notices .app-notice-card) .q-dialog[aria-modal='true'] > .q-dialog
     margin: 0;
   }
 
+  #q-notify:not(:has(.app-notice-card)),
   .q-notifications__list:empty,
   .q-notification__badge { display: none; }
 
@@ -62,9 +84,8 @@ body:has(.app-notices .app-notice-card) .q-dialog[aria-modal='true'] > .q-dialog
     --notice-tone: var(--q-info);
     --notice-accent: color-mix(in srgb, var(--notice-tone) 70%, var(--app-text));
     width: 100%;
-    max-width: 620px;
     min-width: 0;
-    margin: 0 auto;
+    margin: 0;
     border: 1px solid var(--app-surface-border);
     border-radius: 8px;
     background: var(--app-surface) !important;
@@ -109,27 +130,9 @@ body:has(.app-notices .app-notice-card) .q-dialog[aria-modal='true'] > .q-dialog
   padding: 7px 10px;
 }
 
-.app-notice__body { min-width: 0; }
+.app-notice__body { flex: 1; min-width: 0; }
 .app-notice__actions { display: flex; flex-wrap: wrap; gap: 4px; }
-
-.app-shell--floating-controls .app-notice-host .app-notices {
-  padding-inline: max(68px, env(safe-area-inset-left), env(safe-area-inset-right));
-}
-
-.app-shell:has(.app-notice-host .app-notice-card) {
-  .app-floating-controls { top: calc(var(--app-floating-control-inset) + env(safe-area-inset-top)); }
-  .chat-page__scroll-content { padding-top: 0; transition: none; }
-}
-
-@media (max-width: 720px) {
-  .app-shell--floating-controls .app-notice-host .app-notices {
-    padding: calc(64px + env(safe-area-inset-top)) 12px 8px;
-  }
-
-  .app-shell--navigation-overlay:has(.app-notice-host .app-notice-card) .app-page {
-    padding-top: 16px;
-  }
-}
+.app-notice__dismiss { flex: none; color: var(--app-muted); }
 
 .app-floating-controls {
   position: fixed;

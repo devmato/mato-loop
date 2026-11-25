@@ -11,6 +11,13 @@
         <div class="app-notice__actions"><slot name="actions" /></div>
       </template>
     </div>
+    <q-btn
+      flat round dense icon="close"
+      class="app-notice__dismiss"
+      aria-label="Meldung schließen"
+      :disable="dismissDisabled"
+      @click="$emit('dismiss')"
+    />
   </div>
 </template>
 
@@ -18,6 +25,8 @@
 defineProps({
   title: { type: String, required: true },
   icon: { type: String, required: true },
-  tone: { type: String, required: true }
+  tone: { type: String, required: true },
+  dismissDisabled: Boolean
 })
+defineEmits(['dismiss'])
 </script>

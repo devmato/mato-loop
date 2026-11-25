@@ -1,10 +1,10 @@
 <template>
   <Teleport :to="noticeTarget || 'body'" :disabled="!noticeTarget">
-    <div ref="noticeArea" class="app-notices">
-      <AppNotice v-if="backendUnavailable" icon="wifi_off" tone="warning" title="Verbindung unterbrochen">
+    <div ref="noticeArea" class="app-notices" :class="{ 'app-notices--fixed': !noticeTarget }">
+      <AppNotice v-if="backendUnavailable && !outageDismissed" icon="wifi_off" tone="warning" title="Verbindung unterbrochen" @dismiss="outageDismissed = true">
         MatoLoop prüft die Verbindung automatisch.
       </AppNotice>
-      <AppNotice v-if="updateAvailable" icon="system_update" tone="info" title="Eine neue Version der Weboberfläche ist bereit.">
+      <AppNotice v-if="updateAvailable" icon="system_update" tone="info" title="Eine neue Version der Weboberfläche ist bereit." :dismiss-disabled="restarting" @dismiss="snoozeUpdate">
         <q-checkbox v-model="showChanges" dense label="Neuerungen nach dem Neuladen anzeigen" />
         <template #actions>
           <q-btn flat dense no-caps color="primary" label="Später" @click="snoozeUpdate" />
@@ -61,10 +61,14 @@ provide('setAppNoticeTarget', (element) => { noticeTarget.value = element })
 const showChanges = ref(true)
 const startupSlow = ref(false)
 const updateAvailable = ref(false)
+const outageDismissed = ref(false)
 const restarting = ref(false)
 let startupTimer = null
 let updateTimer = null
-let noticeObserver
+
+watch(backendUnavailable, (unavailable) => {
+  if (!unavailable) outageDismissed.value = false
+})
 
 function reload() {
   window.location.reload()
@@ -117,22 +121,15 @@ watch(() => route.matched.length > 0 && auth.authenticated && auth.userId, (user
 }, { immediate: true })
 
 onMounted(() => {
-  // Keep Quasar's notification lifecycle and put its host in the app's layout flow.
+  // Keep Quasar's notification lifecycle while sharing the overlay with app notices.
   const notifyHost = document.getElementById('q-notify')
   if (notifyHost) noticeArea.value.append(notifyHost)
-  // Dialogs are portalled outside the app layout and need the same inset.
-  noticeObserver = new ResizeObserver(() => {
-    document.documentElement.style.setProperty('--app-notice-height', `${noticeArea.value?.offsetHeight || 0}px`)
-  })
-  noticeObserver.observe(noticeArea.value)
   startupTimer = window.setTimeout(() => { startupSlow.value = true }, 3000)
   window.addEventListener(PWA_UPDATE_EVENT, showUpdate)
   void detectWaitingUpdate()
 })
 
 onBeforeUnmount(() => {
-  noticeObserver?.disconnect()
-  document.documentElement.style.removeProperty('--app-notice-height')
   const notifyHost = noticeArea.value?.querySelector('#q-notify')
   if (notifyHost) document.body.append(notifyHost)
   window.clearTimeout(startupTimer)

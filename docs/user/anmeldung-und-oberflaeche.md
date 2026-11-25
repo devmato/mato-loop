@@ -75,6 +75,8 @@ Reihenfolge, Dateiziele und Ansichten werden je Session gespeichert, Editorentw�
 
 ### Benachrichtigungen
 
+App-Meldungen erscheinen rechts unten, im Chat oberhalb des Eingabebereichs. Sie verschieben weder den Chat noch die Session-Tabs. Mit **Meldung schließen** (`×`) blendest du sie aus. Beim Update-Hinweis entspricht das **Später**; die automatische Verbindungsprüfung läuft auch nach dem Schließen weiter.
+
 Der globale Bereich **Benachrichtigungen** zeigt eine chronologische Liste. Sein Zähler zählt ausschließlich ungelesene Hinweise. Die schwebende Control-Center-Schaltfläche öffnet bei vorhandenem Zähler direkt diese Liste; sonst die zuletzt verwendete App.
 
 Schalte den **Benachrichtigungston** über das Lautsprechersymbol oben im Benachrichtigungscenter ein, um einen kurzen Ton für neue Hinweise zu hören. Die Einstellung bleibt in diesem Browser bzw. in der installierten Web-App gespeichert. Nach dem Neuladen kann der Browser den Ton bis zur ersten Interaktion blockieren. Ist MatoLoop geschlossen oder pausiert, steuern Browser und Betriebssystem den Ton für Web Push.
