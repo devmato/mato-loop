@@ -115,8 +115,9 @@ def with_script_progress(
 async def run_script(
     arguments: ScriptArguments, dispatch: Callable[[str, dict[str, Any]], Awaitable[Any]],
 ) -> ToolResult:
+    # Isolated Python ignores PYTHONPYCACHEPREFIX, so disable bytecode writes explicitly.
     process = await asyncio.create_subprocess_exec(
-        sys.executable, "-I", "-m", "mato_loop_backend.agent.script_worker",
+        sys.executable, "-I", "-B", "-m", "mato_loop_backend.agent.script_worker",
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL, env={}, limit=600_000,
     )
