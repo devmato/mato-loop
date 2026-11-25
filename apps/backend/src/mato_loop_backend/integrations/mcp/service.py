@@ -286,7 +286,8 @@ class McpIntegrationService:
         instance.enabled = enabled
         instance.config = config
         validate_integration(instance)
-        await store_credential(
+        # A new template ID invalidates login attempts bound to the old configuration.
+        credential = await store_credential(
             db,
             owner_id=None,
             kind=OAUTH_CLIENT_CREDENTIAL_KIND,
@@ -299,9 +300,11 @@ class McpIntegrationService:
                 ),
                 "client_info": client_info,
             },
-            credential=template,
+            credential=None if binding_changed else template,
         )
+        instance.credential_id = credential.id
         if binding_changed:
+            await delete_credential(db, template.id, owner_id=None)
             await delete_user_oauth_credentials(db, integration_id)
             await cls._clear_binding_policies(db, instance)
         await _save_settings(db, settings, owner_id)

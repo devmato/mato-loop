@@ -554,6 +554,64 @@ async def test_admin_bootstrap_updates_global_catalog_and_canonical_endpoint(
     clear_policies.assert_awaited()
 
 
+async def test_secret_rotation_rejects_pending_user_login(monkeypatch, payload):
+    mcp = service.McpIntegrationService
+    config = mcp.config_model(
+        endpoint=ENDPOINT,
+        oauth={
+            "client_id": "client",
+            "token_endpoint_auth_method": "client_secret_post",
+            "user_scoped": True,
+        },
+    ).model_dump(mode="json")
+    template = SimpleNamespace(id=uuid4(), kind=oauth.OAUTH_CLIENT_CREDENTIAL_KIND)
+    instance = IntegrationInstance(
+        name="MCP",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        credential_id=template.id,
+        config=config,
+    )
+    attempt = oauth.LoginAttempt(
+        uuid4(),
+        "session",
+        None,
+        dict(name=instance.name, endpoint=ENDPOINT, enabled=True, oauth=config["oauth"]),
+        instance.id,
+        instance.model_dump(mode="json"),
+    )
+    attempt.payload = payload
+
+    async def store(_db, *, credential=None, **kwargs):
+        return credential or SimpleNamespace(id=uuid4())
+
+    settings = IntegrationSettings(instances=[instance])
+    monkeypatch.setattr(service, "_load_integrations", AsyncMock(return_value=settings))
+    monkeypatch.setattr(service, "_load_tools", AsyncMock(return_value=ToolSettings()))
+    monkeypatch.setattr(service, "_save_settings", AsyncMock())
+    monkeypatch.setattr(service, "load_credential", AsyncMock(return_value=template))
+    monkeypatch.setattr(service, "read_credential", lambda _: {"catalog_initialized": True})
+    monkeypatch.setattr(service, "store_credential", store)
+    monkeypatch.setattr(service, "delete_credential", AsyncMock())
+    monkeypatch.setattr(service, "delete_user_oauth_credentials", AsyncMock())
+    monkeypatch.setattr(service, "find_user_oauth_credential", AsyncMock(return_value=None))
+
+    db = AsyncMock()
+    await mcp.update_user_scoped_oauth(
+        db,
+        instance.id,
+        name=instance.name,
+        endpoint=ENDPOINT,
+        enabled=True,
+        oauth=config["oauth"],
+        client_secret=uuid4().hex,
+        owner_id=None,
+    )
+
+    with pytest.raises(IntegrationSettingsError, match="integration.changed"):
+        await mcp.complete_oauth(db, attempt)
+
+
 async def test_user_login_rejects_uncanonical_global_endpoint(monkeypatch, payload):
     instance = IntegrationInstance(
         name="MCP",
