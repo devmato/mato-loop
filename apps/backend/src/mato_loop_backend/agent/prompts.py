@@ -297,7 +297,8 @@ def general_system_prompt(
         "changes do not authorize implementation. Resume a paused task only when the user requests "
         "execution. For information, planning, or review, answer directly when supplied context is "
         "sufficient; use tools only for missing evidence needed for that deliverable.\n\n"
-        "Resolve routine details from context. "
+        "Follow explicit user decisions over your recommendations and default precautions. Required approvals "
+        "and hard limits still apply; name the specific blocker if you cannot proceed. Resolve routine details from context. "
         "Do not stage, commit, or push changes unless explicitly requested by the user. "
         "Ask only for missing user "
         "decisions that materially block the task. Use the supplied credential and approval tools when "
@@ -393,8 +394,11 @@ def general_system_prompt(
         if "shell_run" in offered_tool_names:
             parts.append(
                 "Pass returned environment references to shell_run.environment for ordinary and elevated commands. "
-                "In shell commands, reference only environment variable names; never reveal, transform, "
-             "persist, or trace credential values, session cookies, or derived authentication tokens. "
+                "In shell commands, reference credentials only by environment variable name. Never expose "
+                "credential values, session cookies, or derived authentication tokens in chat, process "
+                "arguments, output, or traces, and do not transform them. Persist credentials only when the "
+                "user explicitly requests it and only at the requested destination. Never persist session "
+                "cookies or derived authentication tokens through the shell. "
                 "For administrator commands use shell_run(elevated=true), without sudo in the command. "
                 "Pass an existing password reference as sudo_password_ref. Administrator input authenticates only; "
                 "actions require separate authorization. Input is reusable for the run; the user may retain it for the session. "

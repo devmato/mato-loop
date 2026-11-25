@@ -118,7 +118,7 @@ def test_inventory_is_complete() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 275
+    assert 80 <= len(CASES) <= 276
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",

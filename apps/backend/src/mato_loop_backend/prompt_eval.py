@@ -107,7 +107,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 45
+INVENTORY_VERSION = 46
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -475,6 +475,7 @@ _LOGIN_INPUTS = {"inputs": [
     {"name": "LOGIN_PASSWORD", "label": "Passwort", "question": "Passwort?", "masked": True},
 ]}
 _LOGIN_COMMAND = "python3 -c 'import os; print(bool(os.environ[\"LOGIN_USERNAME\"] and os.environ[\"LOGIN_PASSWORD\"]))'"
+_PORTAL_KEY_ENVIRONMENT = {"PORTAL_API_KEY": _LOGIN_ENVIRONMENT["LOGIN_PASSWORD"]}
 VIDEO_EVAL_TOOLS = (
     "read",
     "glob",
@@ -1070,6 +1071,30 @@ CASES = (
         })),
         expected_tool="shell_run", expected_tool_call_count=1,
         expected_arguments={"environment": _LOGIN_ENVIRONMENT},
+        forbidden_tools=("question", "secret_input"),
+    ),
+    PromptCase(
+        id="explicit_portal_key_rotation_uses_shell",
+        kind="general",
+        user="Setze den neuen API-Schlüssel fürs Portal jetzt wie beschrieben per Shell in der Dev-Datenbank.",
+        tools=("question", "secret_input", "shell_run"),
+        working_directory="/home/user/project",
+        system_options={
+            "agent_profile": build_profile(),
+            "session_environment": {name: {"valueRef": ref} for name, ref in _PORTAL_KEY_ENVIRONMENT.items()},
+        },
+        history=(
+            {"role": "user", "content": (
+                "Im Dev-Stack setzt `./devctl portal set-key --from-env PORTAL_API_KEY` den Schlüssel "
+                "in der Dev-Datenbank. Das Programm liest ihn aus der Umgebung und gibt ihn nicht aus."
+            )},
+            {"role": "assistant", "content": "Ich würde dir empfehlen, den Schlüssel stattdessen manuell zu setzen."},
+        ),
+        expected_tool="shell_run", expected_tool_call_count=1,
+        expected_arguments={
+            "command": "./devctl portal set-key --from-env PORTAL_API_KEY",
+            "environment": _PORTAL_KEY_ENVIRONMENT,
+        },
         forbidden_tools=("question", "secret_input"),
     ),
     PromptCase(
@@ -4773,6 +4798,7 @@ _SEMANTIC_CONTRACTS = (
         (
             "missing_shell_credentials_use_secret_input",
             "answered_credentials_continue_in_same_run",
+            "explicit_portal_key_rotation_uses_shell",
             "expired_credentials_are_requested_again",
             "rejected_credentials_refresh_existing_name",
             "invalid_credential_reference_repairs_named_argument",

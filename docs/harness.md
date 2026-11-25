@@ -339,6 +339,8 @@ Project context distinguishes the configured computer and directory from the ses
 
 The implementation owners are `agent/prompts.py` (system parts/reminders), `agent/projection.py` and `agent/context.py` (turns, checkpoints, fitting), `agent/turn_context.py` (optional context/preparation), and `agent/run_support.py` (ephemeral images).
 
+The task contract gives explicit user decisions precedence over recommendations and default precautions, not required approvals or hard limits. The shell guidance allows storing credentials only at the requested destination on explicit request, without exposing their values. These wording changes invalidate the affected system prefix once; tool schemas and permissions are unchanged.
+
 Plan, Build and Interactive require a source check before answering questions about a specific implementation or work artifact. This guidance lives in the profile reminder for the current turn; stored reminders and tool availability are unchanged.
 
 The selected-computer context identifies an assigned worktree as the default for repository work, separately from the active directory and the scratch directory. It uses the existing session binding on the connected computer and does not grant access or move the shell. Adding this hint intentionally changes older system prefixes only for sessions that receive it; unchanged context retains the same prefix across tool rounds and follow-ups.
