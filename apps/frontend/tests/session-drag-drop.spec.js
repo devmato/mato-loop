@@ -50,6 +50,7 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
       findCachedSession: vi.fn((id) => sessions.find((session) => session.id === id)),
       fetchSession: vi.fn(),
       refreshSession: vi.fn().mockResolvedValue(),
+      refreshTabSummaries: vi.fn().mockResolvedValue(),
       refreshServerQueue: vi.fn().mockResolvedValue(),
       refreshSessions: vi.fn().mockResolvedValue(),
       reconcileSessionList: vi.fn().mockResolvedValue(),
@@ -276,6 +277,19 @@ it('refreshes only changed data through SSE without recurring REST polling', asy
   visibility.mockRestore()
 })
 
+it('keeps only the pending session update when the page becomes visible again', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+  try {
+    EventSource.instances[0].emit([{ resource: 'message_queue', sessionId: 'project-session' }])
+    await vi.advanceTimersByTimeAsync(50)
+    expect(chat.refreshServerQueue).not.toHaveBeenCalled()
+    visibility.mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(50)
+    expect([chat.refreshServerQueue.mock.calls, chat.invalidateSessionLists.mock.calls]).toEqual([[[['project-session']]], []])
+  } finally { visibility.mockRestore() }
+})
+
 it.each([false, true])('refreshes displayed Home and only invalidates hidden Home (displayed=%s)', async (displayed) => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
   const home = useHomeStore()
@@ -299,7 +313,8 @@ it.each([
   ['message', { resource: 'messages', sessionId: 'standalone' }]
 ])('targets summaries or invalidates lists for a %s session hint', async (kind, change) => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
-  const summaries = vi.spyOn(useSessionTabsStore(), 'refreshSummaries').mockResolvedValue()
+  const summaries = chat.refreshTabSummaries
+  summaries.mockClear()
   projects.fetchAll.mockClear()
   try {
     EventSource.instances[0].emit([change])
@@ -318,7 +333,7 @@ it.each([
       tabRefreshes: change.sessionId ? 0 : 1,
       projectRefreshes: change.sessionId ? 0 : 1
     })
-  } finally { summaries.mockRestore(); visibility.mockRestore() }
+  } finally { visibility.mockRestore() }
 })
 
 it('does not refresh the visible transcript for a background message and an unrelated current-session hint', async () => {
@@ -412,6 +427,16 @@ it('retries a failed notification reload without polling unrelated resources', a
   visibility.mockRestore()
 })
 
+it('backs off notification retries despite deferred session hints in a hidden tab', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+  try {
+    notifications.fetchLatest.mockRejectedValueOnce(new Error('offline')).mockResolvedValue()
+    EventSource.instances[0].emit([{ resource: 'sessions', sessionId: 'standalone' }, { resource: 'notifications' }])
+    await vi.advanceTimersByTimeAsync(100)
+    expect(notifications.fetchLatest).toHaveBeenCalledTimes(1)
+  } finally { visibility.mockRestore() }
+})
+
 it('retains a session hint before its initial response has populated the current session', async () => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
   useRoute().query = { session: 'standalone' }
@@ -494,6 +519,7 @@ it.each([true, false])('acknowledges only a focused visible session (unread=%s)'
   const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
   notifications.markPresent.mockClear()
   useChatStore().current = { id: 'standalone', hasUnreadMessages: unread, messages: [] }
+  useChatStore().liveTranscriptSessionId = 'standalone'
   useRoute().query = { session: 'standalone' }
 
   window.dispatchEvent(new Event('focus'))
@@ -503,6 +529,14 @@ it.each([true, false])('acknowledges only a focused visible session (unread=%s)'
   notifications.markPresent.mockClear()
   await vi.advanceTimersByTimeAsync(5000)
   expect(notifications.markPresent).toHaveBeenCalledWith(expect.objectContaining({ active: true, sessionId: 'standalone' }))
+
+  useChatStore().markSessionRead.mockClear()
+  useChatStore().liveTranscriptSessionId = null
+  useChatStore().current = { id: 'standalone', hasUnreadMessages: true, messages: [{ id: 'unseen' }] }
+  await vi.waitFor(() => expect(notifications.markPresent).toHaveBeenLastCalledWith(expect.objectContaining({ active: true, sessionId: null })))
+  expect(useChatStore().markSessionRead).not.toHaveBeenCalled()
+  useChatStore().liveTranscriptSessionId = 'standalone'
+  await vi.waitFor(() => expect(useChatStore().markSessionRead).toHaveBeenCalledWith(useChatStore().current))
 
   notifications.markPresent.mockClear()
   focus.mockReturnValue(false)

@@ -136,6 +136,11 @@ current owner's RAM, with at most 20 messages and 20 context summaries per snaps
 Reopening shows that snapshot while an authoritative server read runs; sending,
 history changes and session settings wait for that read. Failed reads discard the
 snapshot. Account changes and session/project deletion clear the affected entries.
+Background session and known-project summary reads opt into `view=status` on
+the list endpoints. Status rows update cached display state without replacing
+full settings. Session rows include the archive and read-only flags used by
+the draft composer; detail and mutation requests remain authoritative. Newly
+discovered projects still load their full rows before entering the store.
 Permission refreshes serialize and coalesce concurrent invalidations without
 caching authorization decisions or dropping updates received during a read.
 Hidden Automation-app overviews defer reads until visible; explicitly selected

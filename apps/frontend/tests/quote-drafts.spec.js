@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { parseQuotedMessage, quotedMessage } from '../src/features/chat/quote-drafts'
+import { editComposerDraft, parseQuotedMessage, quotedMessage, readComposerDraft } from '../src/features/chat/quote-drafts'
 
 it('round-trips text and quotes in their original order', () => {
   const blocks = [
@@ -27,4 +27,9 @@ it('closes an unfinished code block before appending a quote', () => {
   expect(parseQuotedMessage(quotedMessage([{ type: 'text', text: '```js\nconst n = 1' }, quote]))).toEqual([
     { type: 'text', text: '```js\nconst n = 1\n```' }, quote, { type: 'text', text: '' }
   ])
+})
+
+it('keeps existing quote cards in place when editing the text of a quoted draft', () => {
+  const draft = readComposerDraft('Before\n\n> [!QUOTE]\n> Saved quote\n\n> [!COMMENT]\n> Saved comment')
+  expect(editComposerDraft(draft, 'After').quotes).toBe(draft.quotes)
 })

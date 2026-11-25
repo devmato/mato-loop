@@ -21,6 +21,7 @@ export const useChatStore = defineStore('chat', {
     sessionCatalogVersion: 0,
     sessionsProjectId: null,
     current: null,
+    liveTranscriptSessionId: null,
     personalChatSessionId: null,
     sessionDetails: [],
     loading: false,

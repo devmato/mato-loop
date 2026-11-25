@@ -4,6 +4,7 @@ import { queueRefresh } from 'src/utils/queued-refresh'
 import { reconcileApiRows } from 'src/utils/api-snapshot'
 
 const pendingSummaryIds = new WeakMap()
+const fullRefreshRequests = new WeakMap()
 
 export const useProjectStore = defineStore('projects', {
   state: () => ({
@@ -36,7 +37,7 @@ export const useProjectStore = defineStore('projects', {
       }
     },
     async fetchAll(config = {}) {
-      return queueRefresh(this, config, async (revision) => {
+      const request = queueRefresh(this, config, async (revision) => {
         this.loading = !this.loaded
         this.loadFailed = false
         try {
@@ -52,11 +53,18 @@ export const useProjectStore = defineStore('projects', {
           if (revision === this.revision) this.loading = false
         }
       })
+      fullRefreshRequests.set(this, request)
+      try {
+        await request
+      } finally {
+        if (fullRefreshRequests.get(this) === request) fullRefreshRequests.delete(this)
+      }
     },
     async refreshSummaries(ids, config = {}) {
       const requested = [...new Set(ids.filter(Boolean))]
       if (!requested.length) return
-      if (!this.loaded) return this.fetchAll(config)
+      // A targeted status read must not supersede a canonical list update.
+      if (!this.loaded || fullRefreshRequests.has(this)) return this.fetchAll(config)
       if (!pendingSummaryIds.has(this)) pendingSummaryIds.set(this, new Set())
       const pending = pendingSummaryIds.get(this)
       requested.forEach(id => pending.add(id))
@@ -64,20 +72,23 @@ export const useProjectStore = defineStore('projects', {
       return queueRefresh(this, { ...config, targeted: true }, async (revision) => {
         // Keep superseded requests' IDs until a current read has applied them.
         const projectIds = [...pending]
+        const existing = new Set(this.items.map(item => item.id))
         const summaries = new Map()
         for (let offset = 0; offset < projectIds.length; offset += 100) {
+          const ids = projectIds.slice(offset, offset + 100)
           const params = new URLSearchParams(config.params)
+          // A newly observed project needs its full defaults and settings.
+          params.set('view', ids.every(id => existing.has(id)) ? 'status' : 'full')
           params.delete('projectIds')
-          projectIds.slice(offset, offset + 100).forEach(id => params.append('projectIds', id))
+          ids.forEach(id => params.append('projectIds', id))
           const { data } = await api.get('/projects', { timeout: 30_000, ...config, params })
           if (revision !== this.revision) return
           data.items.forEach(item => summaries.set(item.id, item))
         }
         const targets = new Set(projectIds)
-        const existing = new Set(this.items.map(item => item.id))
         const next = this.items
           .filter(item => !targets.has(item.id) || summaries.has(item.id))
-          .map(item => targets.has(item.id) ? summaries.get(item.id) : item)
+          .map(item => targets.has(item.id) ? { ...item, ...summaries.get(item.id) } : item)
         next.push(...[...summaries.values()].filter(item => !existing.has(item.id)))
         this.items = reconcileApiRows(this.items, next)
         projectIds.forEach(id => pending.delete(id))

@@ -174,6 +174,33 @@ async def test_project_list_is_owner_scoped_and_counts_sessions(monkeypatch, tar
         assert "projects.id IN" in str(statement.whereclause)
 
 
+def test_project_status_view_is_owner_scoped_and_skips_full_settings(monkeypatch):
+    user = _user()
+    project = _project(user.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.side_effect = [_rows((project.id, 3, True)), _rows((project, 3, True))]
+    preferences = AsyncMock(return_value=UserPreferences())
+    monkeypatch.setattr(SettingsStore, "load", preferences)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db_session] = lambda: db
+    app.dependency_overrides[require_user] = lambda: user
+
+    with TestClient(app) as client:
+        status_response = client.get("/projects", params={"view": "status", "projectIds": str(project.id)})
+        full_response = client.get("/projects", params={"projectIds": str(project.id)})
+
+    assert status_response.json() == {"items": [{"id": str(project.id), "sessionCount": 3, "hasUnreadMessages": True}]}
+    assert full_response.json()["items"][0]["instructions"] == project.instructions
+    preferences.assert_awaited_once()
+    statement = db.execute.await_args_list[0].args[0]
+    sql = str(statement)
+    assert user.id in statement.compile().params.values()
+    assert "projects.archived_at IS NULL" in sql and "projects.delete_at IS NULL" in sql
+    assert "chat_sessions.parent_session_id IS NULL" in sql and "chat_sessions.delete_at IS NULL" in sql
+    assert "WITH RECURSIVE" not in sql and "projects.instructions" not in sql
+
+
 @pytest.mark.parametrize("project_ids", [["invalid"], [str(uuid4())] * 101])
 def test_project_list_rejects_invalid_or_unbounded_targets(project_ids) -> None:
     db = AsyncMock(spec=AsyncSession)

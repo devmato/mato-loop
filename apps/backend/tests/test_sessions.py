@@ -33,6 +33,7 @@ from mato_loop_backend.api.routes.sessions import (
     download_attachment,
     get_run,
     get_session,
+    get_session_message_window,
     get_session_messages,
     home_sessions,
     list_sessions,
@@ -68,6 +69,7 @@ from mato_loop_backend.sessions.service import (
     active_file_payload,
     message_attributions,
     session_message_page,
+    session_message_window,
 )
 from mato_loop_backend.settings import (
     AgentProfilesSettings,
@@ -370,6 +372,49 @@ async def test_session_list_first_page_has_cursor_and_payload_metadata(lookup_id
         assert [session.id, next_session.id] in statement.compile().params.values()
         assert "chat_sessions.id IN" in sql
         assert "chat_sessions.archived_at IS NULL" not in sql
+
+
+def test_session_status_view_preserves_navigation_and_list_state_without_full_serialization(monkeypatch):
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    user = _user()
+    now = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
+    session = ChatSession(
+        id=uuid4(), user_id=user.id, project_id=uuid4(), title="Test", is_pinned=True,
+        created_at=now, updated_at=now, title_generation_status="completed",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    result = MagicMock()
+    result.all.return_value = [(session, now, now, "running", now, now, True)]
+    db.execute.return_value = result
+    full = AsyncMock(side_effect=AssertionError("Status view should not build the full payload"))
+    monkeypatch.setattr(sessions_route, "_session_list_serializer", full)
+    app = FastAPI()
+    app.include_router(sessions_route.router, prefix="/api")
+    app.dependency_overrides[get_db_session] = lambda: db
+    app.dependency_overrides[require_user] = lambda: user
+
+    with TestClient(app) as client:
+        response = client.get("/api/sessions", params={
+            "sessionIds": str(session.id), "includeArchived": "true", "view": "status",
+        })
+
+    assert response.status_code == 200
+    assert response.json() == {"nextCursor": None, "items": [{
+        "id": str(session.id), "projectId": str(session.project_id), "parentSessionId": None,
+        "readOnly": False, "archived": True, "archivedAt": None, "title": "Test",
+        "titleGenerationStatus": "completed", "pinned": True,
+        "createdAt": now.isoformat(), "updatedAt": now.isoformat(), "lastMessageAt": now.isoformat(),
+        "lastUserMessageAt": now.isoformat(), "hasUnreadMessages": True, "activeRunStatus": "running",
+    }]}
+    db.execute.assert_awaited_once()
+    statement = db.execute.await_args.args[0]
+    sql = str(statement)
+    assert user.id in statement.compile().params.values()
+    assert "chat_sessions.parent_session_id IS NULL" in sql
+    assert "chat_sessions.delete_at IS NULL" in sql and "projects.delete_at IS NULL" in sql
+    assert "WITH RECURSIVE" not in sql
+    assert "chat_sessions.control_center" not in sql and "chat_sessions.session_profile" not in sql
 
 
 @pytest.mark.parametrize("session_ids", [[str(uuid4())] * 101, ["invalid-uuid"]])
@@ -1304,6 +1349,8 @@ async def test_session_detail_contains_active_run_and_aggregate_metrics(todo_sta
     assert "silence" not in aggregate_params
     assert "_matoloop" in aggregate_params
     assert "performance" in aggregate_params
+    assert "jsonb_build_object" in aggregate_sql
+    assert "estimatedInputTokens" in aggregate_params and "inputBudgetTokens" in aggregate_params
     assert "messages_1.created_at DESC, messages_1.id DESC" in aggregate_sql
 
 
@@ -1548,6 +1595,32 @@ async def test_session_message_page_omits_legacy_orphan_results() -> None:
     db.scalars.assert_not_awaited()
 
 
+async def test_message_window_loads_only_the_requested_tool_carrier_section() -> None:
+    session_id = uuid4()
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+    earlier, user, carrier, answer, next_turn = [
+        SimpleNamespace(id=uuid4(), created_at=now + timedelta(seconds=index), section_start=section, payload_bytes=2_000)
+        for index, section in enumerate((True, True, False, False, True))
+    ]
+    tool_id = uuid4()
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.side_effect = [
+        MagicMock(one_or_none=MagicMock(return_value=SimpleNamespace(id=tool_id, role="tool", carrier_id=carrier.id))),
+        MagicMock(all=MagicMock(return_value=[carrier, user, earlier])),
+        MagicMock(all=MagicMock(return_value=[answer, next_turn])),
+    ]
+    tool_carrier = Message(id=carrier.id, role="assistant", tool_calls=[{"id": "call-1"}], created_at=carrier.created_at)
+    tool_result = Message(id=tool_id, role="tool", tool_call_id="call-1", created_at=now + timedelta(seconds=6))
+    db.scalars.side_effect = [MagicMock(all=MagicMock(return_value=[tool_carrier])),
+                              MagicMock(all=MagicMock(return_value=[tool_result])),
+                              MagicMock(all=MagicMock(return_value=[]))]
+
+    assert await session_message_window(db, session_id, tool_id) == ([tool_carrier, tool_result], [], str(user.id), True)
+    assert "messages_1.tool_calls @>" in str(db.execute.await_args_list[0].args[0])
+    assert [carrier.id, user.id, answer.id] in db.scalars.await_args_list[0].args[0].compile().params.values()
+    assert (next_turn.created_at, next_turn.id) not in db.scalars.await_args_list[1].args[0].compile().params.values()
+
+
 async def test_session_owner_cannot_read_another_users_session() -> None:
     owner = _user()
     other = _user()
@@ -1560,6 +1633,10 @@ async def test_session_owner_cannot_read_another_users_session() -> None:
 
     assert exc_info.value.code == "session.notFound"
     db.scalars.assert_not_awaited()
+    with pytest.raises(ApiError) as exc_info:
+        await get_session_message_window(session.id, uuid4(), other, db)
+    assert exc_info.value.code == "session.notFound"
+    db.execute.assert_not_awaited()
 
 
 @pytest.mark.parametrize("redirect", [False, True])

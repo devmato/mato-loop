@@ -42,12 +42,28 @@ describe('projects store', () => {
   })
 
   it('keeps the same project list after an unchanged targeted response', async () => {
-    api.get.mockImplementation(async () => ({ data: { items: [{ ...project }] } }))
+    api.get.mockResolvedValueOnce({ data: { items: [project] } })
+      .mockResolvedValueOnce({ data: { items: [{ id: project.id, sessionCount: project.sessionCount }] } })
     const store = useProjectStore()
     await store.fetchAll()
     const previous = store.items
     await store.refreshSummaries([project.id])
     expect(store.items).toBe(previous)
+  })
+
+  it('merges status into known projects and requests full data for new ones', async () => {
+    const status = { id: project.id, sessionCount: 4, hasUnreadMessages: false }
+    const added = { ...project, id: 'project-2', instructions: 'New project defaults' }
+    api.get.mockResolvedValueOnce({ data: { items: [status] } })
+      .mockResolvedValueOnce({ data: { items: [added] } })
+    const store = useProjectStore()
+    store.$patch({ loaded: true, items: [{ ...project, hasUnreadMessages: true }] })
+
+    await store.refreshSummaries([project.id])
+    await store.refreshSummaries([added.id])
+
+    expect(api.get.mock.calls.map(([, config]) => config.params.get('view'))).toEqual(['status', 'full'])
+    expect(store.items).toEqual([{ ...project, ...status }, added])
   })
 
   it('ignores stale reads', async () => {
@@ -116,6 +132,7 @@ describe('projects store', () => {
     await Promise.all([first, next])
 
     expect(store.items).toEqual([updated])
+    if (change === 'targeted refresh') expect(api.get.mock.lastCall[1].params).toBeUndefined()
   })
 
   it('keeps the project list complete when a summary hint arrives during initial load', async () => {

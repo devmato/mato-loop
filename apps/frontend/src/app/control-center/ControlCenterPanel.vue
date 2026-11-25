@@ -234,7 +234,7 @@
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { agentDisplayName } from 'src/features/computers/display'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useTabReorder } from 'src/shared/ui/useTabReorder'
 import AppClosableTab from 'src/shared/ui/AppClosableTab.vue'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
@@ -301,6 +301,11 @@ const activeFooter = computed(() => {
 const closedIntegrations = computed(() => controlCenterIntegrations.filter(
   (item) => !item.fixed && !item.resource && !controlCenter.tabs.some((tab) => tab.appId === item.id)
 ))
+onMounted(() => {
+  if (closedIntegrations.value.some(item => item.id === 'mail') && !mail.accountsLoaded && !mail.accountsLoading) {
+    void mail.fetchAccounts().catch(() => {})
+  }
+})
 const activeProject = computed(() => projects.items.find(
   (project) => project.id === (chat.current ? chat.current.projectId : chat.sessionsProjectId)
 ))

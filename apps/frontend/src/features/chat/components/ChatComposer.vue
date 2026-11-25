@@ -232,11 +232,11 @@
 
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ComposerAttachments from 'src/features/chat/components/ComposerAttachments.vue'
 import ComposerQuote from './ComposerQuote.vue'
-import { parseQuotedMessage, quotedMessage } from '../quote-drafts'
+import { composerDraftContent, editComposerDraft, readComposerDraft } from '../quote-drafts'
 import SessionSettingsFields from 'src/features/chat/components/SessionSettingsFields.vue'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useAgentIdentityStore } from 'stores/agent-identity'
@@ -297,14 +297,20 @@ const commandMenu = ref(null)
 const composerWidth = ref(0)
 const paletteId = useId()
 const draft = computed(() => props.readDraft ? props.readDraft() : props.draft)
-const draftBlocks = computed(() => parseQuotedMessage(draft.value))
-const draftText = computed(() => draftBlocks.value.filter(block => block.type === 'text' && block.text).map(block => block.text).join('\n\n'))
-const draftQuotes = computed(() => draftBlocks.value.filter(block => block.type === 'quote'))
-const messageContent = computed(() => quotedMessage([{ type: 'text', text: draftText.value }, ...draftQuotes.value]))
 const draftScope = computed(() => [
   props.draftScopeKey ?? [chat.draftOwnerUserId, props.session?.id, chat.sessionsProjectId].join(':'),
   props.session?.sessionProfile?.messageSize || 'standard'
 ].join(':'))
+const composerDraft = shallowRef(readComposerDraft(draft.value))
+let lastDraftEdit
+watch([draftScope, draft], ([scope, content]) => {
+  const edit = lastDraftEdit
+  lastDraftEdit = null
+  // Only reuse our own scoped update; send/undo, restore and navigation can replace it.
+  composerDraft.value = edit?.scope === scope && edit.content === content ? edit : readComposerDraft(content)
+}, { flush: 'sync' })
+const draftText = computed(() => composerDraft.value.text)
+const draftQuotes = computed(() => composerDraft.value.quotes)
 watch(draftScope, () => { editingQuote.value = null })
 const slashDismissed = ref(false)
 const slashQuery = computed(() => /^\/[a-z0-9_-]*$/iu.test(draftText.value) ? draftText.value : null)
@@ -369,7 +375,7 @@ const attachmentsDisabled = computed(() => inputDisabled.value || starting.value
 watch([attachmentsDisabled, () => props.session?.id, () => chat.sessionsProjectId, () => chat.draftOwnerUserId], () => {
   fileDragDepth.value = 0
 })
-const draftHasContent = computed(() => Boolean(draft.value.trim() || props.attachments.length))
+const draftHasContent = computed(() => Boolean(draftText.value.trim() || draftQuotes.value.length || props.attachments.length))
 const inputPlaceholder = computed(() => `Eine Nachricht an ${identity.displayName} senden`)
 const voiceActivity = computed(() => starting.value || recording.value || finalizing.value || sendingRecording.value)
 const showVoiceStart = computed(() => !providers.loading && providers.lastLoadComplete
@@ -413,9 +419,12 @@ function selectCommand(command) {
   void nextTick(() => focusInput())
 }
 
-function updateDraft(text, quotes = draftQuotes.value) {
+function updateDraft(text, quotes) {
   if (draftDisabled.value) return
-  emit('update:draft', quotedMessage([{ type: 'text', text }, ...quotes]), props.draftScopeKey)
+  const edit = editComposerDraft(composerDraft.value, text, quotes)
+  if (edit.content === draft.value) return
+  lastDraftEdit = { ...edit, scope: draftScope.value }
+  emit('update:draft', edit.content, props.draftScopeKey)
 }
 
 function updateQuote(index, quote) {
@@ -452,6 +461,11 @@ function lockStopAfterSend() {
   stopLockTimer = setTimeout(() => { stopLocked.value = false }, 500)
 }
 
+function outgoingContent() {
+  const { text, quoteMarkdown } = composerDraft.value
+  return composerDraftContent(text, quoteMarkdown).trim()
+}
+
 function submit(event, fromSendButton = false) {
   if (event?.isComposing) return
   if (paletteOpen.value && (commandList.value?.select() || commandList.value?.pending)) return
@@ -459,10 +473,9 @@ function submit(event, fromSendButton = false) {
     void finishAndSendRecording(fromSendButton)
     return
   }
-  const content = messageContent.value.trim()
   if (sendDisabled.value) return
   if (fromSendButton) lockStopAfterSend()
-  emit('send', content, { interrupt: props.running && !queueSend.value })
+  emit('send', outgoingContent(), { interrupt: props.running && !queueSend.value })
 }
 
 function updateQueueModifier(event) {
@@ -513,7 +526,7 @@ function handleComposerKeydown(event) {
 async function finishAndSendRecording(fromSendButton) {
   if (!canFinishAndSend.value || !recordingScope) return
   const scope = recordingScope
-  const content = messageContent.value.trim()
+  const content = outgoingContent()
   const interrupt = props.running && !queueSend.value
   sendingRecording.value = true
   try {

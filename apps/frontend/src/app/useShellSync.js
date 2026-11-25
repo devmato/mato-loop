@@ -67,6 +67,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   const visibleSessionId = computed(() => (
     focused.value && !chat.loading && route.name === 'chat' && !route.query.subagent
     && routeSessionId.value === chat.current?.id
+    && routeSessionId.value === chat.liveTranscriptSessionId
     && !(controlCenterVisible.value && $q.screen.lt.md)
     && !(drawerOpen.value && $q.screen.lt.md)
       ? chat.current.id : null
@@ -99,14 +100,14 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
       chat.flushDraftWrite()
       return
     }
-    queueChanges([{ resource: 'all' }])
+    scheduleChangeRefresh()
   }
 
   watch(() => chat.draftOwnerUserId, owner => {
     void sessionTabs.setOwner(owner).catch(() => {})
   }, { immediate: true })
   watch(() => sessionTabs.items.map(tab => tab.sessionId).filter(Boolean).join(','), () => {
-    void sessionTabs.refreshSummaries().catch(() => {})
+    void chat.refreshTabSummaries().catch(() => {})
   })
   watch(() => sessionTabs.summaries, (summaries, previous) => {
     const changed = Object.values(summaries).filter(summary => summary !== previous[summary.id])
@@ -116,10 +117,6 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     if (mobile) controlCenter.mobileOpen = false
   }, { flush: 'sync' })
   watch([() => automations.dirty, () => workspace.hasDirtyEditors], () => sessionTabs.applyDeferredControlCenterClose())
-
-  function refreshWorkspaceOnFocus() {
-    if (document.visibilityState === 'visible') queueChanges([{ resource: 'workspace' }])
-  }
 
   function refreshPushState() {
     void notifications.reconcilePush({ suppressErrorToast: true }).catch(() => {})
@@ -142,27 +139,45 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
 
   function queueChanges(changes) {
     if (disposed) return
-    if (document.visibilityState !== 'visible') {
-      changes = changes.some((change) => ['all', 'notifications'].includes(change.resource))
-        ? [{ resource: 'notifications' }] : []
-    }
     if (!changes.length) return
-    for (const change of changes) pendingChanges.set(`${change.resource}:${change.sessionId || change.projectId || ''}`, change)
-    if (retryWaiting) {
+    for (const change of changes) {
+      if (pendingChanges.has('all:') && change.resource !== 'notifications') continue
+      pendingChanges.set(`${change.resource}:${change.sessionId || change.projectId || ''}`, change)
+    }
+    if (pendingChanges.size > 128 || changes.some(change => change.resource === 'all')) {
+      pendingChanges.clear()
+      pendingChanges.set('all:', { resource: 'all' })
+      pendingChanges.set('notifications:', { resource: 'notifications' })
+    }
+    if (retryWaiting && changes.some(change => canRefreshChange(change) || change.resource === 'all')) {
       window.clearTimeout(refreshTimer)
       refreshTimer = null
       retryWaiting = false
     }
-    if (!refreshing && refreshTimer === null) refreshTimer = window.setTimeout(refreshChanges, 50)
+    scheduleChangeRefresh()
+  }
+
+  function canRefreshChange(change) {
+    return document.visibilityState === 'visible' || change.resource === 'notifications'
+  }
+
+  function scheduleChangeRefresh(delay = 50) {
+    if (!refreshing && refreshTimer === null && pendingChanges.size
+      && (document.visibilityState === 'visible' || pendingChanges.has('notifications:'))) {
+      refreshTimer = window.setTimeout(refreshChanges, delay)
+    }
   }
 
   async function refreshChanges() {
     refreshTimer = null
     if (disposed) return
-    const changes = [...pendingChanges.values()].filter((change) => (
-      document.visibilityState === 'visible' || change.resource === 'notifications'
-    ))
-    pendingChanges.clear()
+    const changes = []
+    for (const [key, change] of pendingChanges) {
+      if (!canRefreshChange(change)) continue
+      pendingChanges.delete(key)
+      changes.push(change)
+    }
+    if (!changes.length) return
     const resources = new Set(changes.map((change) => change.resource))
     const all = resources.has('all')
     const sessionsChanged = all || resources.has('sessions') || resources.has('messages')
@@ -176,7 +191,12 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     const projectIds = [...new Set(changes.filter((change) => change.resource === 'project_summaries').map((change) => change.projectId).filter(Boolean))]
     const requests = []
     const reload = (resource, request, sessionId = null) => requests.push({ resource, sessionId, request })
-    if (all || resources.has('message_queue')) reload('message_queue', chat.refreshServerQueue())
+    const queueChanges = changes.filter(change => change.resource === 'message_queue')
+    if (all || queueChanges.some(change => !change.sessionId)) reload('message_queue', chat.refreshServerQueue())
+    else if (queueChanges.length) {
+      const request = chat.refreshServerQueue(queueChanges.map(change => change.sessionId))
+      for (const { sessionId } of queueChanges) reload('message_queue', request, sessionId)
+    }
     if (all || resources.has('automations')) reload('automations', automations.fetchAutomations(config))
     if (refreshAllLists || resources.has('projects')) reload('projects', projects.fetchAll(config))
     else if (projectIds.length) {
@@ -187,7 +207,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     if (all || resources.has('questions')) reload('questions', questions.fetchPending(config))
     if (all || resources.has('notifications')) reload('notifications', notifications.fetchLatest(config))
     if (all || resources.has('workspace')) reload('workspace', sessionTabs.refreshWorkspace(config))
-    if (refreshAllLists || resources.has('projects')) reload('sessions', sessionTabs.refreshSummaries())
+    if (refreshAllLists || resources.has('projects')) reload('sessions', chat.refreshTabSummaries())
     if ((sessionsChanged || resources.has('session_read') || resources.has('home') || resources.has('projects') || resources.has('approvals') || resources.has('questions'))
       && (home.loaded || home.loadRequest)) {
       if (home.displayed) reload('home', home.load(config))
@@ -211,7 +231,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     const results = await Promise.allSettled(requests.map((item) => item.request))
     refreshing = false
     if (disposed) return
-    const hasNewChanges = pendingChanges.size > 0
+    const hasNewChanges = [...pendingChanges.values()].some(canRefreshChange)
     const failure = results.find((result) => result.status === 'rejected')
     if (failure && retryDelay === 1000) notifyError(failure.reason)
     let retry = false
@@ -225,7 +245,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
       }
     })
     retryWaiting = retry && !hasNewChanges
-    if (pendingChanges.size) refreshTimer = window.setTimeout(refreshChanges, retryWaiting ? retryDelay : 50)
+    scheduleChangeRefresh(retryWaiting ? retryDelay : 50)
     retryDelay = retry ? Math.min(retryDelay * 2, 30_000) : 1000
   }
 
@@ -316,7 +336,6 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   onMounted(async () => {
     window.addEventListener('keydown', handleSearchShortcut)
     window.addEventListener('focus', refreshAppPresence)
-    window.addEventListener('focus', refreshWorkspaceOnFocus)
     window.addEventListener('blur', refreshAppPresence)
     window.addEventListener('beforeunload', preventDiscardOnUnload)
     window.addEventListener('pagehide', chat.flushDraftWrite)
@@ -345,7 +364,6 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     applyBranding(appearance)
     window.removeEventListener('keydown', handleSearchShortcut)
     window.removeEventListener('focus', refreshAppPresence)
-    window.removeEventListener('focus', refreshWorkspaceOnFocus)
     window.removeEventListener('blur', refreshAppPresence)
     presenceRequest = presenceRequest.catch(() => {}).then(() => notifications.markPresent({
       clientId: presenceClientId, sessionId: null, active: false

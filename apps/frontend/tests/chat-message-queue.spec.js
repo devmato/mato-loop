@@ -967,6 +967,18 @@ describe('chat message queue', () => {
       .toEqual([['/sessions/session-1/messages/sent/undo'], 'session-1', [], 'Erster Entwurf'])
   })
 
+  it('keeps the visible queue untouched when refreshing another session', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    const entry = { id: 'visible', sessionId: 'session-1', content: 'Entwurf', queuePosition: 1, serverQueued: true, attachments: [] }
+    api.get.mockResolvedValueOnce({ data: { items: [entry] } })
+    await chat.refreshServerQueue()
+    const visibleQueue = chat.activeQueuedMessages
+    api.get.mockResolvedValueOnce({ data: { items: [{ ...entry, id: 'other-entry', sessionId: 'other' }] } })
+    await chat.refreshServerQueue(['other'])
+    expect(chat.activeQueuedMessages).toBe(visibleQueue)
+  })
+
   it('restores server uploads and ignores a queue response started before removal', async () => {
     let resolveStale
     const chat = useChatStore()
@@ -985,6 +997,32 @@ describe('chat message queue', () => {
     await stale
     expect([chat.activeDraft, await chat.activeAttachmentDraft[0].file.text(), chat.activeQueuedMessages])
       .toEqual(['Bearbeiten', 'saved upload', []])
+  })
+
+  it('keeps unrelated targeted queue updates when an undo lands and its full refresh fails', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    const entry = { id: 'admitted', sessionId: 'session-1', serverQueued: true, content: 'Bearbeiten', attachments: [] }
+    const otherEntry = { ...entry, id: 'other-request', sessionId: 'other' }
+    chat.queuedMessages['session-1'] = [entry]
+    chat.current.messages = [{ id: 'sent', role: 'user', content: entry.content }]
+    api.delete.mockRejectedValueOnce({ response: { status: 409, data: { error: {
+      code: 'session.runAlreadyActive', params: { messageId: 'sent' }
+    } } } })
+    api.post.mockResolvedValueOnce({ data: { draft: { content: entry.content } } })
+    let resolveTargeted
+    api.get.mockImplementationOnce(() => new Promise((resolve) => { resolveTargeted = resolve }))
+    const targeted = chat.refreshServerQueue(['session-1', 'other'])
+    api.get.mockImplementation(async (url) => {
+      if (url === '/sessions/message-queue') throw new Error('Full reconciliation unavailable')
+      return { data: { id: 'session-1', messages: [], items: [] } }
+    })
+
+    await chat.restoreQueuedMessage(entry.id)
+    resolveTargeted({ data: { items: [entry, otherEntry] } })
+    await targeted
+
+    expect(chat.queuedMessages).toEqual({ other: [otherEntry] })
   })
 
   it.each(['first', 'continuation'])('undoes a committed %s send after its response is lost', async (mode) => {

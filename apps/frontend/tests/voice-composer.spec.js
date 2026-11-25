@@ -179,7 +179,7 @@ beforeEach(async () => {
     props: ['items'],
     emits: ['virtual-scroll'],
     methods: { reset: mocks.resetMessageSizes, refresh() { this.$emit('virtual-scroll', { from: 0, direction: 'decrease' }) }, scrollTo() {} },
-    render() { return h('div', [this.$slots.before?.(), ...this.items.map((item) => this.$slots.default?.({ item }))]) }
+    render() { return h('div', [this.$slots.before?.(), ...this.items.map((item) => this.$slots.default?.({ item })), this.$slots.after?.()]) }
   })
   app.component('QSkeleton', { render: () => null })
   app.component('QResizeObserver', { render: () => null })
@@ -290,10 +290,13 @@ describe('voice attachment composer', () => {
     expect(root.querySelector('.chat-composer__input')).not.toBeNull()
   })
 
-  it('edits the routed session draft while session details and the outbox are pending', async () => {
+  it.each(['sidebar', 'restored tab'])('edits the routed draft from a %s while details and the outbox are pending', async (source) => {
     chat.setDraft('Other session draft')
     const target = { id: 'session-2', readOnly: false, archived: false, messages: [] }
-    chat.ensureSessionList().items = [target]
+    if (source === 'sidebar') chat.ensureSessionList().items = [target]
+    else useSessionTabsStore().applySummaryUpdates([target.id], {
+      [target.id]: { id: target.id, readOnly: false, archived: false, archivedAt: null }
+    })
     chat.drafts.sessionMessages[target.id] = 'Saved draft'
     const send = vi.spyOn(chat, 'send')
     let finishLoad
@@ -383,6 +386,88 @@ describe('voice attachment composer', () => {
     await vi.waitFor(() => expect(root.querySelector('.chat-transcript:not(.invisible) [data-message-id="next"]')).not.toBeNull())
   })
 
+  it('reveals a warm reading position before REST and preserves it as the preview reconciles', async () => {
+    const target = document.createElement('div')
+    Object.defineProperties(target, { clientHeight: { value: 400 }, scrollHeight: { value: 1400 } })
+    target.getBoundingClientRect = () => ({ top: 0, bottom: 400 })
+    mocks.scrollTarget = target
+    const makeMessage = (id, minute) => ({ id, role: 'user', content: id, createdAt: `2026-01-01T00:0${minute}:00Z` })
+    const saved = makeMessage('saved', 2)
+    const cached = makeMessage('cached', 3)
+    const newest = makeMessage('newest', 6)
+    const bridge = makeMessage('bridge', 5)
+    const earlier = makeMessage('earlier', 1)
+    chat.applySessionResult({ id: 'session-1', messages: [saved, cached], nextMessageCursor: saved.id })
+    useSessionTabsStore().readingPositions['session-1'] = { id: saved.id, messageId: saved.id, offsetTop: -20 }
+    const getBounds = HTMLElement.prototype.getBoundingClientRect
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      if (this.dataset.messageId !== saved.id) return getBounds.call(this)
+      const top = 120 + (root.querySelector('[data-message-id="earlier"]') ? 350 : 0) - target.scrollTop
+      return { top, bottom: top + 180 }
+    })
+    let releaseSession
+    mocks.api.get.mockImplementation(async (url, config) => ({ data: url === '/sessions/session-1'
+      ? await new Promise(resolve => { releaseSession = resolve })
+      : url.endsWith('/messages') && config?.params.cursor === newest.id
+        ? { items: [earlier, saved, bridge], nextCursor: earlier.id }
+        : { items: [] } }))
+    const savedOffset = () => root.querySelector('.chat-transcript:not(.invisible) [data-message-id="saved"]')?.getBoundingClientRect().top
+    try {
+      showPage.value = true
+      await vi.waitFor(() => expect([savedOffset(), chat.loading]).toEqual([-20, true]))
+      releaseSession({ id: 'session-1', messages: [newest], nextMessageCursor: newest.id })
+      await vi.waitFor(() => expect([savedOffset(), chat.current.messages.map(m => m.id), chat.current.nextMessageCursor])
+        .toEqual([-20, ['earlier', 'saved', 'bridge', 'newest'], 'earlier']))
+    } finally {
+      bounds.mockRestore()
+    }
+  })
+
+  it('opens the requested cold section without traversing intervening pages', async () => {
+    const id = '550e8400-e29b-41d4-a716-446655440003'
+    await router.push(`/?session=session-1&message=${id}`)
+    mocks.api.get.mockImplementation(async url => ({ data: url === '/sessions/session-1'
+      ? { id: 'session-1', messages: [{ id: 'latest', role: 'user' }], nextMessageCursor: 'latest' }
+      : url.endsWith('/window') ? { items: [{ id, role: 'user' }], nextCursor: id, hasNewer: true } : { items: [] } }))
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.chat-transcript:not(.invisible) .chat-message--search-target')?.dataset.messageId).toBe(id))
+    expect(mocks.api.get.mock.calls.map(([url]) => url).filter(url => url.startsWith('/sessions/session-1/messages')))
+      .toEqual([`/sessions/session-1/messages/${id}/window`])
+    await click('Zu den neuesten Nachrichten')
+    await vi.waitFor(() => expect(root.querySelector('.chat-transcript:not(.invisible) [data-message-id="latest"]')).not.toBeNull())
+  })
+
+  it.each(['limit', 'server error'])('keeps verified history when the reopen bridge stops at the %s', async (reason) => {
+    const message = minute => ({ id: `m${minute}`, role: 'user', createdAt: `2026-01-01T00:0${minute}:00Z` })
+    chat.cacheSessionWindow({ id: 'session-1', messages: [message(0)] })
+    const page = vi.fn(async ({ params: { cursor } }) => {
+      if (reason === 'server error' && cursor === 'm5') throw { response: { status: 500 } }
+      const older = message(Number(cursor.slice(1)) - 1)
+      return { data: { items: [older], nextCursor: older.id } }
+    })
+    mocks.api.get.mockImplementation((url, config) => url.endsWith('/messages') ? page(config) : Promise.resolve({
+      data: { id: 'session-1', messages: [message(6)], nextMessageCursor: 'm6' }
+    }))
+
+    await chat.loadSession('session-1')
+    expect([page.mock.calls.length, chat.current?.messages.map(item => item.id), chat.current?.nextMessageCursor, chat.loadError])
+      .toEqual(reason === 'limit' ? [2, ['m4', 'm5', 'm6'], 'm4', null] : [2, ['m5', 'm6'], 'm5', null])
+  })
+
+  it('withdraws a warm transcript when revalidation denies access', async () => {
+    chat.applySessionResult({ id: 'session-1', messages: [{ id: 'cached', role: 'user' }] })
+    let denySession
+    mocks.api.get.mockImplementation(url => url === '/sessions/session-1'
+      ? new Promise((_, reject) => { denySession = reject })
+      : Promise.resolve({ data: { items: [] } }))
+    showPage.value = true
+    const cached = () => root.querySelector('.chat-transcript:not(.invisible) [data-message-id="cached"]')
+    await vi.waitFor(() => expect(cached()).not.toBeNull())
+    denySession({ response: { status: 404, data: { error: { code: 'session.notFound' } } } })
+    await vi.waitFor(() => expect(root.textContent).toContain('Session konnte nicht geladen werden'))
+    expect([cached(), chat.sessionDetails]).toEqual([null, []])
+  })
+
   it('opens at the bottom when the saved reading anchor cannot be found', async () => {
     const target = document.createElement('div')
     Object.defineProperties(target, { clientHeight: { value: 400 }, scrollHeight: { value: 1400 } })
@@ -391,7 +476,7 @@ describe('voice attachment composer', () => {
     const deleted = '550e8400-e29b-41d4-a716-446655440001'
     useSessionTabsStore().readingPositions['session-1'] = { id: deleted, messageId: deleted, offsetTop: 0 }
     mocks.api.get.mockImplementation(async url => {
-      if (url.endsWith(deleted)) throw { response: { status: 404, data: { error: { code: 'session.messageNotFound' } } } }
+      if (url.endsWith(`${deleted}/window`)) throw { response: { status: 404, data: { error: { code: 'session.messageNotFound' } } } }
       return { data: url === '/sessions/session-1'
         ? { id: 'session-1', messages: [{ id: 'latest', role: 'user', content: 'Latest' }], nextMessageCursor: 'older' }
         : { items: [] } }
@@ -399,7 +484,7 @@ describe('voice attachment composer', () => {
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.chat-transcript:not(.invisible) [data-message-id="latest"]') && target.scrollTop).toBe(1000))
     expect(mocks.api.get.mock.calls.map(([url]) => url).filter(url => url.startsWith('/sessions/session-1/messages')))
-      .toEqual([`/sessions/session-1/messages/${deleted}`])
+      .toEqual([`/sessions/session-1/messages/${deleted}/window`])
   })
 
   it('continues restoring a saved message after retrying a failed history page', async () => {
@@ -418,7 +503,7 @@ describe('voice attachment composer', () => {
     let fail = true
     mocks.api.get.mockImplementation(async (url, config) => {
       if (url === '/sessions/session-1') return { data: { id: 'session-1', messages: [{ id: 'latest', role: 'user' }], nextMessageCursor: 'first' } }
-      if (url.endsWith(id)) return { data: saved }
+      if (url.endsWith(`${id}/window`)) return { data: { requiresPaging: true } }
       if (url === '/sessions/session-1/messages') {
         if (config.params.cursor === 'first') {
           if (fail) throw { response: { status: 500 } }
@@ -439,9 +524,50 @@ describe('voice attachment composer', () => {
     }
   })
 
-  it('keeps the final touch-scroll position when a transcript update was deferred during the gesture', async () => {
-    mocks.api.get.mockResolvedValue({ data: { items: [] } })
-    await router.push('/?project=draft')
+  it('restores a warm reading offset in a historical window too short to scroll', async () => {
+    const target = document.createElement('div')
+    const contentHeight = () => (chat.loading ? 500 : 160)
+      + (Number.parseFloat(root.querySelector('.chat-page__scroll-content')?.style.paddingBottom) || 0)
+    let scrollTop = 0
+    Object.defineProperties(target, {
+      clientHeight: { value: 400 }, scrollHeight: { get: () => Math.max(400, contentHeight()) },
+      scrollTop: { get: () => scrollTop, set: value => { scrollTop = Math.min(Math.max(0, value), target.scrollHeight - 400) } }
+    })
+    target.getBoundingClientRect = () => ({ top: 0, bottom: 400 })
+    mocks.scrollTarget = target
+    const id = '550e8400-e29b-41d4-a716-446655440004'
+    const saved = { id, role: 'user', createdAt: '2026-01-01T00:00:00Z' }
+    const newest = { id: 'latest', role: 'user', createdAt: '2026-01-02T00:00:00Z' }
+    const getBounds = HTMLElement.prototype.getBoundingClientRect
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      if (this.dataset.messageId === id) return { top: 30 - target.scrollTop, bottom: 120 - target.scrollTop }
+      if (this.classList.contains('chat-page__scroll-content')) return { height: contentHeight() }
+      return getBounds.call(this)
+    })
+    chat.cacheSessionWindow({ id: 'session-1', messages: [saved] })
+    useSessionTabsStore().readingPositions['session-1'] = { id, messageId: id, offsetTop: -20 }
+    let releaseSession
+    mocks.api.get.mockImplementation(async url => ({ data: url === '/sessions/session-1'
+      ? await new Promise(resolve => { releaseSession = resolve })
+      : url.endsWith('/window') ? { items: [saved], hasNewer: true } : { items: [], nextCursor: newest.id } }))
+    try {
+      showPage.value = true
+      await vi.waitFor(() => expect(target.scrollTop).toBe(50))
+      releaseSession({ id: 'session-1', messages: [newest], nextMessageCursor: newest.id })
+      await vi.waitFor(() => expect([chat.current?.messages[0]?.id,
+        root.querySelector(`.chat-transcript:not(.invisible) [data-message-id="${id}"]`)?.getBoundingClientRect().top])
+        .toEqual([newest.id, -20]))
+    } finally {
+      bounds.mockRestore()
+    }
+  })
+
+  it('keeps the final touch-scroll position when reconciliation occurs during the gesture', async () => {
+    const message = { id: 'message', role: 'user', content: 'Text' }
+    chat.cacheSessionWindow({ id: 'session-1', messages: [message] })
+    let releaseSession
+    mocks.api.get.mockImplementation(url => url === '/sessions/session-1'
+      ? new Promise(resolve => { releaseSession = resolve }) : Promise.resolve({ data: { items: [] } }))
     const target = document.createElement('div')
     Object.defineProperties(target, {
       clientHeight: { value: 400 },
@@ -450,21 +576,21 @@ describe('voice attachment composer', () => {
     target.getBoundingClientRect = () => ({ top: 0, bottom: 400 })
     mocks.scrollTarget = target
     showPage.value = true
-    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    await vi.waitFor(() => expect(root.querySelector('.chat-transcript:not(.invisible) [data-message-id="message"]')).not.toBeNull())
     vi.useFakeTimers()
-    chat.current = { id: 'session-1', messages: [{ id: 'message', role: 'user', content: 'Text' }] }
-    await nextTick()
-    await vi.advanceTimersByTimeAsync(32)
-    root.querySelector('[data-message-id="message"]').getBoundingClientRect = () => ({
-      top: 100 - target.scrollTop, bottom: 1100 - target.scrollTop
-    })
+    root.querySelector('[data-message-id="message"]').getBoundingClientRect = () => {
+      const shift = root.querySelector('[data-message-id="reply"]') ? 80 : 0
+      return { top: 100 + shift - target.scrollTop, bottom: 1100 + shift - target.scrollTop }
+    }
     target.dispatchEvent(new Event('scroll'))
     target.dispatchEvent(new Event('touchstart'))
     target.dispatchEvent(new Event('touchmove'))
     target.scrollTop = 600
     target.dispatchEvent(new Event('scroll'))
-    chat.current.messages.push({ id: 'reply', role: 'assistant', content: 'Antwort' })
+    releaseSession({ data: { id: 'session-1', messages: [message, { id: 'reply', role: 'assistant', content: 'Antwort' }] } })
     await nextTick()
+    await vi.advanceTimersByTimeAsync(64)
+    expect(target.scrollTop).toBe(600)
     target.dispatchEvent(new Event('touchend'))
     await vi.advanceTimersByTimeAsync(100)
     target.scrollTop = 300

@@ -135,6 +135,16 @@ class ProjectListResponse(BaseModel):
     items: list[ProjectResponse]
 
 
+class ProjectStatusResponse(BaseModel):
+    id: UUID
+    session_count: int = Field(alias="sessionCount")
+    has_unread_messages: bool = Field(alias="hasUnreadMessages")
+
+
+class ProjectStatusListResponse(BaseModel):
+    items: list[ProjectStatusResponse]
+
+
 class ProjectOrderRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -284,13 +294,37 @@ def _validate_automation_policy(
         )
 
 
-@router.get("", response_model=ProjectListResponse)
+@router.get("", response_model=ProjectListResponse | ProjectStatusListResponse)
 async def list_projects(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
     archived: bool = False,
     project_ids: Annotated[list[UUID] | None, Query(alias="projectIds", max_length=100)] = None,
-) -> ProjectListResponse:
+    view: Literal["full", "status"] = "full",
+) -> ProjectListResponse | ProjectStatusListResponse:
+    filters = (
+        Project.user_id == user.id,
+        Project.delete_at.is_(None),
+        Project.archived_at.is_not(None) if archived else Project.archived_at.is_(None),
+        Project.id.in_(project_ids) if project_ids is not None else True,
+    )
+    order = (Project.updated_at.desc(), Project.id.desc())
+    if view == "status":
+        # The owning project is already known to be live. Count only its own
+        # live root sessions, without walking an unrelated deletion tree.
+        session_count = select(func.count()).select_from(ChatSession).where(
+            ChatSession.project_id == Project.id, ChatSession.user_id == Project.user_id,
+            ChatSession.parent_session_id.is_(None), ChatSession.delete_at.is_(None),
+        ).correlate(Project).scalar_subquery()
+        rows = (await db.execute(
+            select(Project.id, session_count, _unread_project_sessions(live_project=True))
+            .where(*filters).order_by(*order)
+        )).all()
+        return ProjectStatusListResponse(items=[
+            ProjectStatusResponse(id=project_id, sessionCount=count, hasUnreadMessages=unread)
+            for project_id, count, unread in rows
+        ])
+
     rows = (
         await db.execute(
             select(Project, func.count(ChatSession.id), _unread_project_sessions())
@@ -301,14 +335,9 @@ async def list_projects(
                 & ChatSession.parent_session_id.is_(None)
                 & ~deleted_session_clause(),
             )
-            .where(
-                Project.user_id == user.id,
-                Project.delete_at.is_(None),
-                Project.archived_at.is_not(None) if archived else Project.archived_at.is_(None),
-                Project.id.in_(project_ids) if project_ids is not None else True,
-            )
+            .where(*filters)
             .group_by(Project.id)
-            .order_by(Project.updated_at.desc(), Project.id.desc())
+            .order_by(*order)
         )
     ).all()
     if not archived:
@@ -342,11 +371,11 @@ async def reorder_projects(
     await db.commit()
 
 
-def _unread_project_sessions():
+def _unread_project_sessions(*, live_project: bool = False):
     return select(ChatSession.id).join(Message, Message.session_id == ChatSession.id).where(
         ChatSession.project_id == Project.id, ChatSession.user_id == Project.user_id,
         ChatSession.parent_session_id.is_(None), ChatSession.archived_at.is_(None),
-        ~deleted_session_clause(),
+        ChatSession.delete_at.is_(None) if live_project else ~deleted_session_clause(),
         unread_response_clause(),
         or_(ChatSession.last_read_at.is_(None), Message.created_at > ChatSession.last_read_at),
     ).correlate(Project).exists()

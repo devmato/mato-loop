@@ -105,10 +105,15 @@ def entry_payload(entry, session):
     }
 
 
-async def list_entries(db, user_id):
-    rows = (await db.execute(select(QueuedMessage, ChatSession).join(ChatSession).where(
+async def list_entries(db, user_id, *, session_ids=None):
+    statement = select(QueuedMessage, ChatSession).join(ChatSession).where(
         ChatSession.user_id == user_id, ~deleted_session_clause(),
-    ).options(selectinload(QueuedMessage.attachments).defer(QueuedAttachment.data)).order_by(QueuedMessage.position))).all()
+    )
+    if session_ids is not None:
+        statement = statement.where(QueuedMessage.session_id.in_(session_ids))
+    rows = (await db.execute(statement.options(
+        selectinload(QueuedMessage.attachments).defer(QueuedAttachment.data),
+    ).order_by(QueuedMessage.position))).all()
     return [entry_payload(entry, session) for entry, session in rows]
 
 

@@ -1,6 +1,36 @@
 import { equalJson } from 'src/utils/api-snapshot'
+import { randomUuid } from 'src/utils/random-id'
 
 const DRAFT_STORAGE_KEY = 'matoLoopChatDrafts'
+const DRAFT_AUTOSAVE_PREFIX = `${DRAFT_STORAGE_KEY}.autosave:`
+const AUTOSAVE_TOKEN_LENGTH = 36 // UUID followed by a newline and the unescaped draft text.
+
+function draftAutosavePrefix(ownerUserId) {
+  return `${DRAFT_AUTOSAVE_PREFIX}${encodeURIComponent(ownerUserId)}:`
+}
+
+function draftAutosaveKeys(storage, prefix = DRAFT_AUTOSAVE_PREFIX) {
+  const keys = []
+  for (let index = 0; index < storage.length; index++) {
+    const key = storage.key(index)
+    if (key?.startsWith(prefix)) keys.push(key)
+  }
+  return keys
+}
+
+function draftAutosaveToken(value) {
+  return value?.[AUTOSAVE_TOKEN_LENGTH] === '\n' ? value.slice(0, AUTOSAVE_TOKEN_LENGTH) : null
+}
+
+function loadDraftSnapshot(storage, ownerUserId) {
+  try {
+    const stored = JSON.parse(storage.getItem(DRAFT_STORAGE_KEY) || '{}')
+    if (stored?.ownerUserId === ownerUserId) return stored
+  } catch {
+    // A missing or invalid legacy snapshot must not hide individual drafts.
+  }
+  return {}
+}
 
 export function defaultSessionOptions() {
   return {
@@ -217,8 +247,8 @@ export function sessionBeforeUserMessage(session, messageId) {
 export function loadDrafts(ownerUserId) {
   if (!ownerUserId || typeof window === 'undefined') return emptyDrafts()
   try {
-    const stored = JSON.parse(window.localStorage.getItem(DRAFT_STORAGE_KEY) || '{}')
-    if (stored.ownerUserId !== ownerUserId) return emptyDrafts()
+    const storage = window.localStorage
+    const stored = loadDraftSnapshot(storage, ownerUserId)
     const sessionMessages = Object.fromEntries(
       Object.entries(stored.sessionMessages || {}).filter(([, value]) => typeof value === 'string')
     )
@@ -233,6 +263,24 @@ export function loadDrafts(ownerUserId) {
     )
     const newSession = newSessions.standalone || normalizedNewSessionDraft(stored.newSession)
     newSessions.standalone = newSession
+    const absorbed = new Set(Array.isArray(stored.absorbedAutosaves) ? stored.absorbedAutosaves : [])
+    const prefix = draftAutosavePrefix(ownerUserId)
+    for (const key of draftAutosaveKeys(storage, prefix)) {
+      const value = storage.getItem(key)
+      const token = draftAutosaveToken(value)
+      if (!token || absorbed.has(token)) continue
+      const target = key.slice(prefix.length)
+      const id = target.slice(target.indexOf(':') + 1)
+      if (!id || id === '__proto__') continue
+      const message = value.slice(token.length + 1)
+      if (target.startsWith('session:')) {
+        if (message) sessionMessages[id] = message
+        else delete sessionMessages[id]
+      } else if (target.startsWith('new:')) {
+        if (message && !Object.hasOwn(newSessions, id)) newSessions[id] = normalizedNewSessionDraft(null)
+        if (Object.hasOwn(newSessions, id)) newSessions[id].message = message
+      }
+    }
     return {
       newSession,
       newSessions,
@@ -244,10 +292,37 @@ export function loadDrafts(ownerUserId) {
   }
 }
 
-export function persistDrafts(ownerUserId, drafts) {
-  window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ ownerUserId, ...drafts }))
+export function persistDraftMessage(ownerUserId, scope, id, message) {
+  window.localStorage.setItem(`${draftAutosavePrefix(ownerUserId)}${scope}:${id}`, `${randomUuid()}\n${message}`)
+}
+
+export function persistDraftSettings(ownerUserId, drafts) {
+  const storage = window.localStorage
+  const stored = loadDraftSnapshot(storage, ownerUserId)
+  const previous = stored.newSessions || {}
+  // Keep legacy text readable but never copy individual draft text into this settings snapshot.
+  const newSessions = Object.fromEntries(Object.entries(drafts.newSessions).map(([scope, draft]) => [
+    scope,
+    { options: draft.options, message: previous[scope]?.message ?? (scope === 'standalone' ? stored.newSession?.message : undefined) }
+  ]))
+  for (const [scope, draft] of Object.entries(previous)) {
+    if (scope !== '__proto__' && !Object.hasOwn(newSessions, scope) && draft?.message) {
+      newSessions[scope] = { message: draft.message }
+    }
+  }
+  const snapshot = JSON.stringify({
+    ownerUserId,
+    newSession: { options: newSessions.standalone?.options },
+    newSessions,
+    sessionMessages: stored.sessionMessages,
+    sessionAgentProfiles: drafts.sessionAgentProfiles,
+    absorbedAutosaves: stored.absorbedAutosaves
+  })
+  if (snapshot !== storage.getItem(DRAFT_STORAGE_KEY)) storage.setItem(DRAFT_STORAGE_KEY, snapshot)
 }
 
 export function clearPersistedDrafts() {
-  window.localStorage.removeItem(DRAFT_STORAGE_KEY)
+  const storage = window.localStorage
+  storage.removeItem(DRAFT_STORAGE_KEY)
+  for (const key of draftAutosaveKeys(storage)) storage.removeItem(key)
 }

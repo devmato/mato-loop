@@ -17,13 +17,14 @@ vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 import { useChatStore } from '../src/features/chat/store'
 import { useUserPreferencesStore } from '../src/features/settings/user-preferences-store'
 import { buildAttachmentFormData, MAX_ATTACHMENT_DRAFT_BYTES } from '../src/features/chat/attachments'
-import { normalizedNewSessionDraft, sanitizedSessionOptions, sessionCreatePayload } from '../src/features/chat/state'
+import { loadDrafts, normalizedNewSessionDraft, sanitizedSessionOptions, sessionCreatePayload } from '../src/features/chat/state'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { controlCenterIntegrationIds } from 'src/app/control-center/manifest'
 import { useQuestionStore } from '../src/stores/questions'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useWorkspaceStore } from '../src/stores/workspace'
 import { useProjectStore } from '../src/stores/projects'
+import { notifyError } from 'src/utils/notifications'
 import {
   clearChatOutbox,
   loadChatOutbox,
@@ -32,11 +33,20 @@ import {
 
 const originalURL = globalThis.URL
 
-function createStorage() {
+function createStorage(quota = Infinity) {
   const values = new Map()
   return {
+    get length() { return values.size },
+    key: (index) => [...values.keys()][index] ?? null,
     getItem: (key) => values.get(key) ?? null,
-    setItem: (key, value) => values.set(key, value),
+    setItem: (key, value) => {
+      let size = key.length + value.length
+      for (const [existingKey, existingValue] of values) {
+        if (existingKey !== key) size += existingKey.length + existingValue.length
+      }
+      if (size > quota) throw new DOMException('Storage quota exceeded', 'QuotaExceededError')
+      values.set(key, value)
+    },
     removeItem: (key) => values.delete(key)
   }
 }
@@ -111,16 +121,24 @@ describe('chat drafts', () => {
     expect(chat.activeDraft).toBe('Neue Session Entwurf')
   })
 
-  it('writes the latest composer draft once, including on an early flush', async () => {
+  it('writes only the latest edits to dirty drafts, including on an early flush', async () => {
     vi.useFakeTimers()
     const chat = useChatStore()
-    const write = vi.spyOn(window.localStorage, 'setItem')
+    chat.setDraft('Untouched draft', { sessionId: 'untouched' })
+    const storage = window.localStorage
+    const snapshot = storage.getItem('matoLoopChatDrafts')
+    const write = vi.spyOn(storage, 'setItem')
     chat.setDraft('a', { defer: true })
     chat.setDraft('ab', { defer: true })
+    chat.setDraft('Other session', { defer: true, sessionId: 'edited' })
     expect([chat.activeDraft, write.mock.calls.length]).toEqual(['ab', 0])
     chat.flushDraftWrite()
     await vi.advanceTimersByTimeAsync(400)
-    expect(write.mock.calls.map(([, value]) => JSON.parse(value).newSession.message)).toEqual(['ab'])
+    expect(write).toHaveBeenCalledTimes(2)
+    expect(storage.getItem('matoLoopChatDrafts')).toBe(snapshot)
+    expect(loadDrafts('user-1')).toMatchObject({
+      newSession: { message: 'ab' }, sessionMessages: { untouched: 'Untouched draft', edited: 'Other session' }
+    })
   })
 
   it('does not repeatedly persist while typing but still saves during a long burst', async () => {
@@ -131,7 +149,47 @@ describe('chat drafts', () => {
       chat.setDraft('a'.repeat(character), { defer: true })
       await vi.advanceTimersByTimeAsync(200)
     }
-    expect(write.mock.calls.map(([, value]) => JSON.parse(value).newSession.message)).toEqual(['aaaaaaaaaa'])
+    expect([write.mock.calls.length, loadDrafts('user-1').newSession.message]).toEqual([1, 'aaaaaaaaaa'])
+  })
+
+  it.each(['missing', 'foreign'])('restores this owner’s autosaves with a %s snapshot', (snapshot) => {
+    const chat = useChatStore()
+    chat.setDraft('Standalone autosave', { defer: true })
+    chat.setDraft('Session autosave', { defer: true, sessionId: 'edited' })
+    chat.flushDraftWrite()
+    const storage = window.localStorage
+    storage.removeItem('matoLoopChatDrafts')
+    if (snapshot === 'foreign') storage.setItem('matoLoopChatDrafts', JSON.stringify({ ownerUserId: 'user-2' }))
+
+    const restored = loadDrafts('user-1')
+    expect([restored.newSession.message, restored.sessionMessages, loadDrafts('user-2').sessionMessages])
+      .toEqual(['Standalone autosave', { edited: 'Session autosave' }, {}])
+  })
+
+  it('does not overwrite another tab’s autosave when changing settings from a stale tab', async () => {
+    const first = useChatStore()
+    first.setDraft('Old text')
+    const second = useChatStore(createPinia())
+    second.setDraftOwner('user-1')
+    await second.outboxLoadPromise
+    second.cancelQueueDrain()
+    first.setDraft('Newer text', { defer: true })
+    first.flushDraftWrite()
+
+    await second.updateActive({ web_search_policy: 'required' })
+
+    expect(loadDrafts('user-1').newSession).toMatchObject({ message: 'Newer text', options: { webSearchPolicy: 'required' } })
+  })
+
+  it('does not restore an autosaved session draft after explicit deletion', () => {
+    const chat = useChatStore()
+    chat.setDraft('Autosaved draft', { defer: true, sessionId: 'edited' })
+    chat.flushDraftWrite()
+
+    delete chat.drafts.sessionMessages.edited
+    chat.persistDrafts()
+
+    expect(loadDrafts('user-1').sessionMessages).toEqual({})
   })
 
   it('opens the fork even when the original session refreshes during copying', async () => {
@@ -1112,6 +1170,8 @@ describe('chat drafts', () => {
   it('clears persisted text and attachment drafts together', () => {
     const chat = useChatStore()
     chat.setDraft('Vertraulicher Entwurf', { defer: true })
+    chat.flushDraftWrite()
+    chat.setDraft('Weitere Eingabe', { defer: true })
     chat.attachmentDrafts.newSession.push({ id: 'file', file: { size: 1 } })
 
     chat.clearAllDrafts()
@@ -1122,9 +1182,8 @@ describe('chat drafts', () => {
       newSessions: { standalone: [] },
       sessionMessages: {}
     })
-    expect(window.localStorage.getItem('matoLoopChatDrafts')).toBeNull()
     chat.flushDraftWrite()
-    expect(window.localStorage.getItem('matoLoopChatDrafts')).toBeNull()
+    expect(window.localStorage.length).toBe(0)
   })
 
   it('does not restore drafts owned by another user', () => {
@@ -1277,7 +1336,7 @@ describe('chat drafts', () => {
 
   it('shows a recent session immediately and shares its in-flight reconciliation', async () => {
     const chat = useChatStore()
-    chat.applySessionResult({ id: 'session-1', messages: [{ id: 'cached' }], nextMessageCursor: 'older' })
+    chat.applySessionResult({ id: 'session-1', messages: [{ id: 'cached', role: 'user' }], nextMessageCursor: 'cached' })
     await chat.loadSession(null)
     let finishLoad
     api.get.mockReturnValueOnce(new Promise((resolve) => { finishLoad = resolve }))
@@ -1664,7 +1723,7 @@ describe('chat drafts', () => {
             { id: 'failure', role: 'assistant', kind: 'runtime_error', error: { code: 'provider.unavailable' } }
           ]
         }
-      : { items: [], nextCursor: null }
+      : { items: url === '/sessions' ? [{ id: 'session-1' }] : [], nextCursor: null }
     }))
     EventSourceMock.instances.at(-1).emit('run.failed', { runId: 'follow-up' })
     await vi.waitFor(() => expect(chat.current.messages.at(-1)).toMatchObject({
@@ -2571,7 +2630,7 @@ describe('chat drafts', () => {
 
       expect(api.get.mock.calls).toEqual([['/sessions', {
         suppressErrorToast: true,
-        params: new URLSearchParams({ pageSize: '100', includeArchived: 'true', sessionIds: summary.id })
+        params: new URLSearchParams({ pageSize: '100', includeArchived: 'true', view: 'status', sessionIds: summary.id })
       }]])
       expect(chat.sessions.find((session) => session.id === summary.id).title).toBe('Aktuell')
     })
@@ -2583,7 +2642,7 @@ describe('chat drafts', () => {
       chat.sessionCatalog = [summary]
       const list = chat.activeSessionList
       const [items, catalog, version] = [list.items, chat.sessionCatalog, list.version]
-      api.get.mockResolvedValueOnce(sessionPage([structuredClone(summary)]))
+      api.get.mockResolvedValueOnce(sessionPage([{ id: summary.id, title: summary.title }]))
 
       await chat.syncSessionSummaries([summary.id])
 
@@ -3248,6 +3307,9 @@ describe('chat drafts', () => {
   })
 
   it('undoes a user message and restores its text as the session draft', async () => {
+    // The store can replace one existing text entry, but cannot write a second copy of the draft.
+    window.localStorage = createStorage(2048)
+    const restoredText = 'Noch einmal bearbeiten '.repeat(65).trim()
     const canonicalSession = {
       id: 'session-1',
       title: 'Test',
@@ -3260,7 +3322,7 @@ describe('chat drafts', () => {
     api.post.mockResolvedValue({
       data: {
         session: canonicalSession,
-        draft: { content: 'Noch einmal bearbeiten' }
+        draft: { content: restoredText }
       }
     })
     const chat = useChatStore()
@@ -3270,11 +3332,12 @@ describe('chat drafts', () => {
       title: 'Test',
       messages: [
         { id: 'user-1', role: 'user', content: 'Bleibt' },
-        { id: 'user-2', role: 'user', content: 'Noch einmal bearbeiten', attachments: [] }
+        { id: 'user-2', role: 'user', content: restoredText, attachments: [] }
       ]
     }
     chat.selectedSessionId = 'session-1'
-    chat.setDraft('Wird ersetzt')
+    chat.setDraft('x'.repeat(restoredText.length), { defer: true })
+    chat.flushDraftWrite()
 
     await chat.undoUserMessage(chat.current.messages[1])
 
@@ -3284,7 +3347,22 @@ describe('chat drafts', () => {
       { suppressErrorToast: true }
     )
     expect(chat.current.messages).toEqual([{ id: 'user-1', role: 'user', content: 'Bleibt' }])
-    expect(chat.activeDraft).toBe('Noch einmal bearbeiten')
+    expect([chat.activeDraft, loadDrafts('user-1').sessionMessages['session-1']]).toEqual([restoredText, restoredText])
+  })
+
+  it('warns before reload when undo restores text in memory but local storage is full', async () => {
+    window.localStorage = createStorage(0)
+    const chat = useChatStore()
+    const message = { id: 'user-1', role: 'user', content: 'Keep this text', attachments: [] }
+    chat.current = { id: 'session-1', messages: [message] }
+    chat.selectedSessionId = 'session-1'
+    api.post.mockResolvedValue({ data: { draft: { content: message.content } } })
+    api.get.mockResolvedValue({ data: { id: 'session-1', messages: [] } })
+
+    await chat.undoUserMessage(message)
+
+    expect([chat.activeDraft, notifyError.mock.lastCall?.[1]])
+      .toEqual([message.content, expect.stringContaining('konnte nicht lokal gespeichert werden')])
   })
 
   it('undoes the first user message while its run is active', async () => {

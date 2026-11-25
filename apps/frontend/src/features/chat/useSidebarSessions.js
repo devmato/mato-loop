@@ -24,6 +24,7 @@ export function useSidebarSessions({
     ...projects.items.map((project) => ({ label: project.name, value: project.id }))
   ])
   const standaloneSessionList = computed(() => projectSessionList(null))
+  const sidebarLists = new WeakMap()
   const sessionStatuses = computed(() => {
     const counts = new Map()
     for (const request of [...approvals.pending, ...questions.pending]) {
@@ -60,8 +61,20 @@ export function useSidebarSessions({
   }
 
   function projectSessionList(projectId) {
-    const list = chat.sessionList(projectId) || emptySidebarList
-    return { ...list, items: list.items.filter(session => session.id !== chat.personalChatSessionId) }
+    const list = chat.sessionList(projectId)
+    if (!list) return emptySidebarList
+    if (!sidebarLists.has(list)) {
+      const items = computed(() => {
+        const excluded = chat.personalChatSessionId
+        return excluded && list.items.some(session => session.id === excluded)
+          ? list.items.filter(session => session.id !== excluded) : list.items
+      })
+      sidebarLists.set(list, { get items() { return items.value },
+        get loaded() { return list.loaded }, get loading() { return list.loading },
+        get loadFailed() { return list.loadFailed }, get loadingMore() { return list.loadingMore },
+        get nextCursor() { return list.nextCursor }, get loadMoreFailed() { return list.loadMoreFailed } })
+    }
+    return sidebarLists.get(list)
   }
 
   async function loadProjectSessions(projectId, force = false) {

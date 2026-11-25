@@ -4,6 +4,8 @@ Eine Session ist eine gespeicherte Unterhaltung mit eigenen Einstellungen, Datei
 
 Beim Öffnen aus der Sessionliste oder von der Startseite erscheint der jüngste Gesprächsausschnitt. Wenn du zu einem offenen Session-Tab zurückwechselst, setzt du an deiner letzten Leseposition fort. Ist die Nachricht an dieser Position nicht mehr auffindbar, springt der Chat ans Ende. Beim Hochscrollen werden ältere Nachrichten seitenweise nachgeladen; deine Leseposition bleibt dabei erhalten. Das funktioniert auch, wenn der bisherige Ausschnitt ganz auf den Bildschirm passt. Mit der Tastatur kannst du per Tab zum Chatverlauf wechseln und mit **Bild auf** nach oben blättern. Bei einem Fehler beim Nachladen wähle **Erneut versuchen**. Große Tool-Ausgaben und Aufrufargumente werden erst beim Aufklappen ihrer Details vollständig geladen. Der gespeicherte Verlauf und der Modellkontext werden dadurch nicht gekürzt.
 
+Ein Link zu einer weit zurückliegenden Nachricht öffnet direkt den zugehörigen Gesprächsabschnitt, wenn dieser in einen Ladeabschnitt passt. Von dort kannst du weiter zurückblättern oder mit **Zu den neuesten Nachrichten** zum aktuellen Gespräch wechseln.
+
 Chatnachrichten verwenden kompakte Zeilen-, Absatz- und Nachrichtenabstände. Auf dem Desktop mit Maus ist auch die Seitenleiste dichter; auf Touch-Geräten bleiben ihre größeren Bedienflächen erhalten. Die Einstellung **Nachrichtengröße > Klein** reduziert zusätzlich die Schriftgröße und die Nachrichtenabstände.
 
 Tippe auf einem Touch-Gerät ins Eingabefeld, um die Bildschirmtastatur zu öffnen. Beim Öffnen einer Session oder Wischen im Verlauf wird das Feld nicht automatisch fokussiert.

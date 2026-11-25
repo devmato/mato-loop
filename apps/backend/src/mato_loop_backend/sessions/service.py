@@ -14,16 +14,19 @@ from sqlalchemy import (
     JSON,
     String,
     and_,
+    case,
     delete,
     func,
+    literal,
     literal_column,
     or_,
     select,
     tuple_,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased, selectinload
+from sqlalchemy.orm import aliased, load_only, selectinload
 
 from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.run_timing import run_timing_payload
@@ -469,8 +472,14 @@ async def session_detail_payload(
                         if conflict is False:
                             retry_message_id = target.id
     performance_message = aliased(Message)
+    performance = performance_message.provider_data["_matoloop"]["performance"]
     latest_performance_provider_data = (
-        select(performance_message.provider_data)
+        select(func.jsonb_build_object(literal("_matoloop").cast(String), func.jsonb_build_object(
+            literal("performance").cast(String), func.jsonb_build_object(
+                literal("estimatedInputTokens").cast(String), performance["estimatedInputTokens"],
+                literal("inputBudgetTokens").cast(String), performance["inputBudgetTokens"],
+            ),
+        )).cast(JSONB))
         .where(
             performance_message.session_id == item.id,
             performance_message.role == "assistant",
@@ -562,6 +571,43 @@ async def session_detail_payload(
     }
 
 
+def _message_section_start() -> Any:
+    # Keep in sync with the transcript's assistant section boundaries.
+    return or_(
+        Message.role != "assistant",
+        Message.provider_data["_matoloop"]["source"]["type"].as_string() == "automationRun",
+    )
+
+
+def _message_window_anchors(session_id: UUID) -> Any:
+    return select(
+        Message.created_at, Message.id,
+        (func.octet_length(Message.content)
+         + func.least(func.coalesce(func.octet_length(Message.tool_calls.cast(String)), 0), 4_000)
+         + func.coalesce(func.octet_length(Message.public_reasoning.cast(String)), 0)
+         + 2_000).label("payload_bytes"),
+    ).where(Message.session_id == session_id, Message.role != "tool")
+
+
+def _tool_result_carrier() -> Any:
+    carrier = aliased(Message)
+    carrier_run = carrier.provider_data["_matoloop"]["runId"].as_string()
+    result_run = Message.provider_data["_matoloop"]["runId"].as_string()
+    # Reused legacy call IDs belong to the nearest compatible carrier.
+    return select(carrier.id).where(
+        carrier.session_id == Message.session_id,
+        carrier.role == "assistant",
+        or_(
+            carrier.tool_calls.contains(func.jsonb_build_array(
+                func.jsonb_build_object("id", Message.tool_call_id),
+            )),
+            carrier.provider_data["_matoloop"]["scriptToolCalls"].op("?")(Message.tool_call_id),
+        ),
+        tuple_(carrier.created_at, carrier.id) < tuple_(Message.created_at, Message.id),
+        or_(carrier_run.is_(None), result_run.is_(None), carrier_run == result_run),
+    ).order_by(carrier.created_at.desc(), carrier.id.desc()).limit(1).correlate(Message).scalar_subquery()
+
+
 async def session_message_page(
     db: AsyncSession,
     session_id: UUID,
@@ -586,24 +632,12 @@ async def session_message_page(
         upper_bound = (cursor_row.created_at, cursor_row.id)
 
     # Keep each tool-call carrier with its results, including on cursor pages.
-    anchors_statement = select(
-        Message.created_at, Message.id,
-        (func.octet_length(Message.content)
-         + func.least(func.coalesce(func.octet_length(Message.tool_calls.cast(String)), 0), 4_000)
-         + func.coalesce(func.octet_length(Message.public_reasoning.cast(String)), 0)
-         + 2_000).label("payload_bytes"),
-    ).where(
-        Message.session_id == session_id,
-        Message.role != "tool",
-    )
+    anchors_statement = _message_window_anchors(session_id)
     preview = history_preview and upper_bound is None
     if preview:
         # The UI folds consecutive assistants together. A preceding user (or
         # standalone automation reply) starts a new section and gives it a stable key.
-        anchors_statement = anchors_statement.add_columns(or_(
-            Message.role != "assistant",
-            Message.provider_data["_matoloop"]["source"]["type"].as_string() == "automationRun",
-        ).label("section_start"))
+        anchors_statement = anchors_statement.add_columns(_message_section_start().label("section_start"))
     elif upper_bound is not None:
         anchors_statement = anchors_statement.where(
             tuple_(Message.created_at, Message.id) < upper_bound
@@ -640,10 +674,67 @@ async def session_message_page(
         return [], [], None
 
     lower_bound = (page_anchors[-1].created_at, page_anchors[-1].id)
+    messages, context_summaries = await _load_message_window(
+        db, session_id, [anchor.id for anchor in page_anchors], lower_bound, upper_bound,
+    )
+    next_cursor = str(lower_bound[1]) if len(anchors) > len(page_anchors) else None
+    return messages, context_summaries, next_cursor
+
+
+async def session_message_window(
+    db: AsyncSession, session_id: UUID, message_id: UUID,
+) -> tuple[list[Message], list[ContextSummary], str | None, bool] | None:
+    """Load the section containing message_id without hydrating newer history.
+
+    A window whose complete section exceeds the budget falls back to paging.
+    The caller must not append this window to an unrelated latest preview.
+    """
+    target = (await db.execute(select(
+        Message.id, Message.role, case((Message.role == "tool", _tool_result_carrier())).label("carrier_id"),
+    ).where(Message.session_id == session_id, Message.id == message_id))).one_or_none()
+    anchor_id = target and (target.carrier_id if target.role == "tool" else target.id)
+    if anchor_id is None:
+        raise SessionServiceError(404, "session.messageNotFound")
+    order = tuple_(Message.created_at, Message.id)
+    target_order = select(Message.created_at, Message.id).where(
+        Message.session_id == session_id, Message.id == anchor_id,
+    ).scalar_subquery()
+    rows = _message_window_anchors(session_id).add_columns(_message_section_start().label("section_start"))
+    older = (await db.execute(rows.where(order <= target_order).order_by(
+        Message.created_at.desc(), Message.id.desc(),
+    ).limit(_HISTORY_PREVIEW_CARRIERS + 1))).all()
+    if not older:
+        raise SessionServiceError(404, "session.messageNotFound")
+    start = next((index for index, row in enumerate(older) if row.section_start), len(older) - 1)
+    selected = list(older[:start + 1])
+    remaining = _HISTORY_PREVIEW_CARRIERS - len(selected)
+    if remaining < 0:
+        return None
+    newer = (await db.execute(rows.where(order > target_order).order_by(
+        Message.created_at, Message.id,
+    ).limit(remaining + 1))).all()
+    end = next((index for index, row in enumerate(newer) if row.section_start), len(newer))
+    if end > remaining:
+        return None
+    selected.extend(newer[:end])
+    if len(selected) > 1 and sum(row.payload_bytes for row in selected) > _MESSAGE_PAGE_BYTES:
+        return None
+    lower_bound = (older[start].created_at, older[start].id)
+    upper_bound = (newer[end].created_at, newer[end].id) if end < len(newer) else None
+    messages, summaries = await _load_message_window(
+        db, session_id, [row.id for row in selected], lower_bound, upper_bound,
+    )
+    return messages, summaries, str(lower_bound[1]) if start + 1 < len(older) else None, upper_bound is not None
+
+
+async def _load_message_window(
+    db: AsyncSession, session_id: UUID, anchor_ids: list[UUID],
+    lower_bound: tuple[datetime, UUID], upper_bound: tuple[datetime, UUID] | None,
+) -> tuple[list[Message], list[ContextSummary]]:
     messages_statement = select(Message).where(
         Message.session_id == session_id,
         Message.role != "tool",
-        Message.id.in_([anchor.id for anchor in page_anchors]),
+        Message.id.in_(anchor_ids),
     )
     messages = list(
         (
@@ -663,28 +754,11 @@ async def session_message_page(
         if isinstance(call, dict) and isinstance(call.get("id"), str)
     }
     if call_ids:
-        carrier = aliased(Message)
-        carrier_run = carrier.provider_data["_matoloop"]["runId"].as_string()
-        result_run = Message.provider_data["_matoloop"]["runId"].as_string()
-        # Reused legacy call IDs belong to the nearest compatible carrier, not
-        # every page containing that ID. Results may follow a continuation user.
-        result_carrier = select(carrier.id).where(
-            carrier.session_id == Message.session_id,
-            carrier.role == "assistant",
-            or_(
-                carrier.tool_calls.contains(func.jsonb_build_array(
-                    func.jsonb_build_object("id", Message.tool_call_id),
-                )),
-                carrier.provider_data["_matoloop"]["scriptToolCalls"].op("?")(Message.tool_call_id),
-            ),
-            tuple_(carrier.created_at, carrier.id) < tuple_(Message.created_at, Message.id),
-            or_(carrier_run.is_(None), result_run.is_(None), carrier_run == result_run),
-        ).order_by(carrier.created_at.desc(), carrier.id.desc()).limit(1).correlate(Message).scalar_subquery()
         results = (await db.scalars(select(Message).where(
             Message.session_id == session_id,
             Message.role == "tool",
             Message.tool_call_id.in_(call_ids),
-            result_carrier.in_([message.id for message in messages if message.role == "assistant"]),
+            _tool_result_carrier().in_([message.id for message in messages if message.role == "assistant"]),
         ).options(selectinload(Message.attachments)))).all()
         messages.extend(results)
         messages.sort(key=lambda message: (message.created_at, message.id))
@@ -705,8 +779,7 @@ async def session_message_page(
             )
         ).all()
     )
-    next_cursor = str(lower_bound[1]) if len(anchors) > len(page_anchors) else None
-    return messages, context_summaries, next_cursor
+    return messages, context_summaries
 
 
 async def message_attributions(
@@ -1005,6 +1078,26 @@ def _decode_session_cursor(
         raise SessionServiceError(400, "validation.invalid", field="cursor") from exc
 
 
+def _session_status_payload(
+    item: ChatSession, *, archived: bool, last_message_at: datetime | None, has_unread: bool,
+) -> dict[str, Any]:
+    return {
+        "id": str(item.id),
+        "projectId": str(item.project_id) if item.project_id else None,
+        "parentSessionId": None,
+        "readOnly": False,
+        "archived": archived,
+        "archivedAt": item.archived_at.isoformat() if item.archived_at else None,
+        "title": item.title,
+        "titleGenerationStatus": item.title_generation_status,
+        "pinned": bool(item.is_pinned),
+        "createdAt": item.created_at.isoformat() if item.created_at else None,
+        "updatedAt": item.updated_at.isoformat() if item.updated_at else None,
+        "lastMessageAt": last_message_at.isoformat() if last_message_at else None,
+        "hasUnreadMessages": has_unread,
+    }
+
+
 async def list_sessions(
     db: AsyncSession,
     user_id: UUID,
@@ -1021,6 +1114,7 @@ async def list_sessions(
     sort: Literal["pinned", "recent"] = "pinned",
     session_ids: list[UUID] | None = None,
     home_session_ids: list[UUID] | None = None,
+    status_only: bool = False,
 ) -> dict[str, Any]:
     from mato_loop_backend.sessions.archive import active_session_clause
     from mato_loop_backend.sessions.state import deleted_session_clause
@@ -1057,8 +1151,13 @@ async def list_sessions(
         ChatSession.user_id == user_id,
         ChatSession.session_type == "chat",
         ChatSession.parent_session_id.is_(None),
-        ~deleted_session_clause(),
     ]
+    status_archived = or_(ChatSession.archived_at.is_not(None), Project.archived_at.is_not(None))
+    if status_only:
+        # The list only selects roots, so no ancestor traversal is needed.
+        session_filters.extend((ChatSession.delete_at.is_(None), Project.delete_at.is_(None)))
+    else:
+        session_filters.append(~deleted_session_clause())
     if session_ids is not None:
         session_filters.append(ChatSession.id.in_(session_ids))
     else:
@@ -1072,11 +1171,16 @@ async def list_sessions(
     elif standalone:
         session_filters.append(ChatSession.project_id.is_(None))
     if not include_archived:
-        session_filters.append(~active_session_clause() if archived else active_session_clause())
+        if status_only:
+            session_filters.append(status_archived if archived else ~status_archived)
+        else:
+            session_filters.append(~active_session_clause() if archived else active_session_clause())
         if archived and project_id is None:
-            session_filters.append(~select(Project.id).where(
-                Project.id == ChatSession.project_id, Project.archived_at.is_not(None),
-            ).correlate(ChatSession).exists())
+            session_filters.append(
+                Project.archived_at.is_(None) if status_only else ~select(Project.id).where(
+                    Project.id == ChatSession.project_id, Project.archived_at.is_not(None),
+                ).correlate(ChatSession).exists()
+            )
     # Seek the newest matching row in the session/creation index instead of
     # aggregating every message before the session page can be selected.
     def latest_message_at(condition):
@@ -1152,6 +1256,16 @@ async def list_sessions(
         )
         .where(*session_filters)
     )
+    if status_only:
+        statement = (
+            statement.outerjoin(Project, Project.id == ChatSession.project_id)
+            .options(load_only(
+                ChatSession.id, ChatSession.project_id, ChatSession.archived_at, ChatSession.title,
+                ChatSession.title_generation_status, ChatSession.is_pinned, ChatSession.created_at,
+                ChatSession.updated_at, ChatSession.last_read_at, raiseload=True,
+            ))
+            .add_columns(status_archived.label("archived"))
+        )
     if home_session_ids is not None:
         pending_approval = select(ApprovalRequest.id).where(
             ApprovalRequest.session_id == ChatSession.id,
@@ -1211,32 +1325,32 @@ async def list_sessions(
     page = rows if home_session_ids is not None else rows[:page_size]
     if not page:
         return {"items": [], "nextCursor": None}
-    session_serializer = await session_serializer_factory(db, [row[0] for row in page])
-    items = [
-        {
-            **(
-                await session_serializer(
-                    db,
-                    item,
-                    last_message_at=last_message_at,
-                    has_unread_messages=has_unread_messages(
-                        item, last_assistant_message_at
-                    ),
-                )
-            ),
+    session_serializer = None if status_only else await session_serializer_factory(db, [row[0] for row in page])
+    items = []
+    for row in page:
+        item, last_message_at, last_assistant_message_at, active_status, activity_at, last_user_message_at = row[:6]
+        has_unread = has_unread_messages(item, last_assistant_message_at)
+        if session_serializer is None:
+            payload = _session_status_payload(
+                item, archived=row[6], last_message_at=last_message_at, has_unread=has_unread,
+            )
+        else:
+            payload = await session_serializer(
+                db, item, last_message_at=last_message_at, has_unread_messages=has_unread,
+            )
+        items.append({
+            **payload,
             "activeRunStatus": active_status,
-            **({"activityAt": _activity_at.isoformat()} if sort == "recent" else {}),
+            **({"activityAt": activity_at.isoformat()} if sort == "recent" else {}),
             "lastUserMessageAt": last_user_message_at.isoformat() if last_user_message_at else None,
-        }
-        for item, last_message_at, last_assistant_message_at, active_status, _activity_at, last_user_message_at in page
-    ]
+        })
     next_cursor = None
     if home_session_ids is None and len(rows) > page_size:
-        item, _last_message_at, _last_assistant_message_at, _active_status, item_activity_at, _last_user_message_at = page[-1]
+        item, _, _, _, activity_at, _ = page[-1][:6]
         next_cursor = _encode_session_cursor(
             user_id, scope,
             bool(item.is_pinned) if sort == "pinned" else False,
-            item_activity_at, item.id,
+            activity_at, item.id,
         )
     return {"items": items, "nextCursor": next_cursor}
 

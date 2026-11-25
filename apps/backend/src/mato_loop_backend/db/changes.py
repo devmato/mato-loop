@@ -112,18 +112,20 @@ def _collect_changes(session: Session, _context, _instances) -> None:
         else:
             related[(resource, owner)].add(getattr(item, key))
     for (resource, owner), ids in related.items():
+        # Run status and queue entries do not affect project counts or unread state.
+        affects_project = owner is ChatSession and resource not in {"sessions", "message_queue"}
         for item in session.new:
             if isinstance(item, owner) and item.id in ids:
                 record_change(session, item.user_id, resource, item.id if owner is ChatSession else None)
-                if owner is ChatSession:
+                if affects_project:
                     _record_project(session, item.user_id, item.project_id)
                 ids.discard(item.id)
         if not ids:
             continue
-        statement = select(owner.id, owner.user_id, owner.project_id if owner is ChatSession else literal(None))
+        statement = select(owner.id, owner.user_id, owner.project_id if affects_project else literal(None))
         for owner_id, user_id, project_id in session.execute(statement.where(owner.id.in_(ids))):
             record_change(session, user_id, resource, owner_id if owner is ChatSession else None)
-            if owner is ChatSession:
+            if affects_project:
                 _record_project(session, user_id, project_id)
 
 
@@ -180,7 +182,7 @@ def _collect_bulk_changes(state: ORMExecuteState) -> None:
                 unknown_destination = True
         for user_id, session_id, project_id in state.session.execute(affected.distinct(), params):
             record_change(state.session, user_id, resource, session_id)
-            if owner is ChatSession and resource != "all":
+            if owner is ChatSession and (model is ChatSession or model is Message) and resource != "all":
                 _record_project(state.session, user_id, project_id)
                 if unknown_destination:
                     record_change(state.session, user_id, "projects")

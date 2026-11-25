@@ -21,8 +21,6 @@ import { useChatStore } from '../src/features/chat/store'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useWorkspaceStore } from '../src/stores/workspace'
 import { useExecutionAgentStore } from '../src/stores/execution-agents'
-import { useMailStore } from '../src/stores/mail'
-import { mailControlCenterAvailable } from '../src/app/control-center/manifest'
 
 let app, root, chat
 const initialRevision = 'a'.repeat(64)
@@ -107,9 +105,9 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-it('loads mail availability when opening chat', async () => {
+it('does not load mail accounts when opening a chat without the Control Center', async () => {
   await mountPage()
-  expect(mailControlCenterAvailable(useMailStore())).toBe(true)
+  expect(api.get.mock.calls.map(([url]) => url)).not.toContain('/mail/accounts')
 })
 
 it('adds Git when repository detection finishes after a new session has attached', async () => {

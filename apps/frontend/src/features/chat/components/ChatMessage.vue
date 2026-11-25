@@ -38,7 +38,7 @@
       <MessageContent
         v-if="message.preparedReply"
         :content="message.preparedReply.markdown"
-        :prepared-replies="message.preparedReply.options"
+        :prepared-replies="historyOnly || chat.loading ? [] : message.preparedReply.options"
         class="q-mb-sm"
         @prepared-reply="emit('prepared-reply', $event)"
       />
@@ -199,6 +199,7 @@ const props = defineProps({
   trustedImageOrigins: { type: Array, default: () => [] },
   workHistoryExpanded: Boolean,
   highlighted: Boolean,
+  historyOnly: Boolean,
   canQuote: Boolean,
   git: { type: Object, default: null },
   messageActionId: { type: String, default: null },
@@ -250,8 +251,8 @@ const metadata = computed(() => {
       : message.deliveryStatus === 'failed' ? 'error_outline' : 'schedule',
     deliveryLabel: message.deliveryStatus === 'sending' ? 'Wird gesendet …'
       : message.deliveryStatus === 'failed' ? (message.deliveryUnconfirmed ? 'Versand unbestätigt' : 'Nicht gesendet') : 'Geplant',
-    canUndo: message.role === 'user' && !chat.current?.archived && !String(message.id).startsWith('local-'),
-    canRetry: !chat.current?.archived && retryAvailableForMessage(message, chat.current?.messages, chat.running),
+    canUndo: !props.historyOnly && message.role === 'user' && !chat.current?.archived && !String(message.id).startsWith('local-'),
+    canRetry: !props.historyOnly && !chat.current?.archived && retryAvailableForMessage(message, chat.current?.messages, chat.running),
     canRecover: (message.deliveryStatus === 'failed' && message.outboxId === firstQueuedId)
       || Boolean(message.queueRecoveryId && message.queueRecoveryId === firstQueuedId),
     actionLoading: props.messageActionId === message.id,

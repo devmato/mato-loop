@@ -7,6 +7,7 @@ import { useUserPreferencesStore } from 'src/features/settings/user-preferences-
 import { equalJson } from 'src/utils/api-snapshot'
 import { useAutomationStore } from 'stores/automations'
 import { useWorkspaceStore } from 'stores/workspace'
+import { mergeSessionSummary } from './state'
 
 export const sessionTabKey = (sessionId, projectId = null) => sessionId || `draft:${projectId || 'standalone'}`
 export const sessionTabTarget = (tab) => ({
@@ -88,34 +89,42 @@ export const useSessionTabsStore = defineStore('session-tabs', {
       for (const id of ids) {
         // An equal targeted response must still supersede an older in-flight refresh.
         this.summaryVersions[id] = (this.summaryVersions[id] || 0) + 1
-        if (equalJson(next[id], summaries[id])) continue
+        const previous = next[id]
+        const summary = previous && summaries[id] ? mergeSessionSummary(previous, summaries[id]) : summaries[id]
+        if (previous === summary) continue
         if (next === this.summaries) next = { ...next }
-        if (summaries[id]) next[id] = summaries[id]
+        if (summary) next[id] = summary
         else delete next[id]
       }
       if (next !== this.summaries) this.summaries = next
     },
-    refreshSummaries() {
+    refreshSummaries(onStatus) {
       return queueRefresh(this, {}, async revision => {
         const ids = this.items.map(tab => tab.sessionId).filter(Boolean)
         if (!this.owner || !ids.length) { this.summaries = {}; return }
-        const params = new URLSearchParams({ pageSize: '100', includeArchived: 'true' })
+        const params = new URLSearchParams({ pageSize: '100', includeArchived: 'true', view: 'status' })
         const versions = { ...this.summaryVersions }
+        const unchanged = id => (versions[id] || 0) === (this.summaryVersions[id] || 0)
         ids.forEach(id => params.append('sessionIds', id))
-        const { data } = await api.get('/sessions', { params })
+        let data
+        try {
+          ({ data } = await api.get('/sessions', { params }))
+        } catch (error) {
+          if (revision === this.summaryRevision) onStatus?.(ids.filter(unchanged), error)
+          throw error
+        }
         if (revision === this.summaryRevision) {
-          const next = Object.fromEntries((data.items || []).map(item => [item.id, item]))
+          const next = Object.fromEntries((data.items || []).map(item => {
+            const previous = this.summaries[item.id]
+            return [item.id, previous ? mergeSessionSummary(previous, item) : item]
+          }))
           for (const id of ids) {
-            if ((versions[id] || 0) === (this.summaryVersions[id] || 0)) continue
+            if (unchanged(id)) continue
             if (this.summaries[id]) next[id] = this.summaries[id]
             else delete next[id]
           }
-          if (!equalJson(this.summaries, next)) {
-            for (const id of Object.keys(next)) {
-              if (equalJson(this.summaries[id], next[id])) next[id] = this.summaries[id]
-            }
-            this.summaries = next
-          }
+          if (!equalJson(this.summaries, next)) this.summaries = next
+          onStatus?.(ids.filter(id => unchanged(id) && !next[id]))
         }
       }, 'summaryRevision')
     },

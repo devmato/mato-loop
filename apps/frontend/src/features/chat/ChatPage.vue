@@ -34,7 +34,7 @@
       id="chat-scroll-area"
       ref="scrollArea"
       class="chat-page__content col"
-      :aria-busy="chat.loading ? 'true' : 'false'"
+      :aria-busy="!positionLoadFailed && (transcriptPreparing || chat.loading && !chat.current) ? 'true' : 'false'"
       @keydown="handleScrollKey"
       @mousedown="handleScrollAreaMouseDown"
     >
@@ -89,7 +89,7 @@
         </div>
 
         <q-virtual-scroll
-          v-else-if="chat.current || chat.activeQueuedMessages.length"
+          v-else-if="routeSessionId ? chat.current?.id === routeSessionId : chat.current || chat.activeQueuedMessages.length"
           ref="virtualScroll"
           class="chat-transcript q-pa-md relative-position"
           :class="{ invisible: transcriptPreparing }"
@@ -135,6 +135,7 @@
                 :show-active-subagents="message.id === latestAssistantMessageId"
                 :run-presentation="message.currentTurn ? runPresentation : null"
                 :trusted-image-origins="trustedImageOrigins"
+                :history-only="Boolean(historyWindow)"
                 :work-history-expanded="expandedWorkHistoryIds.has(message.workHistory?.id || message.id)"
                 :highlighted="highlightedMessageId === message.id"
                 :can-quote="canQuote"
@@ -164,8 +165,15 @@
                 <q-btn flat no-caps color="primary" label="Subagenten laden" @click="subagents.loadChildren()" />
               </template>
             </q-banner>
-            <SubagentRows :children="unmatchedChildren" />
+            <q-btn
+              v-if="historyWindow"
+              flat no-caps color="primary" icon="keyboard_arrow_down"
+              :label="historyWindow.hasNewer ? 'Zu den neuesten Nachrichten' : 'Zum aktuellen Chat'"
+              @click="enableFollowMode"
+            />
+            <SubagentRows v-if="!historyWindow" :children="unmatchedChildren" />
             <RequestDock
+              v-if="!historyWindow"
               :key="chat.current?.id"
               :approvals="sessionApprovals"
               :questions="sessionQuestions"
@@ -332,7 +340,7 @@
 
 <script setup>
 import AppSelect from 'src/shared/ui/AppSelect.vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import RequestDock from 'src/features/chat/components/RequestDock.vue'
@@ -366,7 +374,6 @@ import {
 } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
-import { useMailStore } from 'stores/mail'
 import { useProviderStore } from 'stores/providers'
 import { useProjectStore } from 'stores/projects'
 import { useSessionTemplateStore } from 'src/features/settings/session-templates-store'
@@ -401,7 +408,6 @@ const questions = useQuestionStore()
 const executionAgents = useExecutionAgentStore()
 const instanceLimits = useInstanceLimitsStore()
 const integrations = useIntegrationStore()
-const mail = useMailStore()
 const providers = useProviderStore()
 const projects = useProjectStore()
 const templates = useSessionTemplateStore()
@@ -449,6 +455,7 @@ async function openGitDiff(path) {
 const scrollArea = ref(null)
 const scrollContent = ref(null)
 const virtualScroll = ref(null)
+const historyWindow = shallowRef(null)
 const composer = ref(null)
 const savingTodos = ref(false)
 async function setTodosCollapsed(collapsed) {
@@ -595,9 +602,11 @@ const unmatchedChildren = computed(() => {
   const matched = new Set([...childrenByMessage.value.values()].flat().map((child) => child.id))
   return subagents.children.filter((child) => isActiveSubagent(child) && !matched.has(child.id))
 })
-const displayMessages = computed(() => withQueuedTranscriptMessages(
-  transcript.value.messages, chat.activeQueuedMessages, chat.queueSendingEntryId, chat.activePendingMessage?.id
-).map(message => {
+const displayMessages = computed(() => (historyWindow.value
+  ? buildChatTranscript(historyWindow.value.items, [], { contextSummaries: historyWindow.value.contextSummaries }).messages
+  : withQueuedTranscriptMessages(
+    transcript.value.messages, chat.activeQueuedMessages, chat.queueSendingEntryId, chat.activePendingMessage?.id
+  )).map(message => {
   if (message.role !== 'user') return message
   const blocks = parseQuotedMessage(message.commandPrompt || message.content || '')
   return blocks.some(block => block.type === 'quote') ? { ...message, quotedContent: blocks } : message
@@ -622,8 +631,11 @@ const {
   handleVirtualScroll, handleScrollKey, handleScrollAreaMouseDown, scrollToTop
 } = useChatViewport({
   chat, route, scrollArea, scrollContent, virtualScroll,
-  displayMessages, setWorkHistoryExpanded
+  displayMessages, historyWindow, setWorkHistoryExpanded
 })
+watch(() => !transcriptPreparing.value && !historyWindow.value && followingBottom.value
+  && !chat.loadError && chat.current?.id === routeSessionId.value ? routeSessionId.value : null,
+id => { chat.liveTranscriptSessionId = id }, { immediate: true, flush: 'post' })
 const sessionLoadErrorMessage = computed(() => (
   apiErrorMessage(chat.loadError, 'Die Session konnte nicht geladen werden.')
 ))
@@ -812,11 +824,10 @@ async function changeDraftProject(projectId) {
 }
 
 async function loadBackgroundData() {
-  const [providerResult, , integrationResult, , , , defaultsResult] = await Promise.allSettled([
+  const [providerResult, , integrationResult, , , defaultsResult] = await Promise.allSettled([
     providers.fetchEffective(),
     templates.load(),
     integrations.fetchEffectiveSearch(),
-    mail.fetchAccounts(),
     approvals.ensurePending(),
     questions.ensurePending(),
     chat.fetchDefaults(),
@@ -919,6 +930,7 @@ onMounted(() => {
   executionAgents.startPolling()
 })
 onBeforeUnmount(() => {
+  chat.liveTranscriptSessionId = null
   draftProjectCreationContext = null
   window.clearInterval(messageTimestampTimer)
   executionAgents.stopPolling()

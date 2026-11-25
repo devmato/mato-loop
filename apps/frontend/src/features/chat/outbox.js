@@ -9,6 +9,23 @@ import { compareChatOutboxEntries, deleteChatOutboxEntry, deleteChatOutboxEntrie
 import { notifyError } from 'src/utils/notifications'
 import { randomUuid } from 'src/utils/random-id'
 import { OUTBOX_RETRY_MS } from 'src/features/chat/model'
+import { equalJson, reuseList } from 'src/utils/api-snapshot'
+
+const queueRefreshScopes = new WeakMap()
+
+function queueRefreshScope(store) {
+  const state = store.$state
+  let scope = queueRefreshScopes.get(state)
+  if (!scope || scope.loadVersion !== store.outboxLoadVersion) {
+    scope = { loadVersion: store.outboxLoadVersion, sessions: new Map() }
+    queueRefreshScopes.set(state, scope)
+  }
+  return scope
+}
+
+function invalidateQueueSession(store, sessionId) {
+  queueRefreshScope(store).sessions.set(sessionId, { fullVersion: store.serverQueueVersion })
+}
 
 export const outboxActions = {
     async send(content, { preserveDraft = false, interrupt = false, activeFile } = {}) {
@@ -155,7 +172,7 @@ export const outboxActions = {
             suppressErrorToast: true,
             ...(entry.deliveryUnconfirmed && !entry.serverQueued ? { params: { require_present: true } } : {})
           })
-          if (stillOwned()) this.serverQueueVersion += 1
+          if (stillOwned()) invalidateQueueSession(this, entry.sessionId)
         }
         if (!stillOwned()) return null
         await deleteChatOutboxEntries(ids)
@@ -218,7 +235,7 @@ export const outboxActions = {
           const history = session.messages.includes(message) ? session : { ...session, messages: [message] }
           const result = await this.undoUserMessage(message, { session: history, files, outboxId: id }).catch(() => null)
           if (result && stillOwned()) {
-            this.serverQueueVersion += 1
+            invalidateQueueSession(this, sentSessionId)
             await deleteChatOutboxEntry(id)
             if (!stillOwned()) return null
             const entryKey = queueKeyForEntry(entry)
@@ -302,6 +319,7 @@ export const outboxActions = {
       if (entry?.paused) {
         if (entry.serverQueued) {
           await api.patch(`/sessions/${entry.sessionId}/queue/${entry.id}`, { paused: false })
+          invalidateQueueSession(this, entry.sessionId)
           await this.refreshServerQueue()
           return
         }
@@ -355,35 +373,79 @@ export const outboxActions = {
       if (!entry) return null
       return this.submitOutboxEntry(entry)
     },
-    async refreshServerQueue() {
-      const owner = this.draftOwnerUserId, version = this.outboxLoadVersion, requestVersion = ++this.serverQueueVersion
+    async refreshServerQueue(sessionIds = null) {
+      const owner = this.draftOwnerUserId, version = this.outboxLoadVersion
       if (!owner) return
-      const { data } = await api.get('/sessions/message-queue', { suppressErrorToast: true })
-      if (owner !== this.draftOwnerUserId || version !== this.outboxLoadVersion || requestVersion !== this.serverQueueVersion) return
-      const previous = new Map(Object.values(this.queuedMessages).flat().map((entry) => [entry.id, entry]))
-      const serverIds = new Set((data.items || []).map((entry) => entry.id))
-      if ([...previous.values()].some((entry) => entry.serverQueued && entry.sessionId === this.current?.id && !serverIds.has(entry.id))) {
-        await this.refreshSession(this.current.id)
+      const requested = sessionIds && [...new Set(sessionIds)]
+      if (requested?.length === 0) return
+      if (!requested) this.serverQueueVersion += 1
+      const fullVersion = this.serverQueueVersion
+      const scope = queueRefreshScope(this)
+      const token = { fullVersion }
+      requested?.forEach(id => scope.sessions.set(id, token))
+      const isCurrent = () => owner === this.draftOwnerUserId && version === this.outboxLoadVersion
+        && (requested || fullVersion === this.serverQueueVersion)
+      // A full snapshot leaves sessions claimed by a later fetch or mutation alone.
+      const applies = key => requested ? scope.sessions.get(key) === token
+        : (scope.sessions.get(key)?.fullVersion ?? -1) < fullVersion
+      const incoming = new Map()
+      for (let offset = 0; offset < (requested?.length || 1); offset += 100) {
+        const params = new URLSearchParams()
+        requested?.slice(offset, offset + 100).forEach(id => params.append('sessionIds', id))
+        const { data } = await api.get('/sessions/message-queue', {
+          suppressErrorToast: true, ...(requested ? { params } : {})
+        })
+        if (!isCurrent()) return
+        for (const entry of data.items || []) {
+          if (!incoming.has(entry.sessionId)) incoming.set(entry.sessionId, [])
+          incoming.get(entry.sessionId).push(entry)
+        }
       }
-      if (owner !== this.draftOwnerUserId || version !== this.outboxLoadVersion || requestVersion !== this.serverQueueVersion) return
-      const accepted = [...previous.values()].filter((entry) => entry.serverQueued || serverIds.has(entry.id))
-      if (accepted.length) await deleteChatOutboxEntries(accepted.map((entry) => entry.id))
-      if (owner !== this.draftOwnerUserId || version !== this.outboxLoadVersion || requestVersion !== this.serverQueueVersion) return
-      for (const [key, queue] of Object.entries(this.queuedMessages)) {
-        this.queuedMessages[key] = queue.filter((entry) => !entry.serverQueued && !serverIds.has(entry.id))
-        if (!this.queuedMessages[key].length) delete this.queuedMessages[key]
+      const currentId = this.current?.id
+      if (currentId && applies(currentId) && this.queuedMessages[currentId]?.some(entry => (
+        entry.serverQueued && !incoming.get(currentId)?.some(item => item.id === entry.id)
+      ))) {
+        await this.refreshSession(currentId)
       }
-      for (const entry of data.items || []) {
-        const old = previous.get(entry.id)
-        entry.attachments = entry.attachments.map((attachment, index) => ({ ...attachment,
-          ...(old?.attachments[index]?.file ? { file: old.attachments[index].file } : {}) }))
-        if (!this.queuedMessages[entry.sessionId]) this.queuedMessages[entry.sessionId] = []
-        this.queuedMessages[entry.sessionId].push(entry)
-        this.queuedMessages[entry.sessionId].sort(compareChatOutboxEntries)
-        if (entry.errorCode && entry.errorCode !== old?.errorCode) notifyError({ code: entry.errorCode })
+      if (!isCurrent()) return
+      const keys = () => requested || new Set([...Object.keys(this.queuedMessages), ...incoming.keys()])
+      const accepted = []
+      for (const key of keys()) {
+        if (!applies(key)) continue
+        const ids = new Set((incoming.get(key) || []).map(entry => entry.id))
+        for (const entry of this.queuedMessages[key] || []) {
+          if (!entry.serverQueued && ids.has(entry.id)) accepted.push(entry.id)
+        }
       }
-      this.queuedSendPausedSessions = Object.fromEntries(Object.entries(this.queuedMessages)
-        .filter(([, queue]) => queue[0]?.paused).map(([key]) => [key, true]))
+      if (accepted.length) await deleteChatOutboxEntries(accepted)
+      if (!isCurrent()) return
+      if (!requested) {
+        // Only a successfully reconciled full snapshot supersedes older targeted reads.
+        for (const [key, claim] of scope.sessions) {
+          if (claim.fullVersion < fullVersion) scope.sessions.delete(key)
+        }
+      }
+      for (const key of keys()) {
+        if (!applies(key)) continue
+        const previous = this.queuedMessages[key] || []
+        const byId = new Map(previous.map(entry => [entry.id, entry]))
+        const server = (incoming.get(key) || []).map(entry => {
+          const old = byId.get(entry.id)
+          const next = { ...entry, attachments: entry.attachments.map((attachment, index) => ({ ...attachment,
+            ...(old?.attachments[index]?.file ? { file: old.attachments[index].file } : {}) })) }
+          if (entry.errorCode && entry.errorCode !== old?.errorCode) notifyError({ code: entry.errorCode })
+          return equalJson(old, next) ? old : next
+        })
+        const serverIds = new Set(server.map(entry => entry.id))
+        const next = reuseList(previous, [...previous.filter(entry => !entry.serverQueued && !serverIds.has(entry.id)),
+          ...server].sort(compareChatOutboxEntries))
+        if (next !== previous) {
+          if (next.length) this.queuedMessages[key] = next
+          else delete this.queuedMessages[key]
+        }
+        if (next[0]?.paused) this.queuedSendPausedSessions[key] = true
+        else delete this.queuedSendPausedSessions[key]
+      }
     },
     async submitOutboxEntry(entry) {
       this.queueSendingEntryId = entry.id
@@ -447,9 +509,9 @@ export const outboxActions = {
               )
             : api.post(`/sessions/${entry.sessionId}/messages`, payload, config))
           entry.serverQueued = true
-          this.serverQueueVersion += 1
+          invalidateQueueSession(this, entry.sessionId)
           await deleteChatOutboxEntry(entry.id)
-          await this.refreshServerQueue()
+          await this.refreshServerQueue([entry.sessionId])
           return { created: false, sessionId: entry.sessionId }
         }
         const key = queueKeyForEntry(entry)

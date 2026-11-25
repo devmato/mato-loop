@@ -1,14 +1,15 @@
-import { markRaw, toRaw } from 'vue'
+import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { attachmentKind, attachmentPreviewUrl, MAX_ATTACHMENT_DRAFT_BYTES, normalizedMimeType, releaseAttachmentDrafts } from 'src/features/chat/attachments'
-import { clearPersistedDrafts, defaultSessionOptions, emptyActivity, emptyDrafts, groupedOutbox, loadDrafts, newSessionQueueKey, normalizedNewSessionDraft, persistDrafts, sanitizedSessionOptions, sessionScopeKey } from 'src/features/chat/state'
+import { clearPersistedDrafts, defaultSessionOptions, emptyActivity, emptyDrafts, groupedOutbox, loadDrafts, newSessionQueueKey, normalizedNewSessionDraft, persistDraftMessage, persistDraftSettings, sanitizedSessionOptions, sessionScopeKey } from 'src/features/chat/state'
 import { mergeAgentActivity } from 'src/features/chat/agent-activity'
 import { clearChatOutbox, loadChatOutbox, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
 import { gitFinishEntry } from 'src/features/coding/git-actions-store'
 import { useSessionTabsStore } from './session-tabs-store'
 
 const pendingDraftWrites = new WeakMap()
+const savedDraftText = new WeakMap()
 const DRAFT_WRITE_IDLE_MS = 400
 const DRAFT_WRITE_MAX_MS = 2000
 
@@ -17,6 +18,26 @@ function cancelDraftWrite(state) {
   if (!pending) return
   clearTimeout(pending.timer)
   pendingDraftWrites.delete(state)
+}
+
+function draftTextByScope(drafts) {
+  return {
+    session: new Map(Object.entries(drafts.sessionMessages)),
+    new: new Map(Object.entries(drafts.newSessions).map(([scope, draft]) => [scope, draft.message]))
+  }
+}
+
+function writeDraftText(chat, scope, id, message) {
+  if (!chat.draftOwnerUserId || typeof window === 'undefined') return false
+  try {
+    persistDraftMessage(chat.draftOwnerUserId, scope, id, message ?? '')
+    const previous = savedDraftText.get(chat.$state)?.[scope]
+    if (message === undefined) previous?.delete(id)
+    else previous?.set(id, message)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export const draftActions = {
@@ -30,11 +51,27 @@ export const draftActions = {
       this.activity = emptyActivity(this.activity.revision + 1)
     },
     persistDrafts() {
+      const pending = pendingDraftWrites.get(this.$state)
       cancelDraftWrite(this.$state)
       if (!this.draftOwnerUserId || typeof window === 'undefined') return
+      this.drafts.newSessions[sessionScopeKey(this.sessionsProjectId)] = this.drafts.newSession
+      const current = draftTextByScope(this.drafts)
+      const saved = savedDraftText.get(this.$state)
+      // Some actions mutate drafts directly before calling this method. Diff against the text
+      // this tab loaded or wrote, not the current disk contents from another tab.
+      for (const scope of ['session', 'new']) {
+        const previous = saved?.[scope]
+        const dirty = pending?.[scope]
+        const ids = new Set([...(previous?.keys() || []), ...current[scope].keys(), ...(dirty || [])])
+        for (const id of ids) {
+          const message = current[scope].get(id)
+          if (dirty?.has(id) || (previous?.get(id) ?? '') !== (message ?? '')) {
+            writeDraftText(this, scope, id, message)
+          }
+        }
+      }
       try {
-        this.drafts.newSessions[sessionScopeKey(this.sessionsProjectId)] = this.drafts.newSession
-        persistDrafts(this.draftOwnerUserId, toRaw(this.drafts))
+        persistDraftSettings(this.draftOwnerUserId, this.drafts)
       } catch {
         // Chat remains usable when local storage is blocked or full.
       }
@@ -66,6 +103,7 @@ export const draftActions = {
       const loadVersion = ++this.outboxLoadVersion
       this.outboxLoadPromise = null
       this.drafts = loadDrafts(ownerUserId)
+      savedDraftText.set(this.$state, draftTextByScope(this.drafts))
       const scope = sessionScopeKey(this.sessionsProjectId)
       if (!this.drafts.newSessions[scope]) {
         this.drafts.newSessions[scope] = normalizedNewSessionDraft(null)
@@ -187,25 +225,43 @@ export const draftActions = {
       this.persistDrafts()
     },
     setDraft(message, { defer = false, sessionId = this.current?.id, projectId = this.sessionsProjectId } = {}) {
+      const scope = sessionScopeKey(projectId)
       if (sessionId) this.drafts.sessionMessages[sessionId] = message
       else {
         const draft = projectId === this.sessionsProjectId
-          ? this.drafts.newSession : this.drafts.newSessions[sessionScopeKey(projectId)]
+          ? this.drafts.newSession : this.drafts.newSessions[scope]
         if (!draft) return
         draft.message = message
       }
-      if (!defer) this.persistDrafts()
-      else if (this.draftOwnerUserId) {
+      const kind = sessionId ? 'session' : 'new'
+      const id = sessionId || scope
+      if (!defer) {
+        const saved = writeDraftText(this, kind, id, message)
+        if (saved) pendingDraftWrites.get(this.$state)?.[kind].delete(id)
+        return saved
+      }
+      if (this.draftOwnerUserId) {
         // Devtools may wrap `this` per action; the state keeps the same identity.
         const now = performance.now()
-        const pending = pendingDraftWrites.get(this.$state) || { deadline: now + DRAFT_WRITE_MAX_MS }
+        const pending = pendingDraftWrites.get(this.$state) || {
+          deadline: now + DRAFT_WRITE_MAX_MS, session: new Set(), new: new Set()
+        }
+        pending[kind].add(id)
         clearTimeout(pending.timer)
         pending.timer = setTimeout(() => this.flushDraftWrite(), Math.min(DRAFT_WRITE_IDLE_MS, Math.max(0, pending.deadline - now)))
         pendingDraftWrites.set(this.$state, pending)
       }
     },
     flushDraftWrite() {
-      if (pendingDraftWrites.has(this.$state)) this.persistDrafts()
+      const pending = pendingDraftWrites.get(this.$state)
+      if (!pending) return
+      cancelDraftWrite(this.$state)
+      for (const id of pending.session) {
+        writeDraftText(this, 'session', id, this.drafts.sessionMessages[id])
+      }
+      for (const scope of pending.new) {
+        writeDraftText(this, 'new', scope, this.drafts.newSessions[scope]?.message)
+      }
     },
     hasNewSessionDraft(projectId = this.sessionsProjectId) {
       const scope = sessionScopeKey(projectId)
@@ -345,6 +401,7 @@ export const draftActions = {
       this.outboxLoaded = !ownerUserId
       this.outboxLoadVersion += 1
       this.drafts = emptyDrafts()
+      savedDraftText.set(this.$state, draftTextByScope(this.drafts))
       const scope = sessionScopeKey(this.sessionsProjectId)
       if (scope !== 'standalone') {
         this.drafts.newSessions[scope] = normalizedNewSessionDraft(null)

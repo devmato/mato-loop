@@ -33,12 +33,14 @@ import { useInAppNotificationStore } from '../src/stores/in-app-notifications'
 import { useTerminalStore } from '../src/stores/terminal'
 import { useBrowserStore } from '../src/stores/browser'
 import { useChatStore } from '../src/features/chat/store'
+import { useMailStore } from '../src/stores/mail'
 import { FakeWebSocket } from './terminal-websocket'
 import { api } from 'src/boot/axios'
 
 const components = { QBadge, QBtn, QIcon, QItem, QItemSection, QList, QMenu, QSeparator, QTab, QTabs, QTooltip }
 const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
 let app, root, pinia, controlCenter
+let mailAccounts
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -48,6 +50,8 @@ beforeEach(() => {
   setActivePinia(pinia)
   controlCenter = useControlCenterStore()
   controlCenter.resetDraft()
+  mailAccounts = useMailStore()
+  mailAccounts.accountsLoaded = true
 })
 
 afterEach(() => {
@@ -87,6 +91,17 @@ function notificationButton() {
 }
 
 describe('control center panel', () => {
+  it('discovers mail accounts when opening the panel, not before', async () => {
+    mailAccounts.accountsLoaded = false
+    api.get.mockResolvedValue({ data: [{ id: 'mail-1' }] })
+    try {
+      await mountPanel()
+      await vi.waitFor(() => expect(mailAccounts.accounts.map(account => account.id)).toEqual(['mail-1']))
+    } finally {
+      api.get.mockClear()
+    }
+  })
+
   it('keeps session cancel available in the mobile panel while the browser is busy', async () => {
     await draftApp('browser')
     const chat = useChatStore()

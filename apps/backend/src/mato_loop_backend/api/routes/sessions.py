@@ -489,6 +489,7 @@ async def list_sessions(
     include_archived: Annotated[bool, Query(alias="includeArchived")] = False,
     sort: Literal["pinned", "recent"] = "pinned",
     session_ids: Annotated[list[UUID] | None, Query(alias="sessionIds", max_length=100)] = None,
+    view: Literal["full", "status"] = "full",
 ) -> dict[str, Any]:
     try:
         return await session_service.list_sessions(
@@ -503,6 +504,7 @@ async def list_sessions(
             include_archived=include_archived,
             sort=sort,
             session_ids=session_ids,
+            status_only=view == "status",
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
@@ -718,10 +720,11 @@ async def fork_session(
 async def message_queue(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    session_ids: Annotated[list[UUID] | None, Query(alias="sessionIds", max_length=100)] = None,
 ) -> dict:
     from mato_loop_backend.sessions.message_queue import list_entries
 
-    return {"items": await list_entries(db, user.id)}
+    return {"items": await list_entries(db, user.id, session_ids=session_ids)}
 
 
 @router.get("/message-submissions/{request_id}")
@@ -858,6 +861,37 @@ async def get_session_messages(
             context_summary_payload(summary) for summary in context_summaries
         ],
         "nextCursor": next_cursor,
+    }
+
+
+@router.get("/{session_id}/messages/{message_id}/window")
+async def get_session_message_window(
+    session_id: UUID,
+    message_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, Any]:
+    if await _owned_session(db, session_id, user.id) is None:
+        raise ApiError(404, "session.notFound")
+    try:
+        window = await session_service.session_message_window(db, session_id, message_id)
+    except session_service.SessionServiceError as exc:
+        _raise_api_error(exc)
+    if window is None:
+        return {"requiresPaging": True}
+    messages, summaries, next_cursor, has_newer = window
+    attributions = await session_service.message_attributions(db, messages)
+    return {
+        "items": [
+            message_payload(
+                message, attribution=attributions.get(message.id),
+                attribution_resolved=True, compact=True,
+            )
+            for message in messages
+        ],
+        "contextSummaries": [context_summary_payload(summary) for summary in summaries],
+        "nextCursor": next_cursor,
+        "hasNewer": has_newer,
     }
 
 

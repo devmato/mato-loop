@@ -3,8 +3,6 @@ import { api } from 'src/boot/axios'
 import { useApprovalStore } from 'src/stores/approvals'
 import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
 import { useQuestionStore } from 'src/stores/questions'
-import { useInAppNotificationStore } from 'src/stores/in-app-notifications'
-import { useProjectStore } from 'src/stores/projects'
 import { downloadMessageAttachmentFiles, releaseAttachmentDrafts } from 'src/features/chat/attachments'
 import { compareSessions, defaultSessionOptions, lastAssistantMessage, mergeSessionSummary, sanitizedSessionOptions, sessionBeforeUserMessage, sessionCreatePayload, sessionScopeKey, sessionScopeParams, sortSessions } from 'src/features/chat/state'
 import { deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
@@ -15,6 +13,10 @@ import { useSessionTabsStore } from './session-tabs-store'
 import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
 
 const summarySyncs = new WeakMap()
+const SESSION_CACHE_LIMIT = 180
+const REOPEN_HISTORY_PAGE_LIMIT = 2
+
+const sessionAccessFailed = error => [401, 403, 404, 410].includes(error?.response?.status)
 
 function reconcileSummaryRows(rows, requested, replacements, insertMissing = false) {
   let next = null
@@ -59,9 +61,19 @@ export const sessionsActions = {
           sync.pending.clear()
           const summaries = []
           for (let offset = 0; offset < requested.length; offset += 100) {
-            const params = new URLSearchParams({ pageSize: '100', includeArchived: 'true' })
-            requested.slice(offset, offset + 100).forEach((id) => params.append('sessionIds', id))
-            const { data } = await api.get('/sessions', { ...config, params })
+            const batch = requested.slice(offset, offset + 100)
+            const params = new URLSearchParams({ pageSize: '100', includeArchived: 'true', view: 'status' })
+            batch.forEach((id) => params.append('sessionIds', id))
+            let data
+            try {
+              ({ data } = await api.get('/sessions', { ...config, params }))
+            } catch (error) {
+              if (owner === this.draftOwnerUserId && sessionAccessFailed(error)) this.evictSessionTranscripts(batch, error)
+              throw error
+            }
+            if (owner !== this.draftOwnerUserId) return
+            const available = new Set(data.items.map(item => item.id))
+            this.evictSessionTranscripts(batch.filter(id => !available.has(id)))
             summaries.push(...data.items)
           }
           if (owner !== this.draftOwnerUserId) return
@@ -101,6 +113,20 @@ export const sessionsActions = {
       }).finally(() => { if (summarySyncs.get(this) === sync) summarySyncs.delete(this) })
       summarySyncs.set(this, sync)
       return sync.promise
+    },
+    refreshTabSummaries() {
+      const owner = this.draftOwnerUserId
+      return useSessionTabsStore().refreshSummaries((ids, error) => {
+        if (owner === this.draftOwnerUserId && (!error || sessionAccessFailed(error))) this.evictSessionTranscripts(ids, error)
+      })
+    },
+    evictSessionTranscripts(ids, error = { response: { status: 404, data: { error: { code: 'session.notFound' } } } }) {
+      if (!ids.length) return
+      const unavailable = new Set(ids)
+      if (this.sessionDetails.some(session => unavailable.has(session.id))) {
+        this.sessionDetails = this.sessionDetails.filter(session => !unavailable.has(session.id))
+      }
+      if (this.current && unavailable.has(this.current.id)) this.clearFailedSessionLoad(this.current.id, error)
     },
     async invalidateSessionLists(config = {}) {
       const requests = []
@@ -425,7 +451,7 @@ export const sessionsActions = {
     },
     async loadSession(id) {
       if (id && this.selectedSessionId === id && this.loading && this.sessionLoadPromise) {
-        return (await this.sessionLoadPromise).data
+        return this.sessionLoadPromise
       }
       this.sessionRequestController?.abort()
       this.selectedSessionId = id
@@ -435,7 +461,14 @@ export const sessionsActions = {
       const loadVersion = this.sessionLoadVersion
       const controller = id ? markRaw(new AbortController()) : null
       this.sessionRequestController = controller
-      this.current = this.sessionDetails.find((session) => session.id === id) || null
+      this.loading = Boolean(id)
+      const tabs = useSessionTabsStore()
+      const known = [this.findCachedSession(id), tabs.summaries[id]]
+      const cached = id && this.draftOwnerUserId && !known.some(session => session?.archived || session?.archivedAt || session?.readOnly)
+        ? this.sessionDetails.find(session => session.id === id && Array.isArray(session.messages)
+          && !session.archived && !session.readOnly)
+        : null
+      this.current = cached ? { ...cached, messages: [...cached.messages], contextSummaries: [...(cached.contextSummaries || [])] } : null
       this.olderMessagesLoading = false
       this.olderMessagesLoadFailed = false
       this.olderMessagesPromise = null
@@ -468,37 +501,84 @@ export const sessionsActions = {
         this.clearActivity()
       }
       if (!id) {
-        this.loading = false
         return
       }
-      this.loading = true
-      try {
-        this.sessionLoadPromise = markRaw(api.get(`/sessions/${id}`, {
-          signal: controller.signal, params: { historyPreview: true }
-        }))
-        const session = (await this.sessionLoadPromise).data
-        if (this.selectedSessionId !== id || this.sessionLoadVersion !== loadVersion) return
-        if (session.readOnly && session.parentSessionId) return session
-        controlCenter.syncSession(session)
-        this.applySessionResult(session)
-        if (session.activeRun && this.runId !== session.activeRun.id) {
-          this.watchRun(id, session.activeRun.id, session.activeRun)
-        } else if (!session.activeRun && !this.running) {
-          this.clearActivity()
+      const stillSelected = () => !controller.signal.aborted && this.selectedSessionId === id
+        && this.sessionLoadVersion === loadVersion
+      const request = (async () => {
+        try {
+          const { data: session } = await api.get(`/sessions/${id}`, {
+            signal: controller.signal, params: { historyPreview: true }
+          })
+          if (!stillSelected()) return
+          if (session.readOnly && session.parentSessionId) {
+            this.current = null
+            this.sessionDetails = this.sessionDetails.filter(item => item.id !== id)
+            return session
+          }
+          // Bridge nearby cached rows with contiguous authoritative pages. A
+          // distant reading position is restored separately via a history window.
+          const boundary = !session.archived && !session.readOnly && cached?.messages?.find(message => message.role !== 'tool')
+          const seenCursors = new Set()
+          let historyFailed = false
+          while (boundary?.createdAt && session.nextMessageCursor && seenCursors.size < REOPEN_HISTORY_PAGE_LIMIT) {
+            const cursor = session.nextMessageCursor
+            if (seenCursors.has(cursor)) break
+            seenCursors.add(cursor)
+            const oldest = session.messages.find(message => message.id === cursor)
+            if (!oldest || compareMessages(oldest, boundary) <= 0) break
+            let data
+            try {
+              ({ data } = await api.get(`/sessions/${id}/messages`, {
+                signal: controller.signal, params: { cursor, pageSize: SESSION_PAGE_SIZE }, suppressErrorToast: true
+              }))
+            } catch (error) {
+              if (sessionAccessFailed(error)) throw error
+              historyFailed = true
+              break
+            }
+            if (!stillSelected()) return
+            session.messages = mergeMessages(data.items, session.messages)
+            session.contextSummaries = mergeMessages(data.contextSummaries, session.contextSummaries)
+            session.nextMessageCursor = data.nextCursor || null
+          }
+          if (!stillSelected()) return
+          if (cached) {
+            const keys = new Map(cached.messages?.filter(message => message.renderId).map(message => [message.id, message.renderId]))
+            session.messages = session.messages?.map(message => keys.has(message.id) ? { ...message, renderId: keys.get(message.id) } : message)
+          }
+          controlCenter.syncSession(session)
+          this.applySessionResult(session)
+          this.olderMessagesLoadFailed = historyFailed
+          if (session.activeRun && this.runId !== session.activeRun.id) {
+            this.watchRun(id, session.activeRun.id, session.activeRun)
+          } else if (!session.activeRun && !this.running) {
+            this.clearActivity()
+          }
+          return session
+        } catch (error) {
+          if (!stillSelected()) return
+          this.clearFailedSessionLoad(id, error)
+          throw error
+        } finally {
+          if (this.sessionRequestController === controller) this.sessionRequestController = null
+          if (this.sessionLoadVersion === loadVersion) {
+            this.loading = false
+            this.sessionLoadPromise = null
+          }
         }
-      } catch (error) {
-        if (controller.signal.aborted || this.sessionLoadVersion !== loadVersion) return
-        this.current = null
-        this.sessionDetails = this.sessionDetails.filter((session) => session.id !== id)
-        this.loadError = error
-        throw error
-      } finally {
-        if (this.sessionRequestController === controller) this.sessionRequestController = null
-        if (this.sessionLoadVersion === loadVersion) {
-          this.loading = false
-          this.sessionLoadPromise = null
-        }
-      }
+      })()
+      this.sessionLoadPromise = markRaw(request)
+      return request
+    },
+    clearFailedSessionLoad(id, error) {
+      this.sessionRequestController?.abort()
+      if (this.runSessionId === id) this.clearRunTracking()
+      this.current = null
+      this.sessionDetails = this.sessionDetails.filter(session => session.id !== id)
+      this.loadError = error
+      this.loading = false
+      this.sessionLoadPromise = null
     },
     async refreshMessage(sessionId, messageId) {
       if (!messageId) return this.refreshSession(sessionId)
@@ -541,7 +621,7 @@ export const sessionsActions = {
             signal: controller.signal,
             ...(suppressErrorToast ? { suppressErrorToast: true } : {})
           })).data
-          if (this.historyActionPending) return
+          if (this.historyActionPending || controller.signal.aborted) return
           if (this.selectedSessionId === id && this.sessionLoadVersion === loadVersion) {
             if (this.current?.id === id) {
               // After a disconnect, bridge a gap larger than the newest page.
@@ -553,7 +633,7 @@ export const sessionsActions = {
                 const { data } = await api.get(`/sessions/${id}/messages`, {
                   signal: controller.signal, params: { cursor, pageSize: SESSION_PAGE_SIZE }
                 })
-                if (this.selectedSessionId !== id || this.sessionLoadVersion !== loadVersion) return
+                if (controller.signal.aborted || this.selectedSessionId !== id || this.sessionLoadVersion !== loadVersion) return
                 session.messages = mergeMessages(data.items, session.messages)
                 session.contextSummaries = mergeMessages(data.contextSummaries, session.contextSummaries)
                 if (cursor === data.nextCursor) break
@@ -597,7 +677,11 @@ export const sessionsActions = {
             return session
           }
         } catch (error) {
-          if (!controller.signal.aborted) throw error
+          if (controller.signal.aborted) return
+          if (sessionAccessFailed(error) && this.selectedSessionId === id && this.sessionLoadVersion === loadVersion) {
+            this.clearFailedSessionLoad(id, error)
+          }
+          throw error
         } finally {
           if (this.sessionRequestController === controller) this.sessionRequestController = null
         }
@@ -615,14 +699,31 @@ export const sessionsActions = {
       const { data } = await api.get(`/sessions/${id}`)
       return data
     },
-    async hasStoredMessage(sessionId, messageId) {
+    async fetchMessageWindow(sessionId, messageId, signal) {
       try {
-        await api.get(`/sessions/${sessionId}/messages/${messageId}`, {
-          params: { compact: true }, suppressErrorToast: true
+        const { data } = await api.get(`/sessions/${sessionId}/messages/${messageId}/window`, {
+          signal, suppressErrorToast: true
         })
-        return true
+        return data
       } catch (error) {
-        if (errorDescriptor(error)?.code === 'session.messageNotFound') return false
+        if (errorDescriptor(error)?.code === 'session.messageNotFound') return null
+        if (!signal?.aborted && this.current?.id === sessionId && sessionAccessFailed(error)) {
+          this.clearFailedSessionLoad(sessionId, error)
+        }
+        throw error
+      }
+    },
+    async fetchOlderMessages(id, cursor, pageSize, signal) {
+      const version = this.sessionLoadVersion
+      try {
+        const { data } = await api.get(`/sessions/${id}/messages`, {
+          params: { cursor, pageSize }, ...(signal ? { signal } : {}), suppressErrorToast: true
+        })
+        return data
+      } catch (error) {
+        if (!signal?.aborted && this.current?.id === id && this.sessionLoadVersion === version && sessionAccessFailed(error)) {
+          this.clearFailedSessionLoad(id, error)
+        }
         throw error
       }
     },
@@ -635,9 +736,7 @@ export const sessionsActions = {
       this.olderMessagesLoading = true
       this.olderMessagesLoadFailed = false
       const request = (async () => {
-        const { data } = await api.get(`/sessions/${id}/messages`, {
-          params: { cursor, pageSize }, suppressErrorToast: true
-        })
+        const data = await this.fetchOlderMessages(id, cursor, pageSize)
         if (this.olderMessagesPromise !== request || this.current?.id !== id || this.current.nextMessageCursor !== cursor) return []
         const existingIds = new Set((this.current.messages || []).map((message) => message.id))
         const added = (data.items || []).filter((message) => !existingIds.has(message.id))
@@ -652,6 +751,7 @@ export const sessionsActions = {
           ...(this.current.contextSummaries || [])
         ]
         this.current.nextMessageCursor = data.nextCursor || null
+        if (!this.sessionRefreshPromise && !this.current.activeRun && !this.running) this.cacheSessionWindow(this.current)
         return added
       })()
       this.olderMessagesPromise = markRaw(request)
@@ -923,14 +1023,18 @@ export const sessionsActions = {
     applySessionResult(session) {
       this.current = session
       this.updateSessionSummary(session)
-      if (!session.archived && !session.readOnly) {
-        // Keep only recent display data; every opening still reconciles with the server.
-        this.sessionDetails = [{
-          ...session,
-          messages: session.messages?.slice(-SESSION_PAGE_SIZE),
-          contextSummaries: session.contextSummaries?.slice(-SESSION_PAGE_SIZE)
-        }, ...this.sessionDetails.filter((item) => item.id !== session.id)].slice(0, 5)
-      }
+      this.cacheSessionWindow(session)
+    },
+    cacheSessionWindow(session) {
+      const others = this.sessionDetails.filter(item => item.id !== session.id)
+      const { messages, contextSummaries, nextMessageCursor } = session
+      // Never slice a cursor window: the cursor would skip dropped carriers, and
+      // a slice could separate an assistant section from its tool results.
+      this.sessionDetails = !session.archived && !session.readOnly && Array.isArray(messages)
+        && messages.length + (contextSummaries?.length || 0) <= SESSION_CACHE_LIMIT
+        && (!nextMessageCursor || messages.some(message => message.id === nextMessageCursor))
+        ? [{ ...session, messages: [...messages], contextSummaries: [...(contextSummaries || [])] }, ...others].slice(0, 5)
+        : others
     },
     async markSessionRead(session) {
       if (!session?.id) return
@@ -945,12 +1049,6 @@ export const sessionsActions = {
         if (this.current?.id === session.id) this.current.hasUnreadMessages = false
         this.updateCachedSession(session.id, (summary) => ({ ...summary, hasUnreadMessages: false }))
       }
-      const notifications = useInAppNotificationStore()
-      const projects = useProjectStore()
-      await Promise.allSettled([
-        notifications.fetchLatest({ suppressErrorToast: true }),
-        ...(session.projectId && projects.loaded ? [projects.refreshSummaries([session.projectId], { suppressErrorToast: true })] : [])
-      ])
     },
     async undoUserMessage(message, { session = this.current, files, outboxId } = {}) {
       if (!session || message?.role !== 'user' || this.historyActionPending) return null
@@ -973,6 +1071,13 @@ export const sessionsActions = {
         if (replacementError) {
           notifyError({}, replacementError)
           throw new Error(replacementError)
+        }
+        const restoreDraft = (content) => {
+          const saved = this.setDraft(content, { sessionId: session.id })
+          this.replaceAttachmentFiles(files, session.id, message.attachments)
+          if (!saved && content) {
+            notifyError({}, 'Der wiederhergestellte Text konnte nicht lokal gespeichert werden. Kopiere ihn, bevor du die Seite schließt oder neu lädst.')
+          }
         }
         let data
         let recoveredSession = null
@@ -998,9 +1103,7 @@ export const sessionsActions = {
           }
           if (owner !== this.draftOwnerUserId) return null
           if (!data && ambiguous && !mutationKnownUnchanged) {
-            this.drafts.sessionMessages[session.id] = message.content
-            this.replaceAttachmentFiles(files, session.id, message.attachments)
-            this.persistDrafts()
+            restoreDraft(message.content)
           }
           if (!data) {
             notifyError(error)
@@ -1023,8 +1126,7 @@ export const sessionsActions = {
         this.setAudioDictation(null, session.id)
         if (stillSelected) this.applySessionResult(updatedSession)
         else this.updateSessionSummary(updatedSession)
-        this.drafts.sessionMessages[session.id] = data.draft.content
-        this.replaceAttachmentFiles(files, session.id, message.attachments)
+        restoreDraft(data.draft.content)
         if (!recoveredSession) {
           const loadVersion = this.sessionLoadVersion
           await this.fetchSession(session.id).then((canonical) => {
@@ -1039,7 +1141,6 @@ export const sessionsActions = {
             } else this.updateSessionSummary(canonical)
           }).catch(() => {})
         }
-        this.persistDrafts()
         void useApprovalStore().fetchPending()
         void useQuestionStore().fetchPending().catch(() => {})
         return data

@@ -174,25 +174,61 @@ it('shows pending questions even before a restored session summary is loaded', a
 it('loads summaries for restored project sessions without loading sidebar scopes', async () => {
   const { tabs } = await mount()
   tabs.$patch({ owner: 'owner', loaded: true, items: [{ key: 'b', sessionId: 'b', title: 'Beta', projectId: 'project', preview: true }] })
-  api.get.mockResolvedValueOnce({ data: { items: [{ ...b, activeRunStatus: 'running' }] } })
+  tabs.summaries = { b: { ...b, workspaceContext: { connected: true } } }
+  const status = { ...b, readOnly: false, archived: false, activeRunStatus: 'running' }
+  api.get.mockResolvedValueOnce({ data: { items: [status] } })
   await tabs.refreshSummaries()
-  expect(tabs.summaries.b.activeRunStatus).toBe('running')
+  expect(api.get.mock.lastCall[1].params.get('view')).toBe('status')
+  expect(tabs.summaries.b).toEqual({ ...status, workspaceContext: { connected: true } })
 })
 
 it('preserves targeted updates while an in-flight refresh loads other tab summaries', async () => {
-  const { tabs } = await mount()
+  const { tabs, chat } = await mount()
+  chat.draftOwnerUserId = 'owner'
   tabs.$patch({ owner: 'owner', loaded: true, items: [{ key: 'a', sessionId: 'a' }, { key: 'b', sessionId: 'b' }] })
+  chat.cacheSessionWindow({ ...a, messages: [{ id: 'reading', role: 'user' }] })
   let resolve
   api.get.mockReturnValueOnce(new Promise(done => { resolve = done }))
-  const refreshing = tabs.refreshSummaries()
+  const refreshing = chat.refreshTabSummaries()
   const newA = { ...a, title: 'Updated Alpha' }
   tabs.summaries = { a: newA }
   const previous = tabs.summaries
   tabs.applySummaryUpdates(['a'], { a: { ...newA } })
   const retainedSummary = tabs.summaries === previous
-  resolve({ data: { items: [a, b] } })
+  resolve({ data: { items: [b] } })
   await refreshing
-  expect({ retainedSummary, summaries: tabs.summaries }).toEqual({ retainedSummary: true, summaries: { a: newA, b } })
+  expect({ retainedSummary, summaries: tabs.summaries, cached: chat.sessionDetails.map(session => session.id) })
+    .toEqual({ retainedSummary: true, summaries: { a: newA, b }, cached: ['a'] })
+})
+
+it.each(['targeted', 'full tab'])('evicts a transcript omitted by a %s status response before reopening', async (refresh) => {
+  const { tabs, chat } = await mount()
+  chat.draftOwnerUserId = 'owner'
+  tabs.$patch({ owner: 'owner', loaded: true, items: [{ key: 'b', sessionId: 'b' }] })
+  chat.cacheSessionWindow({ ...b, messages: [{ id: 'cached', role: 'user' }] })
+  api.get.mockResolvedValueOnce({ data: { items: [] } })
+  await (refresh === 'targeted' ? chat.syncSessionSummaries(['b']) : chat.refreshTabSummaries())
+
+  api.get.mockRejectedValueOnce({ response: { status: 404 } })
+  const reopening = chat.loadSession('b').catch(() => {})
+  expect(chat.current).toBeNull()
+  await reopening
+})
+
+it('withdraws an active warm transcript when the full tab status request is forbidden', async () => {
+  const { tabs, chat } = await mount()
+  chat.draftOwnerUserId = 'owner'
+  tabs.$patch({ owner: 'owner', loaded: true, items: [{ key: 'a', sessionId: 'a' }] })
+  chat.cacheSessionWindow({ ...a, messages: [{ id: 'cached', role: 'user' }] })
+  let finishLoad
+  api.get.mockImplementationOnce(() => new Promise(resolve => { finishLoad = resolve }))
+  const reopening = chat.loadSession('a')
+  const denial = { response: { status: 403 } }
+  api.get.mockRejectedValueOnce(denial)
+  await expect(chat.refreshTabSummaries()).rejects.toBe(denial)
+  finishLoad({ data: { ...a, messages: [{ id: 'outdated', role: 'user' }] } })
+  await reopening
+  expect([chat.current, chat.sessionDetails, chat.loadError]).toEqual([null, [], denial])
 })
 
 it('removes project draft tabs before saving the remaining tabs', async () => {
