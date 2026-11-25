@@ -27,7 +27,7 @@ Agent, Computer, Arbeitsordner und Rechte stammen bei der Ausführung aus den ak
 
 ### Hinweise und stille Prüfungen
 
-Antworten verwenden dieselben Ungelesen-Markierungen und Benachrichtigungen wie interaktive Chats. Der Agent kann mit `notify` einen gezielten Hinweis erzeugen oder mit `silence` den gewöhnlichen Abschluss-Hinweis unterdrücken, etwa wenn eine verlangte Prüfung nichts Berichtenswertes fand. Eine stumme Antwort bleibt im Chat und erzeugt keine Ungelesen-Markierung an der Session oder am Projekt. Ältere ungelesene Antworten bleiben markiert. Fehler, Freigaben, Fragen und schon erzeugte Hinweise werden dadurch nicht unterdrückt.
+Antworten verwenden dieselben Ungelesen-Markierungen und Benachrichtigungen wie interaktive Chats. Der Agent kann mit `notify` einen gezielten Hinweis erzeugen oder mit `silence` den gewöhnlichen Abschluss-Hinweis unterdrücken, etwa wenn eine verlangte Prüfung nichts Berichtenswertes fand. Eine stumme Antwort bleibt im Chat und erzeugt keine Ungelesen-Markierung an der Session oder am Projekt. Ein erfolgreich abgeschlossener stummer Lauf ohne gezielten Hinweis rückt die Session unter **Zuletzt aktiv** nicht nach oben. Ältere ungelesene Antworten bleiben markiert. Fehler, Freigaben, Fragen und schon erzeugte Hinweise werden dadurch nicht unterdrückt.
 
 Eine sichtbar fokussierte Session erzeugt keinen automatischen Antwort-Hinweis. Web Push wird nur bei fehlender aktiver Anwendungspräsenz gesendet; siehe [Benachrichtigungen](anmeldung-und-oberflaeche.md#benachrichtigungen).
 

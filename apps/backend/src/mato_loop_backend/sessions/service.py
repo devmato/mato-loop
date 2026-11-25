@@ -376,18 +376,21 @@ async def get_owned_session(
     return item
 
 
-def unread_response_clause():
+def _silenced_run_clause(source, run_id):
     tool_message = aliased(Message, name="silence_message")
     # Keep the partial-index predicate static even in generic prepared plans.
     runtime = "silence_message.provider_data['_matoloop']"
-    silenced = select(tool_message.id).where(
-        tool_message.session_id == Message.session_id,
+    return select(tool_message.id).where(
+        tool_message.session_id == source.session_id,
         tool_message.role == literal_column("'tool'"),
-        literal_column(f"{runtime} ->> 'runId'", String)
-        == Message.provider_data["_matoloop"]["runId"].as_string(),
+        literal_column(f"{runtime} ->> 'runId'", String) == run_id,
         literal_column(f"{runtime} ->> 'toolName'", String) == literal_column("'silence'"),
         literal_column(f"CAST(({runtime} ->> 'suppressResponseNotification') AS BOOLEAN)").is_(True),
-    ).correlate(Message).exists()
+    ).correlate(source).exists()
+
+
+def unread_response_clause():
+    silenced = _silenced_run_clause(Message, Message.provider_data["_matoloop"]["runId"].as_string())
     return and_(
         Message.role == "assistant",
         or_(Message.error_code.is_not(None), ~silenced),
@@ -1198,6 +1201,18 @@ async def list_sessions(
     last_user_message_at = latest_message_at(Message.role == "user")
     activity_at = func.coalesce(last_user_message_at, ChatSession.created_at)
     if sort == "recent":
+        silent_automation_input = select(AgentRun.id).where(
+            AgentRun.input_message_id == Message.id,
+            AgentRun.session_id == Message.session_id,
+            AgentRun.automation_origin.is_(True),
+            AgentRun.status == "completed",
+            AgentRun.notice_id.is_(None),
+            _silenced_run_clause(AgentRun, AgentRun.id.cast(String)),
+        ).correlate(Message).exists()
+        activity_at = func.coalesce(
+            latest_message_at(and_(Message.role == "user", ~silent_automation_input)),
+            ChatSession.created_at,
+        )
         legacy_response = aliased(Message)
         legacy_response_id = (
             select(legacy_response.id)

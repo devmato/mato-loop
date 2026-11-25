@@ -654,12 +654,27 @@ async def test_response_notification_uses_persisted_current_run_tool_outcome(req
                 project = Project(user_id=user.id, name="Check")
                 db.add(project)
                 await db.flush()
-                session = ChatSession(user_id=user.id, project_id=project.id, title="Check", last_read_at=datetime.now(UTC) - timedelta(seconds=1))
+                now = datetime.now(UTC)
+                session = ChatSession(
+                    user_id=user.id, project_id=project.id, title="Check",
+                    created_at=now - timedelta(days=2), last_read_at=now - timedelta(seconds=1),
+                )
                 db.add(session)
+                if outcome == "silence":
+                    recent = ChatSession(
+                        user_id=user.id, project_id=project.id, title="Recent", created_at=now - timedelta(days=1),
+                    )
+                    db.add(recent)
                 await db.flush()
                 if outcome == "earlier_unread":
                     db.add(Message(session_id=session.id, role="assistant", content="Earlier unread answer"))
-                run = AgentRun(id=uuid4(), session_id=session.id)
+                prompt = Message(session_id=session.id, role="user", content="Check", created_at=now)
+                db.add(prompt)
+                await db.flush()
+                run = AgentRun(
+                    id=uuid4(), session_id=session.id, input_message_id=prompt.id, automation_origin=True,
+                    status="failed" if outcome == "runtime_error" else "completed", completed_at=now,
+                )
                 db.add(run)
                 await db.flush()
                 call = ToolCall("notice", "notify" if outcome == "notify" else "silence", {})
@@ -694,6 +709,7 @@ async def test_response_notification_uses_persisted_current_run_tool_outcome(req
                 )
                 db.add(message)
                 await db.flush()
+                run.result_message_id = message.id
                 await NotificationService.create_for_message(db, message)
                 kinds = list((await db.scalars(select(Notification.kind).where(Notification.user_id == user.id))).all())
                 assert kinds == ([] if outcome in {"notify", "silence", "earlier_unread"} else ["session.response"])
@@ -706,11 +722,13 @@ async def test_response_notification_uses_persisted_current_run_tool_outcome(req
 
                 summaries = await list_sessions(
                     db, user.id, page_size=10, cursor=None, project_id=project.id,
-                    standalone=False, session_serializer_factory=serializer_factory, sort="recent",
+                    standalone=False, session_serializer_factory=serializer_factory, sort="recent", home_session_ids=[],
                 )
                 project_unread = await db.scalar(
                     select(_unread_project_sessions()).select_from(Project).where(Project.id == project.id)
                 )
-                assert (summaries["items"][0]["unread"], project_unread) == (outcome != "silence",) * 2
+                if outcome == "silence":
+                    assert [item["id"] for item in summaries["items"]] == [str(recent.id), str(session.id)]
+                assert (summaries["items"][-1]["unread"], project_unread) == (outcome != "silence",) * 2
     finally:
         await engine.dispose()
