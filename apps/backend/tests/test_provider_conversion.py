@@ -624,6 +624,32 @@ async def test_chat_completions_supports_non_streaming(monkeypatch) -> None:
     assert deltas == ["Fertig"]
 
 
+async def test_chat_stream_preserves_multiline_tool_arguments(monkeypatch) -> None:
+    body = (
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1",'
+        '"function":{"name":"read_file"}}]}}]}\n\n'
+        'data: {"choices":[{"delta":{"tool_calls":[\n'
+        'data: {"index":0,"function":{"arguments":"{\\"path\\":\\"README.md\\"}"}}\n'
+        'data: ]}}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda _: httpx.Response(200, text=body))
+    monkeypatch.setattr(
+        "mato_loop_backend.providers.openai_compatible.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+
+    result = await chat_completions(
+        base_url="http://local.test/v1",
+        api_key=None,
+        request=ProviderRequest(model="local-model", messages=[], stream=True),
+        on_delta=None,
+    )
+
+    assert result.tool_calls[0].arguments == {"path": "README.md"}
+
+
 async def test_responses_supports_non_streaming(monkeypatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert json.loads(request.content)["stream"] is False

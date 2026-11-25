@@ -7,6 +7,7 @@ import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from io import StringIO
 from typing import Any
 from urllib.parse import urlparse
 
@@ -49,6 +50,7 @@ _SENSITIVE_PROVIDER_TEXT = re.compile(
     re.IGNORECASE,
 )
 _URL_QUERY = re.compile(r"(https?://[^\s?#]+)\?[^\s#]+", re.IGNORECASE)
+_MAX_MULTILINE_SSE_EVENT_CHARS = 8 * 1024 * 1024
 
 class DiscoveredModel(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -183,10 +185,35 @@ class _ModelListResponse(BaseModel):
 async def _sse_events(
     response: httpx.Response, *, redact_errors: bool = False
 ) -> AsyncIterator[dict[str, Any]]:
+    first: str | None = None
+    buffer: StringIO | None = None
     async for line in response.aiter_lines():
-        if not line.startswith("data:"):
+        if line:
+            if line.startswith("data:"):
+                value = line[5:]
+            elif line == "data":
+                value = ""
+            else:
+                continue
+            if first is None:
+                first = value
+            else:
+                # Only multiline events need a buffer. Bound it even without an event delimiter.
+                size = len(first) if buffer is None else buffer.tell()
+                if size + len(value) + 1 > _MAX_MULTILINE_SSE_EVENT_CHARS:
+                    raise ProviderError(
+                        "Provider stream event is too large", code="provider.responseTooLarge"
+                    )
+                if buffer is None:
+                    buffer = StringIO()
+                    buffer.write(first)
+                buffer.write("\n")
+                buffer.write(value)
             continue
-        data = line[5:].strip()
+        if first is None:
+            continue
+        data = (first if buffer is None else buffer.getvalue()).strip()
+        first = buffer = None
         if data == "[DONE]":
             return
         if not data:
