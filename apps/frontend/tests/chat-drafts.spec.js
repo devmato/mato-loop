@@ -1355,7 +1355,7 @@ describe('chat drafts', () => {
     const added = await chat.loadOlderMessages()
 
     expect(api.get).toHaveBeenCalledWith('/sessions/session-1/messages', {
-      params: { cursor: 'user-2', pageSize: 20 }
+      params: { cursor: 'user-2', pageSize: 20 }, suppressErrorToast: true
     })
     expect(added.map((message) => message.id)).toEqual(['user-1', 'assistant-1'])
     expect(chat.current.messages.map((message) => message.id)).toEqual([

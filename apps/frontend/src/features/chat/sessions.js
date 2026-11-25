@@ -636,7 +636,7 @@ export const sessionsActions = {
       this.olderMessagesLoadFailed = false
       const request = (async () => {
         const { data } = await api.get(`/sessions/${id}/messages`, {
-          params: { cursor, pageSize }
+          params: { cursor, pageSize }, suppressErrorToast: true
         })
         if (this.olderMessagesPromise !== request || this.current?.id !== id || this.current.nextMessageCursor !== cursor) return []
         const existingIds = new Set((this.current.messages || []).map((message) => message.id))

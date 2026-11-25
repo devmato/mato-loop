@@ -475,10 +475,13 @@ describe('voice attachment composer', () => {
   })
 
   it('keeps a collapsed opening preview still and preloads on an upward gesture', async () => {
-    const older = vi.fn(async () => ({ data: {
-      items: [{ id: 'earlier', role: 'user', content: 'Earlier request', createdAt: '2025-12-31T23:00:00Z' }],
-      nextCursor: 'older'
-    } }))
+    const older = vi.fn(async () => {
+      await new Promise(resolve => setTimeout(resolve, 120))
+      return { data: {
+        items: [{ id: 'earlier', role: 'user', content: 'Earlier request', createdAt: '2025-12-31T23:00:00Z' }],
+        nextCursor: 'older'
+      } }
+    })
     const target = document.createElement('div')
     const earlierHeight = () => root.querySelector('[data-message-id="earlier"]') ? 530 : 0
     Object.defineProperties(target, {
@@ -511,6 +514,9 @@ describe('voice attachment composer', () => {
     })
     try {
       target.dispatchEvent(new WheelEvent('wheel', { deltaY: -30 }))
+      // A fast request still in flight must not flash a spinner.
+      await vi.advanceTimersByTimeAsync(100)
+      expect(root.querySelector('.chat-transcript__history-progress')).toBeNull()
       await vi.advanceTimersByTimeAsync(1000)
       expect(older).toHaveBeenCalledTimes(1) // A stalled cursor does not retry on layout.
       expect(latest()?.getBoundingClientRect().top).toBe(75)

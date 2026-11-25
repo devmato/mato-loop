@@ -623,6 +623,16 @@
   background-image: none;
 }
 
+.chat-transcript__history-progress {
+  // Use the existing transcript padding without affecting virtual scroll measurements.
+  position: absolute;
+  inset: 6px 0 auto;
+  display: flex;
+  justify-content: center;
+  color: var(--app-muted);
+  pointer-events: none;
+}
+
 .chat-messages--small {
   --chat-message-font-size: 12px;
   --chat-message-gap: 16px;

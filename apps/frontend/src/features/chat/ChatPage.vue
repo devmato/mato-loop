@@ -38,7 +38,7 @@
       @keydown="handleScrollKey"
       @mousedown="handleScrollAreaMouseDown"
     >
-      <div ref="scrollContent" class="chat-page__scroll-content" :class="{ 'chat-messages--small': chat.activeContext.sessionProfile?.messageSize === 'small', 'chat-page__scroll-content--mobile-home': $q.screen.lt.md && showHome && !runPresentation.showActivity && !chat.loading && !chat.loadError }">
+      <div ref="scrollContent" class="chat-page__scroll-content" :style="{ paddingBottom: historyBottomSpace ? `${historyBottomSpace}px` : undefined }" :class="{ 'chat-messages--small': chat.activeContext.sessionProfile?.messageSize === 'small', 'chat-page__scroll-content--mobile-home': $q.screen.lt.md && showHome && !runPresentation.showActivity && !chat.loading && !chat.loadError }">
         <div v-if="chat.loading && !chat.current" class="chat-transcript chat-history-loading q-pa-md" role="status" aria-label="Session wird geladen">
           <div v-for="width in ['42%', '86%', '64%']" :key="width" class="chat-session-skeleton">
             <q-skeleton type="text" width="88px" />
@@ -94,6 +94,9 @@
           class="chat-transcript q-pa-md relative-position"
           :class="{ invisible: transcriptPreparing }"
           :inert="transcriptPreparing"
+          tabindex="0"
+          role="region"
+          aria-label="Chatverlauf"
           :items="displayMessages"
           scroll-target="#chat-scroll-area > .scroll"
           :virtual-scroll-item-size="96"
@@ -101,22 +104,20 @@
         >
           <template #before>
             <q-banner
-              v-if="chat.olderMessagesLoadFailed && !positionLoadFailed"
+              v-if="olderHistoryFailed && !positionLoadFailed"
               dense
               rounded
               class="app-surface-tonal q-mb-md"
+              role="alert"
             >
               Ältere Nachrichten konnten nicht geladen werden.
               <template #action>
                 <q-btn flat dense no-caps color="primary" label="Erneut versuchen" @click="loadOlderHistory" />
               </template>
             </q-banner>
-            <div v-else-if="chat.current?.nextMessageCursor" class="row justify-center q-mb-sm">
-              <q-btn
-                flat dense no-caps color="primary" label="Ältere Nachrichten laden"
-                :loading="chat.olderMessagesLoading" @click="loadOlderHistory"
-              />
-              <span v-if="chat.olderMessagesLoading" class="app-sr-only" role="status">Ältere Nachrichten werden geladen</span>
+            <div v-else-if="showHistoryProgress" class="chat-transcript__history-progress" role="status">
+              <q-spinner size="16px" aria-hidden="true" />
+              <span class="app-sr-only">Ältere Nachrichten werden geladen</span>
             </div>
           </template>
           <template #default="{ item: message }">
@@ -616,7 +617,7 @@ const trustedImageOrigins = computed(() => (
 ))
 const {
   followingBottom, transcriptPreparing, highlightedMessageId, positionLoadFailed, retryPositionLoad,
-  scheduleTranscriptLayout, loadOlderHistory, enableFollowMode,
+  scheduleTranscriptLayout, loadOlderHistory, olderHistoryFailed, showHistoryProgress, historyBottomSpace, enableFollowMode,
   beginActivityResize, finishActivityResize, handleMessageRendered,
   handleVirtualScroll, handleScrollKey, handleScrollAreaMouseDown, scrollToTop
 } = useChatViewport({

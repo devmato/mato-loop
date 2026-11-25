@@ -11,6 +11,7 @@ import {
 // Keep interactive prepends smaller than the rendered slice so the current
 // message stays mounted while Quasar updates its range.
 const SCROLL_HISTORY_PAGE_SIZE = 8
+const HISTORY_PROGRESS_DELAY = 250
 const STORED_MESSAGE_ID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i
 
 export function useChatViewport({ chat, route, scrollArea, scrollContent, virtualScroll, displayMessages, setWorkHistoryExpanded }) {
@@ -20,6 +21,8 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   const followingBottom = ref(true)
   const transcriptPreparing = ref(Boolean(chat.current))
   const positionLoadFailed = ref(false)
+  const showHistoryProgress = ref(false)
+  const historyBottomSpace = ref(0)
   const highlightedMessageId = ref(null)
   let target, observer, operation, scheduledFrame, userScrollTimer, highlightTimer
   let disposed = false
@@ -32,8 +35,11 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   let touchStartY = null
   let browsingHistory = false
   let lastScrollTop = 0
-  let stalledHistoryCursor = null
+  const stalledHistoryCursor = ref(null)
+  const olderHistoryFailed = computed(() => Boolean(chat.current?.nextMessageCursor)
+    && (chat.olderMessagesLoadFailed || chat.current.nextMessageCursor === stalledHistoryCursor.value))
   let historyRequest = null
+  let historyProgressTimer
   let positionSessionId = chat.current?.id || null
 
   function savePosition() {
@@ -228,9 +234,14 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     const cursor = chat.current?.nextMessageCursor
     if (browsingHistory && !followingBottom.value && !transcriptPreparing.value && !revealMessageId
       && !positionLoadFailed.value && target?.clientHeight > 0 && target.scrollTop <= target.clientHeight
-      && cursor && !chat.olderMessagesLoadFailed && cursor !== stalledHistoryCursor) {
+      && cursor && !olderHistoryFailed.value) {
       void loadOlderHistory()
     }
+  }
+
+  function resetHistoryProgress() {
+    clearTimeout(historyProgressTimer)
+    showHistoryProgress.value = false
   }
 
   async function loadOlderHistory() {
@@ -242,15 +253,30 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     followingBottom.value = false
     readingAnchor = request.anchor
     historyRequest = request
+    if (target && scrollContent.value && !historyBottomSpace.value && target.scrollHeight === target.clientHeight) {
+      // Keep the empty space below a short preview so prepends can restore its anchor.
+      historyBottomSpace.value = Math.max(0, Math.floor(target.clientHeight - scrollContent.value.getBoundingClientRect().height))
+    }
+    stalledHistoryCursor.value = null
+    clearTimeout(historyProgressTimer)
+    if (!showHistoryProgress.value) {
+      historyProgressTimer = window.setTimeout(() => { showHistoryProgress.value = true }, HISTORY_PROGRESS_DELAY)
+    }
     try {
       await chat.loadOlderMessages(sessionId, request.anchor ? SCROLL_HISTORY_PAGE_SIZE : undefined)
       await request.positioned
       if (disposed || historyRequest !== request || chat.current?.id !== sessionId) return
-      stalledHistoryCursor = chat.current.nextMessageCursor === cursor ? cursor : null
+      if (chat.current.nextMessageCursor === cursor) stalledHistoryCursor.value = cursor
     } catch { /* The store exposes the retry state; automatic loading stops until retry. */ }
     finally {
       if (historyRequest === request) {
         historyRequest = null
+        clearTimeout(historyProgressTimer)
+        if (olderHistoryFailed.value) resetHistoryProgress()
+        else if (showHistoryProgress.value) {
+          // Keep the indicator stable between consecutive requests.
+          historyProgressTimer = window.setTimeout(resetHistoryProgress, HISTORY_PROGRESS_DELAY)
+        }
         scheduleTranscriptLayout()
       }
     }
@@ -293,13 +319,17 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
 
   function updateFollowState() {
     const movedUp = target.scrollTop < lastScrollTop
+    const movedDown = target.scrollTop > lastScrollTop
     lastScrollTop = target.scrollTop
     if (transcriptPreparing.value || operation?.prepending) return
     if (operation && !userScrolling) return
     followingBottom.value = chatShouldFollowBottom(
-      followingBottom.value, userScrolling && movedUp, userScrolling && !movedUp && chatBottomDistance(target) <= 64
+      followingBottom.value, userScrolling && movedUp, userScrolling && movedDown && chatBottomDistance(target) <= 64
     )
-    if (followingBottom.value) browsingHistory = false
+    if (followingBottom.value) {
+      browsingHistory = false
+      historyBottomSpace.value = 0
+    }
     const anchor = !operation && !followingBottom.value ? captureAnchor() : null
     if (!operation) readingAnchor = followingBottom.value ? null : anchor || readingAnchor
     if (userScrolling && movedUp) {
@@ -386,6 +416,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     clearTimeout(userScrollTimer)
     followingBottom.value = true
     browsingHistory = false
+    historyBottomSpace.value = 0
     readingAnchor = null
     scheduleTranscriptLayout()
   }
@@ -403,8 +434,10 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     browsingHistory = false
     if (sessionId !== previous[0] || routeSessionId.value !== previous[1]) {
       positionSessionId = sessionId || null
-      stalledHistoryCursor = null
+      stalledHistoryCursor.value = null
       historyRequest = null
+      historyBottomSpace.value = 0
+      resetHistoryProgress()
       clearTimeout(userScrollTimer)
       window.removeEventListener('mouseup', scheduleUserScrollEnd)
       touching = userScrolling = false
@@ -466,11 +499,12 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     window.removeEventListener('mouseup', scheduleUserScrollEnd)
     clearTimeout(userScrollTimer)
     clearTimeout(highlightTimer)
+    resetHistoryProgress()
   })
 
   return {
     followingBottom, transcriptPreparing, highlightedMessageId, positionLoadFailed, retryPositionLoad,
-    scheduleTranscriptLayout, loadOlderHistory, enableFollowMode,
+    scheduleTranscriptLayout, loadOlderHistory, olderHistoryFailed, showHistoryProgress, historyBottomSpace, enableFollowMode,
     beginActivityResize, finishActivityResize: () => scheduleTranscriptLayout(),
     handleMessageRendered: () => scheduleTranscriptLayout(), handleVirtualScroll,
     handleScrollKey, handleScrollAreaMouseDown,
