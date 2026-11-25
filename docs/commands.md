@@ -9,7 +9,10 @@ callback. Command names use lowercase letters, digits and hyphens. The parser ma
 underscores to hyphens in invocations without changing arguments. Duplicate
 sources or names are rejected instead of silently replacing another command.
 The Git provider lives in `sessions/git_commands.py`; the generic menu has no Git
-dependency. Skill discovery, package installation and executable plugin hooks are
+dependency. `sessions/workflow_commands.py` defines `/plan`, `/research` and `/compare`
+as turn-local instructions for the selected profile without new tools or permission grants.
+The submitted invocation remains visible; internal workflow instructions are projected to the model.
+Skill discovery, package installation and executable plugin hooks are
 outside this first extension contract.
 
 `POST /commands/catalog` accepts an owned session ID or explicit browser-draft
@@ -20,9 +23,9 @@ not execution handlers or model instructions. Preparation rechecks actual state 
 submission, and normal agent permissions remain authoritative.
 
 The composer palette opens as a bounded, scrollable overlay above the composer.
-Choosing a row by click, Enter or Tab inserts `/name `, retaining existing argument
-text and attachments. The palette closes and focus stays in the input. Only another
-submission starts the command. Arrow keys navigate enabled entries; Escape dismisses
+Choosing a suggestion by click, Enter or Tab inserts `/name `, retaining existing argument
+text and attachments. The palette closes and focus stays in the input. A fully typed,
+enabled command can be submitted directly with Enter. Arrow keys navigate enabled entries; Escape dismisses
 the palette. Git app action buttons remain direct, explicit agent requests.
 
 ## Ownership and configuration

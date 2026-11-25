@@ -263,7 +263,9 @@ Containerupdates; sichere es vertraulich und kopiere es nicht zwischen Instanzen
 ## Coding-Befehle
 
 Das Telegram-Befehlsmenü und `/help` verwenden denselben allgemeinen Befehlskatalog
-wie die Palette am MatoLoop-Eingabefeld. Die **Git**-App zeigt dessen Git-Aktionen:
+wie die Palette am MatoLoop-Eingabefeld. [`/plan`, `/research` und `/compare`](chat-und-sessions.md#planen-recherchieren-und-vergleichen)
+funktionieren auch in Telegram und Teams ohne ausgewählte Coding-Session.
+Die **Git**-App zeigt nur die Git-Aktionen.
 
 In MatoLoop heißen die Befehle beispielsweise `/git-review`. Telegram benötigt
 Unterstriche und zeigt deshalb `/git_review` im Menü und in `/help`; MatoLoop

@@ -197,6 +197,22 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+it('submits a fully typed bare command directly but only completes an unfinished command', async () => {
+  mocks.api.post.mockResolvedValueOnce({ data: { items: [{ name: 'plan', source: 'workflow', description: 'Vorhaben planen' }] } })
+  chat.setDraft('/pla')
+  await vi.waitFor(() => expect(root.querySelector('[role="option"]')?.textContent).toContain('/plan'))
+
+  const enter = () => root.querySelector('textarea[role="combobox"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  enter()
+  expect(sentMessages).toHaveLength(0)
+  expect(chat.activeDraft).toBe('/plan ')
+
+  chat.setDraft('/plan')
+  await vi.waitFor(() => expect(root.querySelector('[role="option"]')).not.toBeNull())
+  enter()
+  expect(sentMessages.map(message => message.content)).toEqual(['/plan'])
+})
+
 describe('voice attachment composer', () => {
   it('replaces the send action with the headset only while voice is available and the composer is empty', async () => {
     const icons = []

@@ -45,9 +45,17 @@ Modellvorgaben gehören zu [Standardmodellen und Sessionvorlagen](provider-und-m
 
 ## Befehle verwenden
 
-Gib `/` ins Eingabefeld ein. Tippen filtert die Befehlspalette; Pfeiltasten, Klick, Enter oder Tab wählen einen Eintrag. Ergänze Argumente und sende anschließend den Befehl. Auswahl allein startet nichts; Escape schließt die Palette. Vorhandene Argumente und Anhänge bleiben erhalten.
+Gib `/` ins Eingabefeld ein. Tippen filtert die Befehlspalette; mit den Pfeiltasten wechselst du zwischen Treffern. Mit Klick, Tab oder Enter übernimmst du einen Vorschlag. Hast du einen verfügbaren Befehl schon vollständig getippt, sendet Enter ihn direkt. Escape schließt die Palette. Vorhandene Argumente und Anhänge bleiben beim Auswählen erhalten.
 
 Die Benutzernachricht zeigt den aufgelösten Auftrag. Rückgängig stellt den ursprünglichen Befehlsaufruf wieder her. Nicht verfügbare Aktionen nennen ihre Voraussetzungen.
+
+### Planen, recherchieren und vergleichen
+
+- `/plan [Vorhaben]` klärt offene Entscheidungen und hält Ziel, Muss-Kriterien, Spielraum und Abnahme fest. Das geht für eine Softwareänderung genauso wie für einen Vortrag. Der Agent prüft Code, Unterlagen oder Quellen, wenn sie den Plan ändern können, und fragt nur nach offenen Entscheidungen, die das Ergebnis beeinflussen.
+- `/research [Thema]` prüft Quellen und findet bei Bedarf Optionen. Du bekommst die wichtigsten Erkenntnisse mit Belegen und siehst, was offenbleibt.
+- `/compare [Optionen]` wägt konkrete Optionen nach passenden Kriterien ab. Gib Namen, URLs oder beides an, etwa `/compare https://www.bookstackapp.com/ vs. Wiki.js für unsere interne Doku`. Der Agent kennzeichnet Fakten, die er nicht überprüfen kann.
+
+Der Zusatz ist optional: `/plan` allein greift das besprochene Vorhaben auf, `/compare` kann Links aus dem Chat verwenden. Ist der Bezug nicht eindeutig, fragt der Agent nach. Antworte darauf normal im Chat, ohne den Befehl zu wiederholen. Die Befehle wechseln weder Profil noch Rechte und starten keine Umsetzung. Gib sie erst mit einem separaten Auftrag frei. Git und OpenSpec sind für die Planung nicht erforderlich.
 
 ### Eine Unterhaltung kopieren
 

@@ -21,6 +21,7 @@ from mato_loop_backend.sessions.coding import (
 )
 from mato_loop_backend.sessions.commands import (
     command_catalog,
+    command_profile_id,
     parse_command,
     prepare_command,
     registered_commands,
@@ -36,6 +37,7 @@ from mato_loop_backend.sessions.git_commands import (
 from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.sessions.service import SessionServiceError
 from mato_loop_backend.settings import AiSettings, TrustLevel
+from mato_loop_backend.settings.models import PLAN_PROFILE_ID
 from mato_loop_backend.tools.sessions import _message_item
 
 
@@ -60,6 +62,32 @@ async def test_browser_and_telegram_share_portable_coding_commands(monkeypatch):
     monkeypatch.setattr("mato_loop_backend.sessions.git_commands.inspect_repository", AsyncMock(side_effect=AssertionError("Catalog must not probe Git")))
     catalog = await command_catalog(AsyncMock(), ChatSession(user_id=uuid4()))
     assert {item["name"]: item["disabledReason"] for item in catalog if item["source"] == "git"} == dict.fromkeys(OUTPUT_FORMATS)
+
+
+@pytest.mark.parametrize("content", ["/plan", "/research lokale KI", "/compare https://example.com/ vs. Wiki.js"])
+async def test_workflow_commands_reach_the_model_without_a_workspace_or_profile_switch(content):
+    db = AsyncMock()
+    session = ChatSession(user_id=uuid4(), agent_profile_id=PLAN_PROFILE_ID)
+    definition = parse_command(content)
+    assert definition.name in {item["name"] for item in await command_catalog(db, session) if item["source"] == "workflow"}
+    assert command_profile_id(definition, PLAN_PROFILE_ID) == PLAN_PROFILE_ID
+    command = await prepare_command(db, session, definition, content)
+    message = Message(id=uuid4(), role="user", content=content, provider_data={"_matoloop": {"codingCommand": command}})
+    assert definition.instructions in message_dict(message)["content"]
+    assert message_payload(message)["commandPrompt"] == content
+
+
+async def test_workflow_command_can_start_in_a_messenger_without_a_selected_session(monkeypatch):
+    from mato_loop_backend.messaging import sessions
+    from mato_loop_backend.models import MessagingEndpoint, MessagingInbox
+
+    endpoint = MessagingEndpoint(id=uuid4(), user_id=uuid4(), provider="telegram")
+    personal = ChatSession(id=uuid4(), user_id=endpoint.user_id)
+    monkeypatch.setattr(sessions, "ensure_personal_chat", AsyncMock(return_value=personal))
+    start = AsyncMock()
+    monkeypatch.setattr(sessions.AgentRuntime, "start", start)
+    await sessions.start_message(AsyncMock(), endpoint, MessagingInbox(id=uuid4()), "/plan", [])
+    assert start.await_args.args[1:] == (personal, "/plan")
 
 
 def test_git_merge_and_pr_follow_explicit_commit_message_rules():

@@ -6,6 +6,7 @@ from uuid import UUID
 from mato_loop_backend.sessions.assistant_commands import ASSISTANT_COMMAND_PROVIDER
 from mato_loop_backend.sessions.command_contracts import Command, CommandProvider, command_arguments
 from mato_loop_backend.sessions.git_commands import GIT_COMMAND_PROVIDER
+from mato_loop_backend.sessions.workflow_commands import WORKFLOW_COMMAND_PROVIDER
 from mato_loop_backend.settings.models import BUILD_PROFILE_ID, PLAN_PROFILE_ID
 
 _providers: dict[str, CommandProvider] = {}
@@ -79,3 +80,4 @@ async def prepare_command(
 
 register_command_provider(GIT_COMMAND_PROVIDER)
 register_command_provider(ASSISTANT_COMMAND_PROVIDER)
+register_command_provider(WORKFLOW_COMMAND_PROVIDER)

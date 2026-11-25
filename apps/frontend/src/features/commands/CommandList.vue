@@ -40,6 +40,11 @@ function select(command = filtered.value[activeIndex.value]) {
   if (!props.disabled && !command.disabledReason) emit('selected', command)
   return true
 }
+function selectSuggestion() {
+  const name = props.filter.slice(1).toLowerCase()
+  if (filtered.value.some(command => command.name === name && !command.disabledReason)) return false
+  return select()
+}
 function move(delta) {
   for (let step = 1; step <= filtered.value.length; step++) {
     const index = (activeIndex.value + delta * step + filtered.value.length) % filtered.value.length
@@ -50,5 +55,5 @@ function move(delta) {
     }
   }
 }
-defineExpose({ move, select, activeId, pending: computed(() => commands.loading) })
+defineExpose({ move, select, selectSuggestion, activeId, pending: computed(() => commands.loading) })
 </script>

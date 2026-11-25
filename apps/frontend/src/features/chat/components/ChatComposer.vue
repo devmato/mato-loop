@@ -468,7 +468,7 @@ function outgoingContent() {
 
 function submit(event, fromSendButton = false) {
   if (event?.isComposing) return
-  if (paletteOpen.value && (commandList.value?.select() || commandList.value?.pending)) return
+  if (paletteOpen.value && (commandList.value?.pending || commandList.value?.selectSuggestion())) return
   if (recording.value) {
     void finishAndSendRecording(fromSendButton)
     return

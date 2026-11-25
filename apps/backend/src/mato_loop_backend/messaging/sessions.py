@@ -24,6 +24,7 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.sessions.commands import parse_command, registered_commands
 from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
+from mato_loop_backend.sessions.workflow_commands import WORKFLOW_COMMANDS
 from mato_loop_backend.settings.effective import default_agent_profile_id
 
 logger = logging.getLogger(__name__)
@@ -73,13 +74,14 @@ def session_help_sections(provider: str) -> tuple[list[tuple[str, str]], list[tu
             ("/current", "aktuelle Session anzeigen"),
             ("/stop", "laufende Antwort stoppen"),
             ("/unlink", f"{provider_name}-Verknüpfung lösen"),
+            *((f"/{item.name}", item.description) for item in WORKFLOW_COMMANDS),
         ],
         [
             (
                 "/" + (item.name.replace("-", "_") if provider == "telegram" else item.name),
                 item.description,
             )
-            for item in registered_commands()
+            for item in registered_commands() if item not in WORKFLOW_COMMANDS
         ],
     )
 
@@ -231,7 +233,7 @@ async def start_message(
             if command is not None
             else endpoint.current_session_id
         )
-        if command is not None and selected is None:
+        if command is not None and command not in WORKFLOW_COMMANDS and selected is None:
             raise ChannelMessageError("git.sessionRequired")
         session = await get_owned_session(db, selected, endpoint.user_id) if selected else None
         if selected is not None and (
