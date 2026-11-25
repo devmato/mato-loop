@@ -40,7 +40,10 @@ export default configure(() => ({
       dark: 'auto',
       ripple: false,
       notify: {
-        position: 'top-right'
+        position: 'top',
+        classes: 'app-notice-card',
+        attrs: { role: 'status' },
+        actions: [{ icon: 'close', 'aria-label': 'Meldung schließen' }]
       }
     },
     lang: 'de-DE',

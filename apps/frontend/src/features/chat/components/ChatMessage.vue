@@ -169,9 +169,9 @@
       </q-btn>
       <q-btn
         v-if="message.role === 'assistant' && content"
-        flat round dense size="xs" icon="content_copy"
+        flat round dense size="xs" :icon="copied ? 'check' : 'content_copy'"
         class="chat-message__meta-action chat-message__meta-action--hover q-ml-auto"
-        aria-label="Antwort kopieren"
+        :aria-label="copied ? 'Antwort kopiert' : 'Antwort kopieren'"
         @click.stop="copyAnswer"
       />
     </div>
@@ -179,7 +179,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useChatStore } from 'src/features/chat/store'
@@ -215,6 +215,13 @@ const agentProfiles = useAgentProfileStore()
 const $q = useQuasar()
 const messageSize = computed(() => chat.activeContext.sessionProfile?.messageSize)
 const content = computed(() => chatMessageText(props.message))
+const copied = ref(false)
+let copyTimer
+let disposed = false
+onBeforeUnmount(() => {
+  disposed = true
+  clearTimeout(copyTimer)
+})
 const metadata = computed(() => {
   const message = props.message
   const labels = []
@@ -256,9 +263,12 @@ const metadata = computed(() => {
 async function copyAnswer() {
   try {
     await copyToClipboard(content.value)
-    $q.notify({ type: 'positive', message: 'Antwort kopiert' })
+    if (disposed) return
+    copied.value = true
+    clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => { copied.value = false }, 1800)
   } catch {
-    $q.notify({ type: 'negative', message: 'Die Antwort konnte nicht kopiert werden.' })
+    if (!disposed) $q.notify({ type: 'negative', message: 'Die Antwort konnte nicht kopiert werden.' })
   }
 }
 </script>

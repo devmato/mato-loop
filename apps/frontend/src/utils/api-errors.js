@@ -773,6 +773,11 @@ export function errorDescriptor(source) {
   return value && typeof value === 'object' && typeof value.code === 'string' ? value : null
 }
 
+export function isApiConnectionFailure(error) {
+  return Boolean(error.request && !error.response)
+    || (!errorDescriptor(error.response?.data) && [502, 503, 504].includes(error.response?.status))
+}
+
 export async function decodeBlobApiError(source) {
   const data = source?.response?.data
   if (typeof Blob === 'undefined' || !(data instanceof Blob)) return source
@@ -789,6 +794,10 @@ export function apiErrorMessage(source, fallback) {
   const error = errorDescriptor(source)
   const formatter = error ? messages[error.code] : null
   if (formatter) return formatter(error)
+  const method = source?.config?.method?.toLowerCase()
+  if (method && !['get', 'head', 'options'].includes(method) && isApiConnectionFailure(source)) {
+    return 'Der Ausgang der Aktion ist unklar. Prüfe zuerst, ob die Änderung übernommen wurde, bevor du es erneut versuchst.'
+  }
   if (fallback) return fallback
   if (source?.request && !source?.response) return messages['network.unavailable']()
   return statusMessages[source?.response?.status] || 'Die Aktion ist fehlgeschlagen.'

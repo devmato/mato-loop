@@ -83,19 +83,19 @@ export const useProjectStore = defineStore('projects', {
         projectIds.forEach(id => pending.delete(id))
       })
     },
-    async create(name, instructions = '', defaults = {}) {
+    async create(name, instructions = '', defaults = {}, config) {
       const { data } = await api.post('/projects', {
         name,
         instructions,
         ...defaults
-      })
+      }, config)
       this.revision += 1
       this.loading = false
       this.items = [...this.items, data]
       return data
     },
-    async update(id, name, instructions = '', defaults = {}) {
-      const { data } = await api.patch(`/projects/${id}`, { name, instructions, ...defaults })
+    async update(id, name, instructions = '', defaults = {}, config) {
+      const { data } = await api.patch(`/projects/${id}`, { name, instructions, ...defaults }, config)
       this.revision += 1
       this.loading = false
       this.items = this.items.map((project) => project.id === id ? data : project)

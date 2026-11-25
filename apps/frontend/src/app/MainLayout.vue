@@ -6,6 +6,7 @@
       'app-shell--chat': route.name === 'chat',
       'app-shell--top-session-tabs': route.name === 'chat' && preferences.sessionTabsEnabled && preferences.sessionTabsPosition === 'top' && !$q.screen.lt.sm && sessionTabs.items.length > 0,
       'app-shell--navigation-overlay': showFloatingNavigation,
+      'app-shell--floating-controls': showFloatingControls,
       'app-shell--floating-chat-controls': route.name === 'chat' && showFloatingControls
     }"
     :style="route.name === 'chat' ? { minHeight: 0 } : undefined"
@@ -63,13 +64,14 @@
     </q-dialog>
 
     <q-page-container>
+      <div :ref="setAppNoticeTarget" class="app-notice-host" />
       <router-view />
     </q-page-container>
   </q-layout>
 </template>
 
 <script setup>
-import { computed, provide, ref } from 'vue'
+import { computed, inject, provide, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import AppNavigation from 'src/app/AppNavigation.vue'
@@ -87,6 +89,7 @@ import { useConfirm } from 'src/composables/confirm'
 defineOptions({ name: 'MainLayout' })
 
 const $q = useQuasar()
+const setAppNoticeTarget = inject('setAppNoticeTarget', () => {})
 const drawerOpen = ref(!$q.screen.lt.md)
 const navigation = ref(null)
 provide('deleteActions', {

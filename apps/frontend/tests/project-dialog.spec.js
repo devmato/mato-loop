@@ -46,7 +46,7 @@ it.each([false, true])('saves project fields through the shared dialog (editing=
   color.click()
   const save = () => document.querySelector('.q-dialog form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
   save()
-  await vi.waitFor(() => expect(request).toHaveBeenCalledOnce())
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog [role="alert"]')?.textContent).toBe('Das Projekt konnte nicht gespeichert werden.'))
   expect(open.value).toBe(true)
   expect(name.value).toBe('Umbenannt')
   save()
@@ -61,7 +61,7 @@ it.each([false, true])('saves project fields through the shared dialog (editing=
     gitTargetBranch: editing ? 'main' : null,
     gitWorkspaceMode: 'local',
     gitFetchBeforeActions: !editing
-  })
+  }, { suppressErrorToast: true })
   if (editing) expect(created).not.toHaveBeenCalled()
   else expect(created).toHaveBeenCalledWith(project)
 })
@@ -84,5 +84,5 @@ it('filters local branches and saves the selected target branch', async () => {
   await vi.waitFor(() => expect([...document.querySelectorAll('[role="option"] .q-item__label')].map(option => option.textContent)).toEqual(['feature/release']))
   document.querySelector('[role="option"]').click()
   document.querySelector('.q-dialog form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-  await vi.waitFor(() => expect(api.patch).toHaveBeenCalledWith('/projects/project', expect.objectContaining({ gitTargetBranch: 'feature/release' })))
+  await vi.waitFor(() => expect(api.patch).toHaveBeenCalledWith('/projects/project', expect.objectContaining({ gitTargetBranch: 'feature/release' }), { suppressErrorToast: true }))
 })

@@ -126,6 +126,7 @@
             <AppSelect v-model="gitFetchBeforeActions" dense outlined emit-value map-options class="q-mt-md" label="Remote vor Git-Aktionen abrufen" :options="[{ label: 'An', value: true }, { label: 'Aus', value: false }]" hint="Projektvorgabe; in der Git-App der Session änderbar." />
           </template>
         </q-card-section>
+        <q-banner v-if="saveError" dense rounded class="app-surface-tonal q-mx-md q-mb-sm" role="alert">{{ saveError }}</q-banner>
         <q-card-actions align="right" class="q-pa-md q-pt-none">
           <q-btn flat no-caps label="Abbrechen" :disable="saving" v-close-popup />
           <q-btn unelevated no-caps color="primary" label="Speichern" type="submit" :loading="saving" />
@@ -145,7 +146,6 @@
 <script setup>
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, ref, watch } from 'vue'
-import { useQuasar } from 'quasar'
 import { useProjectStore } from 'stores/projects'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useSessionTemplateStore } from 'src/features/settings/session-templates-store'
@@ -159,7 +159,6 @@ import { projectIconPalette } from './project-icon-palette'
 const props = defineProps({ project: { type: Object, default: null } })
 const emit = defineEmits(['created'])
 const open = defineModel({ type: Boolean, required: true })
-const $q = useQuasar()
 const projects = useProjectStore()
 const executionAgents = useExecutionAgentStore()
 const templates = useSessionTemplateStore()
@@ -199,6 +198,7 @@ watch(repository, (info) => {
 })
 const directoryPickerOpen = ref(false)
 const saving = ref(false)
+const saveError = ref('')
 const selectedAgent = computed(() => executionAgents.byId(executionAgentId.value))
 const repositoryAvailable = computed(() => selectedAgent.value?.connected === true
   && selectedAgent.value.operations?.includes('git.repository') === true)
@@ -222,6 +222,7 @@ const requiredRule = value => Boolean(String(value || '').trim()) || 'Pflichtfel
 
 watch(open, (shown) => {
   if (!shown) return
+  saveError.value = ''
   name.value = props.project?.name || ''
   iconInitials.value = props.project?.iconInitials || ''
   iconColor.value = props.project?.iconColor || 'auto'
@@ -257,19 +258,19 @@ async function save() {
     gitFetchBeforeActions: gitFetchBeforeActions.value
   }
   saving.value = true
+  saveError.value = ''
+  const config = { suppressErrorToast: true }
   try {
     if (props.project) {
-      await projects.update(props.project.id, title, instructions.value.trim(), defaults)
+      await projects.update(props.project.id, title, instructions.value.trim(), defaults, config)
       open.value = false
-      $q.notify({ type: 'positive', message: 'Projekt gespeichert.' })
     } else {
-      const project = await projects.create(title, instructions.value.trim(), defaults)
+      const project = await projects.create(title, instructions.value.trim(), defaults, config)
       open.value = false
-      $q.notify({ type: 'positive', message: 'Projekt erstellt.' })
       emit('created', project)
     }
-  } catch {
-    // The central API interceptor displays the error; the dialog remains open.
+  } catch (error) {
+    saveError.value = apiErrorMessage(error, 'Das Projekt konnte nicht gespeichert werden.')
   } finally {
     saving.value = false
   }

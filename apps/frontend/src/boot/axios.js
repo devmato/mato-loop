@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { getActivePinia } from 'pinia'
 import { boot } from 'quasar/wrappers'
-import { decodeBlobApiError, errorDescriptor } from 'src/utils/api-errors'
+import { decodeBlobApiError, errorDescriptor, isApiConnectionFailure } from 'src/utils/api-errors'
 import {
   notifyBackendReachable,
   notifyBackendUnavailable,
@@ -56,16 +56,21 @@ api.interceptors.response.use(
     if (axios.isCancel(error)) return Promise.reject(error)
     const decoded = await decodeBlobApiError(error)
     await recoverControlledAuth(decoded)
-    const backendUnavailable = (decoded.request && !decoded.response)
-      || (!errorDescriptor(decoded) && [502, 503, 504].includes(decoded.response?.status))
-    if (backendUnavailable) notifyBackendUnavailable()
+    if (isApiConnectionFailure(decoded)) {
+      notifyBackendUnavailable(probeBackend, decoded.config?.suppressErrorToast ? null : decoded)
+    }
     else {
-      notifyBackendReachable()
+      if (decoded.response) notifyBackendReachable()
       if (!decoded.config?.suppressErrorToast) notifyError(decoded)
     }
     return Promise.reject(decoded)
   }
 )
+
+async function probeBackend(signal) {
+  const { data } = await axios.get('/api/health/live', { signal, timeout: 3000 })
+  return data?.status === 'ok'
+}
 
 export default boot(({ app }) => {
   app.config.globalProperties.$axios = axios

@@ -29,7 +29,7 @@ Beim Backendstart laufen Datenmigrationen automatisch. `develop` und `latest` si
 
 ### Weboberfläche neu laden
 
-Nach einem Server-Update kann die installierte Web-App melden: **Eine neue Version der Weboberfläche ist bereit.** Mit **Jetzt neu laden** übernimmst du die bereitstehende Weboberfläche; dadurch wird kein Update auf dem Server installiert. **Später** verschiebt die Meldung um eine Stunde.
+Nach einem Server-Update kann die installierte Web-App oben mittig melden: **Eine neue Version der Weboberfläche ist bereit.** Mit **Jetzt neu laden** übernimmst du die bereitstehende Weboberfläche; dadurch wird kein Update auf dem Server installiert. **Später** verschiebt die Meldung um eine Stunde.
 
 **Neuerungen nach dem Neuladen anzeigen** ist standardmäßig aktiviert. Nach dem bewussten Neuladen öffnet sich der Changelog einmalig für die bisher und jetzt geladene Version, nicht für einen neueren Remote-Stand. Entferne das Häkchen, wenn du nur neu laden möchtest. Dafür müssen beide Web-Builds einen eindeutigen Commit-Stempel haben und der Tab-Speicher verfügbar sein. Normales Neuladen oder ein unveränderter Stand öffnet den Dialog nicht automatisch.
 

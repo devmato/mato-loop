@@ -19,9 +19,116 @@
   --app-floating-control-inset: 12px;
 }
 
-.app-shell--chat > .q-page-container {
+.app-shell--chat > .q-page-container,
+.app-shell > .q-page-container:has(> .settings-page) {
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   height: 100dvh;
+}
+
+.app-shell > .q-page-container > :is(.chat-page, .settings-page) {
+  flex: 1 1 auto;
+  height: auto;
+}
+
+.app-notice-host { flex: none; min-width: 0; }
+
+body:has(.app-notices .app-notice-card) .q-dialog[aria-modal='true'] > .q-dialog__inner {
+  top: var(--app-notice-height, 0px);
+
+  > div { max-height: 100%; }
+}
+
+.app-notices {
+  &:not(:has(.app-notice-card)) { display: none; }
+  display: grid;
+  gap: 6px;
+  max-height: min(48dvh, 300px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: calc(8px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+
+  .q-notifications__list {
+    position: static !important;
+    gap: 6px;
+    margin: 0;
+  }
+
+  .q-notifications__list:empty,
+  .q-notification__badge { display: none; }
+
+  .app-notice-card {
+    --notice-tone: var(--q-info);
+    --notice-accent: color-mix(in srgb, var(--notice-tone) 70%, var(--app-text));
+    width: 100%;
+    max-width: 620px;
+    min-width: 0;
+    margin: 0 auto;
+    border: 1px solid var(--app-surface-border);
+    border-radius: 8px;
+    background: var(--app-surface) !important;
+    color: var(--app-text) !important;
+    box-shadow: none;
+    font-size: 14px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .app-notice--warning, .bg-warning { --notice-tone: var(--q-warning); }
+  .bg-positive { --notice-tone: var(--q-positive); }
+  .bg-negative { --notice-tone: var(--q-negative); }
+
+  .q-notification {
+    padding: 0 10px;
+    min-height: 44px;
+    transition: none;
+  }
+
+  .q-notification__content { min-width: 0; }
+  .q-notification__icon--additional { margin-right: 10px; }
+  .q-notification__actions { color: var(--app-muted); }
+
+  .app-notice__icon, .q-notification__icon {
+    display: grid;
+    place-items: center;
+    flex: 0 0 28px;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    font-size: 18px;
+    color: var(--notice-accent);
+    background: color-mix(in srgb, var(--notice-tone) 12%, transparent);
+  }
+}
+
+.app-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 10px;
+}
+
+.app-notice__body { min-width: 0; }
+.app-notice__actions { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.app-shell--floating-controls .app-notice-host .app-notices {
+  padding-inline: max(68px, env(safe-area-inset-left), env(safe-area-inset-right));
+}
+
+.app-shell:has(.app-notice-host .app-notice-card) {
+  .app-floating-controls { top: calc(var(--app-floating-control-inset) + env(safe-area-inset-top)); }
+  .chat-page__scroll-content { padding-top: 0; transition: none; }
+}
+
+@media (max-width: 720px) {
+  .app-shell--floating-controls .app-notice-host .app-notices {
+    padding: calc(64px + env(safe-area-inset-top)) 12px 8px;
+  }
+
+  .app-shell--navigation-overlay:has(.app-notice-host .app-notice-card) .app-page {
+    padding-top: 16px;
+  }
 }
 
 .app-floating-controls {

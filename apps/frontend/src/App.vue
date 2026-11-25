@@ -1,4 +1,18 @@
 <template>
+  <Teleport :to="noticeTarget || 'body'" :disabled="!noticeTarget">
+    <div ref="noticeArea" class="app-notices">
+      <AppNotice v-if="backendUnavailable" icon="wifi_off" tone="warning" title="Verbindung unterbrochen">
+        MatoLoop prüft die Verbindung automatisch.
+      </AppNotice>
+      <AppNotice v-if="updateAvailable" icon="system_update" tone="info" title="Eine neue Version der Weboberfläche ist bereit.">
+        <q-checkbox v-model="showChanges" dense label="Neuerungen nach dem Neuladen anzeigen" />
+        <template #actions>
+          <q-btn flat dense no-caps color="primary" label="Später" @click="snoozeUpdate" />
+          <q-btn flat dense no-caps color="primary" label="Jetzt neu laden" :loading="restarting" @click="applyUpdate" />
+        </template>
+      </AppNotice>
+    </div>
+  </Teleport>
   <div v-if="!auth.statusLoaded" class="startup-view column items-center justify-center">
     <AppLogo :size="56" />
     <div class="text-h6 text-weight-bold q-mt-md">{{ appearance.appName }}</div>
@@ -15,33 +29,17 @@
   </div>
   <router-view v-else />
   <ChangelogDialog v-if="auth.authenticated && changelog.open" />
-
-  <q-banner
-    v-if="updateAvailable"
-    dense
-    rounded
-    class="pwa-update-banner app-surface shadow-2"
-    role="status"
-  >
-    Eine neue Version der Weboberfläche ist bereit.
-    <div>
-      <q-checkbox v-model="showChanges" dense class="q-mt-sm" label="Neuerungen nach dem Neuladen anzeigen" />
-    </div>
-    <template #action>
-      <q-btn flat dense no-caps color="primary" label="Später" @click="snoozeUpdate" />
-      <q-btn flat dense no-caps color="primary" label="Jetzt neu laden" :loading="restarting" @click="applyUpdate" />
-    </template>
-  </q-banner>
 </template>
 
 <script setup>
-import { defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { defineAsyncComponent, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import AppNotice from 'src/shared/ui/AppNotice.vue'
 import { useChangelogStore } from 'src/features/changelog/store'
 import AppLogo from 'src/shared/ui/AppLogo.vue'
 import { useAppearanceStore } from 'src/features/settings/appearance-store'
 import { useAuthStore } from 'stores/auth'
-import { notifyError } from 'src/utils/notifications'
+import { backendUnavailable, notifyError } from 'src/utils/notifications'
 import {
   PWA_UPDATE_EVENT,
   consumePwaChangelog,
@@ -57,12 +55,16 @@ const appearance = useAppearanceStore()
 const changelog = useChangelogStore()
 const route = useRoute()
 const ChangelogDialog = defineAsyncComponent(() => import('src/features/changelog/ChangelogDialog.vue'))
+const noticeArea = ref(null)
+const noticeTarget = shallowRef(null)
+provide('setAppNoticeTarget', (element) => { noticeTarget.value = element })
 const showChanges = ref(true)
 const startupSlow = ref(false)
 const updateAvailable = ref(false)
 const restarting = ref(false)
 let startupTimer = null
 let updateTimer = null
+let noticeObserver
 
 function reload() {
   window.location.reload()
@@ -115,12 +117,24 @@ watch(() => route.matched.length > 0 && auth.authenticated && auth.userId, (user
 }, { immediate: true })
 
 onMounted(() => {
+  // Keep Quasar's notification lifecycle and put its host in the app's layout flow.
+  const notifyHost = document.getElementById('q-notify')
+  if (notifyHost) noticeArea.value.append(notifyHost)
+  // Dialogs are portalled outside the app layout and need the same inset.
+  noticeObserver = new ResizeObserver(() => {
+    document.documentElement.style.setProperty('--app-notice-height', `${noticeArea.value?.offsetHeight || 0}px`)
+  })
+  noticeObserver.observe(noticeArea.value)
   startupTimer = window.setTimeout(() => { startupSlow.value = true }, 3000)
   window.addEventListener(PWA_UPDATE_EVENT, showUpdate)
   void detectWaitingUpdate()
 })
 
 onBeforeUnmount(() => {
+  noticeObserver?.disconnect()
+  document.documentElement.style.removeProperty('--app-notice-height')
+  const notifyHost = noticeArea.value?.querySelector('#q-notify')
+  if (notifyHost) document.body.append(notifyHost)
   window.clearTimeout(startupTimer)
   window.clearTimeout(updateTimer)
   window.removeEventListener(PWA_UPDATE_EVENT, showUpdate)
@@ -134,13 +148,4 @@ onBeforeUnmount(() => {
   color: var(--app-text);
 }
 
-.pwa-update-banner {
-  position: fixed;
-  z-index: 7000;
-  right: max(16px, env(safe-area-inset-right));
-  bottom: max(16px, env(safe-area-inset-bottom));
-  left: max(16px, env(safe-area-inset-left));
-  max-width: 560px;
-  margin-left: auto;
-}
 </style>

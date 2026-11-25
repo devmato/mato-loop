@@ -145,11 +145,11 @@ describe('projects store', () => {
     expect(api.post).toHaveBeenCalledWith('/projects', {
       name: project.name,
       instructions: project.instructions
-    })
+    }, undefined)
     expect(api.patch).toHaveBeenCalledWith('/projects/project-1', {
       name: renamed.name,
       instructions: renamed.instructions
-    })
+    }, undefined)
     expect(api.delete).toHaveBeenCalledWith('/projects/project-1', {
       params: { permanent: false, automationImpact: 'impact-token' }
     })
@@ -170,7 +170,7 @@ describe('projects store', () => {
       name: project.name,
       instructions: project.instructions,
       ...defaults
-    })
+    }, undefined)
   })
 
   it('saves a reordered project list', async () => {

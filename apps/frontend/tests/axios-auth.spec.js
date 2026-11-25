@@ -1,12 +1,17 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
+vi.mock('src/utils/notifications', () => ({
+  notifyBackendReachable: vi.fn(),
+  notifyBackendUnavailable: vi.fn(),
+  notifyError: vi.fn()
+}))
 
 import { api, recoverControlledAuth } from '../src/boot/axios'
 import { useAuthStore } from '../src/stores/auth'
 import { useChatStore } from '../src/features/chat/store'
 import { useVoiceStore } from '../src/features/voice/store'
+import { notifyBackendUnavailable, notifyError } from '../src/utils/notifications'
 
 function storage() {
   const values = new Map()
@@ -19,6 +24,7 @@ function storage() {
 
 describe('Axios auth recovery', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     setActivePinia(createPinia())
     global.window = {
       localStorage: storage(),
@@ -29,6 +35,18 @@ describe('Axios auth recovery', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     delete global.window
+  })
+
+  it.each([
+    ['Service Unavailable', true],
+    [{ error: { code: 'http.serviceUnavailable' } }, false]
+  ])('distinguishes a proxy outage from a structured API error (%j)', async (data, unavailable) => {
+    const error = { code: 'ERR_BAD_RESPONSE', response: { status: 503, data }, config: {} }
+
+    await expect(api.get('/test', { adapter: () => Promise.reject(error) })).rejects.toBe(error)
+
+    expect([notifyBackendUnavailable.mock.calls.length, notifyError.mock.calls.length])
+      .toEqual(unavailable ? [1, 0] : [0, 1])
   })
 
   it('refreshes identity after an admin denial but ignores invalid login credentials', async () => {
