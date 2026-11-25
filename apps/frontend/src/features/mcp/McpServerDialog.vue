@@ -58,7 +58,11 @@
               {{ server?.authStatus === 'authorized' ? 'OAuth-Anmeldung gespeichert.' : 'Melde dich im Browser beim OAuth-Anbieter des MCP-Servers an.' }}
             </q-banner>
             <q-input dense v-model.trim="oauth.scope" outlined label="Scopes (optional)" hint="Leer lassen für die vom MCP-Server angegebenen Scopes; mehrere Scopes mit Leerzeichen trennen." persistent-hint maxlength="1024" :disable="locked" />
-            <q-toggle dense v-model="registeredClient" label="Vorregistrierten Client verwenden" :disable="locked" />
+            <q-toggle v-if="servers.scope === 'instance'" dense v-model="userScoped" label="OAuth-Anmeldung je Benutzer" hint="Client und Endpoint global verwalten; jeder Benutzer meldet sich mit seinem eigenen Konto an." :disable="locked" />
+            <q-toggle dense v-model="registeredClient" label="Vorregistrierten Client verwenden" :disable="locked || userScoped" />
+            <q-banner v-if="userScoped && !registeredClient" rounded class="app-surface-tonal" role="alert">
+              Benutzerbezogene OAuth-Anmeldungen benötigen einen vorregistrierten Client mit Client-ID.
+            </q-banner>
             <template v-if="registeredClient">
               <q-input dense v-model.trim="oauth.client_id" outlined label="Client-ID" maxlength="1024" lazy-rules :rules="[requiredRule]" :disable="locked" />
               <AppSelect dense v-model="oauth.token_endpoint_auth_method" outlined label="Client-Authentifizierung" emit-value map-options :options="clientMethods" :disable="locked" />
@@ -117,6 +121,7 @@ const transportOptions = [
 ]
 const authMode = ref('static')
 const registeredClient = ref(false)
+const userScoped = ref(false)
 const clientSecret = ref('')
 const oauth = reactive({ client_id: '', token_endpoint_auth_method: 'none', scope: '' })
 const authModes = [
@@ -132,10 +137,12 @@ function oauthConfig() {
   return {
     client_id: registeredClient.value ? oauth.client_id : null,
     token_endpoint_auth_method: registeredClient.value ? oauth.token_endpoint_auth_method : 'none',
-    scope: oauth.scope || null
+    scope: oauth.scope || null,
+    user_scoped: userScoped.value
   }
 }
-const needsOAuth = computed(() => transport.value !== 'stdio' && authMode.value === 'oauth' && (
+const configuresUserScopedOAuth = computed(() => servers.scope === 'instance' && userScoped.value)
+const needsOAuth = computed(() => transport.value !== 'stdio' && authMode.value === 'oauth' && !configuresUserScopedOAuth.value && (
   !props.server?.oauth || props.server.authStatus !== 'authorized' || Boolean(clientSecret.value)
   || form.endpoint !== props.server.endpoint
   || JSON.stringify(oauthConfig()) !== JSON.stringify(props.server.oauth)
@@ -160,6 +167,9 @@ function assignForm() {
   })
   authMode.value = props.server?.oauth ? 'oauth' : 'static'
   registeredClient.value = Boolean(props.server?.oauth?.client_id)
+  userScoped.value = props.server?.oauth?.user_scoped === true
+    || (!props.server && servers.scope === 'instance')
+  if (userScoped.value) registeredClient.value = true
   Object.assign(oauth, { client_id: props.server?.oauth?.client_id || '', token_endpoint_auth_method: props.server?.oauth?.token_endpoint_auth_method || 'none', scope: props.server?.oauth?.scope || '' })
   clientSecret.value = ''
 }
@@ -211,6 +221,7 @@ async function save() {
     if (transport.value !== 'stdio' && authMode.value === 'oauth') {
       delete payload.bearerToken
       delete payload.removeBearerToken
+      if (registeredClient.value && clientSecret.value) payload.clientSecret = clientSecret.value
     }
     if (!payload.bearerToken) delete payload.bearerToken
     if (!props.server) delete payload.removeBearerToken
@@ -227,4 +238,7 @@ async function save() {
 }
 
 watch(() => [props.modelValue, props.server], assignForm, { immediate: true })
+watch(userScoped, (enabled) => {
+  if (enabled) registeredClient.value = true
+})
 </script>

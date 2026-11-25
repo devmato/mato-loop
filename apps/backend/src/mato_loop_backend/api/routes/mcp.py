@@ -18,11 +18,16 @@ from mato_loop_backend.integrations.mcp.adapter import McpConfig
 from mato_loop_backend.integrations.mcp.client import McpClientError
 from mato_loop_backend.integrations.mcp.oauth import (
     CALLBACK_PATH,
+    OAUTH_CLIENT_CREDENTIAL_KIND,
     OAUTH_CREDENTIAL_KIND,
     LoginAttempt,
     OAuthConfig,
+    client_template_catalog_ready,
+    delete_user_oauth_credentials,
+    find_user_oauth_credential,
     oauth_logins,
     oauth_status,
+    user_scoped_oauth,
     validate_oauth_url,
 )
 from mato_loop_backend.integrations.mcp.service import McpIntegrationService
@@ -78,6 +83,12 @@ class McpServerRequest(BaseModel):
     )
     enabled: bool = True
     oauth: OAuthConfig | None = None
+    client_secret: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=10_000,
+        validation_alias=AliasChoices("clientSecret", "client_secret"),
+    )
 
     @model_validator(mode="after")
     def validate_connection(self) -> McpServerRequest:
@@ -91,6 +102,7 @@ class McpServerRequest(BaseModel):
                 self.oauth is not None
                 and (self.bearer_token is not None or self.remove_bearer_token)
             )
+            or (self.client_secret is not None and self.oauth is None)
         ):
             raise ValueError("Invalid MCP connection settings")
         return self
@@ -105,13 +117,6 @@ class McpOAuthStartRequest(McpServerCreateRequest):
     integration_id: UUID | None = Field(
         default=None, validation_alias=AliasChoices("integrationId", "integration_id")
     )
-    client_secret: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=10_000,
-        validation_alias=AliasChoices("clientSecret", "client_secret"),
-    )
-
     @model_validator(mode="after")
     def validate_oauth(self):
         try:
@@ -151,7 +156,13 @@ async def _settings(db: AsyncSession, owner_id: UUID | None):
     return settings
 
 
-async def _connection_payload(db, instance: IntegrationInstance, *, deleted_computer=False) -> dict:
+async def _connection_payload(
+    db,
+    instance: IntegrationInstance,
+    *,
+    deleted_computer=False,
+    user_id: UUID | None = None,
+) -> dict:
     if instance.adapter_type == "mcp_stdio":
         return {
             **stdio_payload(instance),
@@ -171,17 +182,45 @@ async def _connection_payload(db, instance: IntegrationInstance, *, deleted_comp
 
     if result["oauth"] is not None:
         result.update(authStatus="authorization_required", hasClientSecret=False)
-        if instance.credential_id:
+        credential = None
+        if config.oauth.user_scoped:
+            if instance.credential_id:
+                try:
+                    template = await load_credential(
+                        db, instance.credential_id, owner_id=None, populate_existing=True
+                    )
+                    if template and template.kind == OAUTH_CLIENT_CREDENTIAL_KIND:
+                        template_payload = read_credential(template)
+                        result["hasClientSecret"] = bool(
+                            template_payload.get("client_info", {}).get("client_secret")
+                        )
+                        result["bootstrapRequired"] = not client_template_catalog_ready(
+                            template_payload, instance
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Invalid MCP OAuth client template for integration %s: %s",
+                        instance.id,
+                        type(exc).__name__,
+                    )
+            if user_id is not None:
+                credential = await find_user_oauth_credential(db, instance, user_id)
+        elif instance.credential_id:
+            credential = await load_credential(
+                db,
+                instance.credential_id,
+                owner_id=instance.owner_id,
+                populate_existing=True,
+            )
+        if credential:
             try:
-                credential = await load_credential(
-                    db, instance.credential_id, owner_id=instance.owner_id, populate_existing=True
-                )
                 if credential and credential.kind == OAUTH_CREDENTIAL_KIND:
                     payload = read_credential(credential)
                     result["authStatus"] = oauth_status(payload)
-                    result["hasClientSecret"] = bool(
-                        payload.get("client_info", {}).get("client_secret")
-                    )
+                    if not config.oauth.user_scoped:
+                        result["hasClientSecret"] = bool(
+                            payload.get("client_info", {}).get("client_secret")
+                        )
             except Exception as exc:
                 logger.warning(
                     "Invalid MCP OAuth credential for integration %s: %s",
@@ -258,7 +297,12 @@ async def list_mcp_servers(
     owned_states = await owned_agent_states(db, user.id) if any(item.adapter_type == "mcp_stdio" for item in settings.instances) else {}
     return {
         "servers": [
-            await _connection_payload(db, instance, deleted_computer=owned_states.get(instance.execution_agent_id, False))
+            await _connection_payload(
+                db,
+                instance,
+                deleted_computer=owned_states.get(instance.execution_agent_id, False),
+                user_id=user.id,
+            )
             for instance in settings.instances
             if instance.integration_type == "mcp" and instance.adapter_type in {"mcp_streamable_http", "mcp_stdio"}
             and (instance.execution_agent_id is None or instance.execution_agent_id in owned_states)
@@ -281,7 +325,12 @@ async def list_visible_mcp_servers(
     return {
         "servers": [
             {
-                **await _connection_payload(db, item, deleted_computer=owned_states.get(item.execution_agent_id, False)),
+                **await _connection_payload(
+                    db,
+                    item,
+                    deleted_computer=owned_states.get(item.execution_agent_id, False),
+                    user_id=user.id,
+                ),
                 "scope": scope,
                 "available": not owned_states.get(item.execution_agent_id, False) and (
                     instance.availability_for("mcp_streamable_http")
@@ -316,6 +365,25 @@ async def create_mcp_server(
         except (McpClientError, IntegrationSettingsError, ExecutionClientError) as exc:
             await db.rollback()
             raise _api_error(exc) from exc
+    if payload.oauth is not None and payload.oauth.user_scoped:
+        if owner_id is not None:
+            raise ApiError(422, "mcp.configurationInvalid")
+        try:
+            instance = await McpIntegrationService.create_user_scoped_oauth(
+                db,
+                name=payload.name,
+                endpoint=str(payload.endpoint),
+                enabled=payload.enabled,
+                oauth=payload.oauth.model_dump(mode="json"),
+                client_secret=payload.client_secret,
+                owner_id=owner_id,
+            )
+        except (McpClientError, IntegrationSettingsError) as exc:
+            await db.rollback()
+            raise _api_error(exc) from exc
+        return await _connection_payload(
+            db, instance, user_id=getattr(user, "id", None)
+        )
     if payload.oauth is not None:
         raise ApiError(409, "mcp.authorizationRequired")
     try:
@@ -331,7 +399,9 @@ async def create_mcp_server(
         await db.rollback()
         logger.warning("MCP server creation failed with %s", type(exc).__name__)
         raise _api_error(exc) from exc
-    return await _connection_payload(db, instance)
+    return await _connection_payload(
+        db, instance, user_id=getattr(user, "id", None)
+    )
 
 
 @router.put("/servers/{integration_id}")
@@ -354,8 +424,50 @@ async def update_mcp_server(
             raise _api_error(exc) from exc
     if current.adapter_type != "mcp_streamable_http":
         raise ApiError(422, "mcp.configurationInvalid")
+    current_config = McpConfig.model_validate(current.config)
+    if (
+        payload.oauth is not None
+        and payload.oauth.user_scoped
+        and (current_config.oauth is None or not current_config.oauth.user_scoped)
+    ):
+        try:
+            instance = await McpIntegrationService.transition_to_user_scoped_oauth(
+                db,
+                integration_id,
+                name=payload.name,
+                endpoint=str(payload.endpoint),
+                enabled=payload.enabled,
+                oauth=payload.oauth.model_dump(mode="json"),
+                client_secret=payload.client_secret,
+                owner_id=owner_id,
+            )
+        except (McpClientError, IntegrationSettingsError) as exc:
+            await db.rollback()
+            raise _api_error(exc) from exc
+        return await _connection_payload(db, instance, user_id=user.id)
+    if (
+        payload.oauth is not None
+        and payload.oauth.user_scoped
+        and current_config.oauth is not None
+        and current_config.oauth.user_scoped
+    ):
+        try:
+            instance = await McpIntegrationService.update_user_scoped_oauth(
+                db,
+                integration_id,
+                name=payload.name,
+                endpoint=str(payload.endpoint),
+                enabled=payload.enabled,
+                oauth=payload.oauth.model_dump(mode="json"),
+                client_secret=payload.client_secret,
+                owner_id=owner_id,
+            )
+        except (McpClientError, IntegrationSettingsError) as exc:
+            await db.rollback()
+            raise _api_error(exc) from exc
+        return await _connection_payload(db, instance, user_id=user.id)
     if payload.oauth is not None:
-        if McpConfig.model_validate(current.config).oauth != payload.oauth:
+        if current_config.oauth != payload.oauth:
             raise ApiError(409, "mcp.authorizationRequired")
     try:
         instance = await McpIntegrationService.update(
@@ -368,12 +480,15 @@ async def update_mcp_server(
             enabled=payload.enabled,
             owner_id=owner_id,
             remove_oauth="oauth" in payload.model_fields_set and payload.oauth is None,
+            user_id=getattr(user, "id", None),
         )
     except (McpClientError, IntegrationSettingsError) as exc:
         await db.rollback()
         logger.warning("MCP server update failed with %s", type(exc).__name__)
         raise _api_error(exc) from exc
-    return await _connection_payload(db, instance)
+    return await _connection_payload(
+        db, instance, user_id=getattr(user, "id", None)
+    )
 
 
 @router.post("/servers/{integration_id}/refresh")
@@ -389,7 +504,11 @@ async def refresh_mcp_server(
         if current.adapter_type == "mcp_stdio":
             return await _connection_payload(db, await refresh_stdio(db, current, user.id))
         return await _connection_payload(
-            db, await McpIntegrationService.refresh(db, integration_id, owner_id=owner_id)
+            db,
+            await McpIntegrationService.refresh(
+                db, integration_id, owner_id=owner_id, user_id=user.id
+            ),
+            user_id=user.id,
         )
     except (McpClientError, IntegrationSettingsError, ExecutionClientError) as exc:
         await db.rollback()
@@ -479,29 +598,84 @@ async def start_mcp_oauth(
     user: Annotated[UserAccount, Depends(require_user)],
     scope: SettingsApiScope = "instance",
 ):
-    owner_id = await _owner_id(db, scope, user)
     try:
-        if (await SettingsStore.load(db, IntegrationSettings)).availability_for(
+        global_settings = await SettingsStore.load(db, IntegrationSettings)
+        if global_settings.availability_for(
             "mcp_streamable_http"
         ) == IntegrationAdapterAvailability.DISABLED:
             raise ApiError(409, "integration.adapterDisabled")
         revision = None
         client_info = None
+        owner_id: UUID | None
+        delegated = False
+        target_delegated = payload.oauth.user_scoped
         if payload.integration_id:
-            current = _mcp_instance(await _settings(db, owner_id), payload.integration_id)
+            if scope == "instance":
+                current = _mcp_instance(
+                    await _settings(db, None), payload.integration_id
+                )
+                delegated = user_scoped_oauth(current)
+                owner_id = None
+                if not delegated or not target_delegated:
+                    owner_id = await _owner_id(db, scope, user)
+            else:
+                owner_id = await _owner_id(db, scope, user)
+                current = _mcp_instance(
+                    await _settings(db, owner_id), payload.integration_id
+                )
             if current.adapter_type != "mcp_streamable_http":
+                raise McpClientError("mcp.configurationInvalid")
+            if not current.enabled:
                 raise McpClientError("mcp.configurationInvalid")
             revision = current.model_dump(mode="json")
             config = McpConfig.model_validate(current.config)
+            if delegated and target_delegated and (
+                config.oauth != payload.oauth
+                or str(config.endpoint) != str(payload.endpoint)
+                or current.name != payload.name
+                or current.enabled != payload.enabled
+                or (payload.client_secret is not None and not user.is_admin)
+            ):
+                raise McpClientError("mcp.oauthConfigurationInvalid")
+            if delegated and not target_delegated and not user.is_admin:
+                raise ApiError(403, "auth.adminRequired")
+            if not delegated and payload.oauth.user_scoped:
+                raise McpClientError("mcp.oauthConfigurationInvalid")
+            matching_client = (
+                config.oauth is not None
+                and config.oauth.model_copy(
+                    update={"user_scoped": target_delegated}
+                )
+                == payload.oauth
+            )
             if (
                 current.credential_id
                 and str(config.endpoint) == str(payload.endpoint)
-                and config.oauth == payload.oauth
+                and matching_client
                 and payload.client_secret is None
             ):
                 credential = await load_credential(db, current.credential_id, owner_id=owner_id)
-                if credential and credential.kind == OAUTH_CREDENTIAL_KIND:
+                if credential and credential.kind in {
+                    OAUTH_CREDENTIAL_KIND,
+                    OAUTH_CLIENT_CREDENTIAL_KIND,
+                }:
                     client_info = read_credential(credential).get("client_info")
+                if delegated and not user.is_admin:
+                    template = await load_credential(
+                        db, current.credential_id, owner_id=None
+                    )
+                    if (
+                        template is None
+                        or template.kind != OAUTH_CLIENT_CREDENTIAL_KIND
+                        or not client_template_catalog_ready(
+                            read_credential(template), current
+                        )
+                    ):
+                        raise McpClientError("mcp.authorizationRequired")
+        else:
+            if payload.oauth.user_scoped:
+                raise McpClientError("mcp.oauthConfigurationInvalid")
+            owner_id = await _owner_id(db, scope, user)
         if (
             payload.oauth.token_endpoint_auth_method != "none"
             and payload.client_secret is None
@@ -509,6 +683,10 @@ async def start_mcp_oauth(
         ):
             raise McpClientError("mcp.oauthConfigurationInvalid")
         redirect_uri = await _callback_uri(db, request)
+        if client_info is not None:
+            client_info = {**client_info, "redirect_uris": [redirect_uri]}
+            if payload.client_secret is not None:
+                client_info["client_secret"] = payload.client_secret
         attempt = LoginAttempt(
             user.id,
             _session_hash(request),
@@ -521,6 +699,7 @@ async def start_mcp_oauth(
             },
             payload.integration_id,
             revision,
+            bootstrap=delegated and target_delegated and user.is_admin,
         )
         # Do not retain a database transaction while waiting for a browser login.
         await db.rollback()
@@ -591,7 +770,14 @@ async def finish_mcp_oauth(
     claimed = False
     try:
         attempt = oauth_logins.get(attempt_id, user.id, _session_hash(request))
-        await _owner_id(db, "personal" if attempt.owner_id is not None else "instance", user)
+        delegated = (
+            attempt.owner_id is None
+            and attempt.draft.get("oauth", {}).get("user_scoped") is True
+        )
+        if not delegated:
+            await _owner_id(
+                db, "personal" if attempt.owner_id is not None else "instance", user
+            )
         if (await SettingsStore.load(db, IntegrationSettings)).availability_for(
             "mcp_streamable_http"
         ) == IntegrationAdapterAvailability.DISABLED:
@@ -603,7 +789,7 @@ async def finish_mcp_oauth(
         if attempt.timer:
             attempt.timer.cancel()
         instance = await McpIntegrationService.complete_oauth(db, attempt)
-        return await _connection_payload(db, instance)
+        return await _connection_payload(db, instance, user_id=user.id)
     except (McpClientError, IntegrationSettingsError) as exc:
         await db.rollback()
         raise _api_error(exc) from exc
@@ -632,8 +818,20 @@ async def disconnect_mcp_oauth(
     user: Annotated[UserAccount, Depends(require_user)],
     scope: SettingsApiScope = "instance",
 ):
-    owner_id = await _owner_id(db, scope, user)
+    owner_id: UUID | None = await _owner_id(db, scope, user) if scope == "personal" else None
     try:
+        if scope == "instance":
+            current = _mcp_instance(
+                await _settings(db, None), integration_id
+            )
+            if current.adapter_type == "mcp_streamable_http" and user_scoped_oauth(current):
+                await delete_user_oauth_credentials(
+                    db, integration_id, user_id=user.id
+                )
+                await db.commit()
+                return
+            if not user.is_admin:
+                raise ApiError(403, "auth.adminRequired")
         await McpIntegrationService.disconnect_oauth(db, integration_id, owner_id=owner_id)
     except IntegrationSettingsError as exc:
         await db.rollback()

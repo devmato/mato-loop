@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.integrations.mcp.adapter import (
@@ -11,11 +12,17 @@ from mato_loop_backend.integrations.mcp.adapter import (
 )
 from mato_loop_backend.integrations.mcp.client import McpClient, McpClientError
 from mato_loop_backend.integrations.mcp.oauth import (
+    OAUTH_CLIENT_CREDENTIAL_KIND,
     OAUTH_CREDENTIAL_KIND,
     connection_token,
+    delete_user_oauth_credentials,
+    find_user_oauth_credential,
+    lock_user_oauth_credential,
     mark_authorization_required,
+    oauth_payload_without_shared_secret,
     oauth_status,
     rebind_oauth_endpoint,
+    user_scoped_oauth,
 )
 from mato_loop_backend.integrations.registry import validate_integration
 from mato_loop_backend.integrations.service import (
@@ -28,6 +35,8 @@ from mato_loop_backend.integrations.service import (
 )
 from mato_loop_backend.security import (
     delete_credential,
+    load_credential,
+    read_credential,
     store_credential,
 )
 from mato_loop_backend.settings import IntegrationInstance
@@ -35,6 +44,8 @@ from mato_loop_backend.settings import IntegrationInstance
 
 async def delete_connection(db, settings, instance: IntegrationInstance, owner_id: UUID | None) -> None:
     settings.instances = [item for item in settings.instances if item.id != instance.id]
+    if user_scoped_oauth(instance):
+        await delete_user_oauth_credentials(db, instance.id)
     if instance.credential_id is not None:
         await delete_credential(db, instance.credential_id, owner_id=owner_id)
     tools = await _load_tools(db, owner_id, for_update=True)
@@ -115,14 +126,16 @@ class McpIntegrationService:
             raise McpClientError("mcp.invalidResponse") from exc
 
     @classmethod
-    async def _discover_instance(cls, db, instance):
+    async def _discover_instance(cls, db, instance, *, user_id: UUID | None = None):
         config = cls.config_model.model_validate(instance.config)
-        token = await connection_token(db, instance)
+        token = await connection_token(db, instance, user_id=user_id)
         cls._validate_connection(str(config.endpoint), token)
         return await cls._discover(
             str(config.endpoint),
             token,
-            authentication_failed=(lambda: mark_authorization_required(instance, token))
+            authentication_failed=(
+                lambda: mark_authorization_required(instance, token, user_id)
+            )
             if config.oauth
             else None,
         )
@@ -165,6 +178,223 @@ class McpIntegrationService:
         return instance
 
     @classmethod
+    async def create_user_scoped_oauth(
+        cls,
+        db: AsyncSession,
+        *,
+        name: str,
+        endpoint: str,
+        enabled: bool,
+        oauth: dict,
+        client_secret: str | None,
+        owner_id: UUID | None,
+    ) -> IntegrationInstance:
+        if owner_id is not None or oauth.get("user_scoped") is not True:
+            raise IntegrationSettingsError("mcp.configurationInvalid")
+        method = oauth.get("token_endpoint_auth_method", "none")
+        if (method == "none") != (client_secret is None):
+            raise IntegrationSettingsError("mcp.oauthConfigurationInvalid")
+        endpoint = cls._validate_connection(endpoint, None)
+        config = cls.config_model(endpoint=endpoint, oauth=oauth).model_dump(mode="json")
+        settings = await _load_integrations(db, owner_id, for_update=True)
+        instance = IntegrationInstance(
+            name=name,
+            integration_type=cls.integration_type,
+            adapter_type=cls.adapter_type,
+            enabled=enabled,
+            config=config,
+        )
+        instance.owner_id = None
+        validate_integration(instance)
+        credential = await store_credential(
+            db,
+            owner_id=None,
+            kind=OAUTH_CLIENT_CREDENTIAL_KIND,
+            label=name,
+            payload={
+                "catalog_initialized": False,
+                "client_info": {
+                    "client_id": oauth.get("client_id"),
+                    "client_secret": client_secret,
+                    "token_endpoint_auth_method": method,
+                    "scope": oauth.get("scope"),
+                    "client_name": "MatoLoop",
+                }
+            },
+        )
+        instance.credential_id = credential.id
+        settings.instances.append(instance)
+        await _save_settings(db, settings, owner_id)
+        await db.commit()
+        return instance
+
+    @classmethod
+    async def update_user_scoped_oauth(
+        cls,
+        db: AsyncSession,
+        integration_id: UUID,
+        *,
+        name: str,
+        endpoint: str,
+        enabled: bool,
+        oauth: dict,
+        client_secret: str | None,
+        owner_id: UUID | None,
+    ) -> IntegrationInstance:
+        if owner_id is not None or oauth.get("user_scoped") is not True:
+            raise IntegrationSettingsError("mcp.configurationInvalid")
+        initial = await _load_integrations(db, owner_id)
+        current = cls._find(initial, integration_id)
+        if current is None or not user_scoped_oauth(current):
+            raise IntegrationSettingsError("mcp.notFound")
+        current.owner_id = None
+        revision = current.model_dump(mode="json")
+        current_config = cls.config_model.model_validate(current.config)
+        template = await load_credential(
+            db, current.credential_id, owner_id=None, populate_existing=True
+        )
+        if template is None or template.kind != OAUTH_CLIENT_CREDENTIAL_KIND:
+            raise IntegrationSettingsError("mcp.oauthConfigurationInvalid")
+        client_info = dict(read_credential(template).get("client_info") or {})
+        if client_secret is not None:
+            client_info["client_secret"] = client_secret
+        method = oauth.get("token_endpoint_auth_method", "none")
+        if method == "none":
+            if client_secret is not None:
+                raise IntegrationSettingsError("mcp.oauthConfigurationInvalid")
+            client_info.pop("client_secret", None)
+        if method != "none" and not client_info.get("client_secret"):
+            raise IntegrationSettingsError("mcp.oauthConfigurationInvalid")
+        client_info.update(
+            client_id=oauth.get("client_id"),
+            token_endpoint_auth_method=method,
+            scope=oauth.get("scope"),
+        )
+        endpoint = cls._validate_connection(endpoint, None)
+        config = cls.config_model(
+            endpoint=endpoint,
+            oauth=oauth,
+            tools=[item.model_dump(mode="json") for item in current_config.tools],
+        ).model_dump(mode="json")
+
+        settings = await _load_integrations(db, owner_id, for_update=True)
+        instance = cls._find(settings, integration_id)
+        if instance is None or instance.model_dump(mode="json") != revision:
+            raise IntegrationSettingsError("integration.changed")
+        binding_changed = instance.config != config or client_secret is not None
+        instance.name = name
+        instance.enabled = enabled
+        instance.config = config
+        validate_integration(instance)
+        # A new template ID invalidates login attempts bound to the old configuration.
+        credential = await store_credential(
+            db,
+            owner_id=None,
+            kind=OAUTH_CLIENT_CREDENTIAL_KIND,
+            label=name,
+            payload={
+                "catalog_initialized": (
+                    read_credential(template).get("catalog_initialized", False)
+                    if not binding_changed
+                    else False
+                ),
+                "client_info": client_info,
+            },
+            credential=None if binding_changed else template,
+        )
+        instance.credential_id = credential.id
+        if binding_changed:
+            await delete_credential(db, template.id, owner_id=None)
+            await delete_user_oauth_credentials(db, integration_id)
+            await cls._clear_binding_policies(db, instance)
+        await _save_settings(db, settings, owner_id)
+        await db.commit()
+        return instance
+
+    @classmethod
+    async def transition_to_user_scoped_oauth(
+        cls,
+        db: AsyncSession,
+        integration_id: UUID,
+        *,
+        name: str,
+        endpoint: str,
+        enabled: bool,
+        oauth: dict,
+        client_secret: str | None,
+        owner_id: UUID | None,
+    ) -> IntegrationInstance:
+        if owner_id is not None or oauth.get("user_scoped") is not True:
+            raise IntegrationSettingsError("mcp.configurationInvalid")
+        initial = await _load_integrations(db, owner_id)
+        current = cls._find(initial, integration_id)
+        if current is None or user_scoped_oauth(current):
+            raise IntegrationSettingsError("mcp.notFound")
+        current.owner_id = None
+        revision = current.model_dump(mode="json")
+        current_config = cls.config_model.model_validate(current.config)
+        method = oauth.get("token_endpoint_auth_method", "none")
+        client_info = {
+            "client_id": oauth.get("client_id"),
+            "token_endpoint_auth_method": method,
+            "scope": oauth.get("scope"),
+            "client_name": "MatoLoop",
+        }
+        if client_secret is not None:
+            client_info["client_secret"] = client_secret
+        elif current.credential_id:
+            previous = await load_credential(
+                db, current.credential_id, owner_id=None, populate_existing=True
+            )
+            if previous and previous.kind == OAUTH_CREDENTIAL_KIND:
+                previous_payload = read_credential(previous)
+                previous_info = previous_payload.get("client_info") or {}
+                if previous_info.get("client_id") == oauth.get("client_id"):
+                    client_info["client_secret"] = previous_info.get("client_secret")
+        if method != "none" and not client_info.get("client_secret"):
+            raise IntegrationSettingsError("mcp.oauthConfigurationInvalid")
+        if method == "none":
+            client_info.pop("client_secret", None)
+        endpoint = cls._validate_connection(endpoint, None)
+        endpoint_changed = endpoint != str(current_config.endpoint)
+        tools = [] if endpoint_changed else [
+            item.model_dump(mode="json") for item in current_config.tools
+        ]
+        config = cls.config_model(
+            endpoint=endpoint, oauth=oauth, tools=tools
+        ).model_dump(mode="json")
+
+        settings = await _load_integrations(db, owner_id, for_update=True)
+        instance = cls._find(settings, integration_id)
+        if instance is None or instance.model_dump(mode="json") != revision:
+            raise IntegrationSettingsError("integration.changed")
+        old_credential_id = instance.credential_id
+        template = await store_credential(
+            db,
+            owner_id=None,
+            kind=OAUTH_CLIENT_CREDENTIAL_KIND,
+            label=name,
+            payload={
+                "catalog_initialized": not endpoint_changed
+                and bool(current_config.tools),
+                "client_info": client_info,
+            },
+        )
+        instance.name = name
+        instance.enabled = enabled
+        instance.config = config
+        instance.credential_id = template.id
+        instance.owner_id = None
+        validate_integration(instance)
+        if old_credential_id is not None:
+            await delete_credential(db, old_credential_id, owner_id=None)
+        await delete_user_oauth_credentials(db, integration_id)
+        await cls._clear_binding_policies(db, instance)
+        await _save_settings(db, settings, owner_id)
+        await db.commit()
+        return instance
+
+    @classmethod
     async def update(
         cls,
         db: AsyncSession,
@@ -178,6 +408,7 @@ class McpIntegrationService:
         owner_id: UUID | None,
         remove_oauth: bool = False,
         expected_instance: IntegrationInstance | None = None,
+        user_id: UUID | None = None,
     ) -> IntegrationInstance:
         initial = await _load_integrations(db, owner_id)
         current = cls._find(initial, integration_id)
@@ -191,13 +422,15 @@ class McpIntegrationService:
             if str(current_config.endpoint) != endpoint or token is not None or remove_token:
                 raise McpClientError("mcp.authorizationRequired")
             if enabled:
-                endpoint, tools = await cls._discover_instance(db, current)
+                endpoint, tools = await cls._discover_instance(
+                    db, current, user_id=user_id
+                )
             else:
                 tools = [item.model_dump(mode="json") for item in current_config.tools]
         else:
             discovery_token = token
             if discovery_token is None and not remove_token and current_config.oauth is None:
-                discovery_token = await connection_token(db, current)
+                discovery_token = await connection_token(db, current, user_id=user_id)
             endpoint = cls._validate_connection(endpoint, discovery_token)
             endpoint, tools = await cls._discover(endpoint, discovery_token)
 
@@ -222,6 +455,8 @@ class McpIntegrationService:
         }
         if remove_oauth:
             instance.config.pop("oauth", None)
+            if user_scoped_oauth(current):
+                await delete_user_oauth_credentials(db, integration_id)
         validate_integration(instance)
         if token is not None:
             credential = await store_credential(
@@ -249,7 +484,12 @@ class McpIntegrationService:
 
     @classmethod
     async def refresh(
-        cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None
+        cls,
+        db: AsyncSession,
+        integration_id: UUID,
+        *,
+        owner_id: UUID | None,
+        user_id: UUID | None = None,
     ) -> IntegrationInstance:
         initial = await _load_integrations(db, owner_id)
         current = cls._find(initial, integration_id)
@@ -257,7 +497,7 @@ class McpIntegrationService:
             raise IntegrationSettingsError("mcp.notFound")
         current.owner_id = owner_id
         revision = current.model_dump(mode="json")
-        endpoint, tools = await cls._discover_instance(db, current)
+        endpoint, tools = await cls._discover_instance(db, current, user_id=user_id)
 
         settings = await _load_integrations(db, owner_id, for_update=True)
         instance = cls._find(settings, integration_id)
@@ -267,7 +507,10 @@ class McpIntegrationService:
             raise IntegrationSettingsError("integration.changed")
         endpoint_changed = instance.config["endpoint"] != endpoint
         if instance.config.get("oauth") is not None and endpoint_changed:
-            await rebind_oauth_endpoint(db, instance, endpoint)
+            if user_scoped_oauth(instance):
+                await delete_user_oauth_credentials(db, instance.id)
+            else:
+                await rebind_oauth_endpoint(db, instance, endpoint)
         instance.config["endpoint"] = endpoint
         instance.config["tools"] = tools
         validate_integration(instance)
@@ -305,10 +548,94 @@ class McpIntegrationService:
             raise McpClientError("mcp.authorizationRequired")
         settings = await _load_integrations(db, attempt.owner_id, for_update=True)
         instance = cls._find(settings, attempt.integration_id) if attempt.integration_id else None
-        if attempt.integration_id and (
-            instance is None or instance.model_dump(mode="json") != attempt.revision
+        delegated_target = attempt.draft.get("oauth", {}).get("user_scoped") is True
+        delegated = instance is not None and user_scoped_oauth(instance) and delegated_target
+        if attempt.integration_id and instance is None:
+            raise IntegrationSettingsError("integration.changed")
+        if instance is not None and delegated:
+            revision = instance.model_dump(mode="json")
+            expected = attempt.revision or {}
+            if any(
+                value != expected.get(key)
+                for key, value in revision.items()
+                if key != "config"
+            ) or revision.get("credential_id") != expected.get("credential_id") or {
+                key: value
+                for key, value in revision.get("config", {}).items()
+                if key != "tools"
+            } != {
+                key: value
+                for key, value in expected.get("config", {}).items()
+                if key != "tools"
+            }:
+                raise IntegrationSettingsError("integration.changed")
+        elif (
+            attempt.integration_id
+            and instance.model_dump(mode="json") != attempt.revision
         ):
             raise IntegrationSettingsError("integration.changed")
+        if delegated:
+            if attempt.integration_id is None or attempt.owner_id is not None:
+                raise McpClientError("mcp.oauthConfigurationInvalid")
+            instance.owner_id = None
+            await lock_user_oauth_credential(db, instance.id, attempt.user_id)
+            previous = await find_user_oauth_credential(
+                db, instance, attempt.user_id, for_update=True
+            )
+            if attempt.bootstrap:
+                template = await load_credential(
+                    db, instance.credential_id, owner_id=None, populate_existing=True
+                )
+                if template is None or template.kind != OAUTH_CLIENT_CREDENTIAL_KIND:
+                    raise McpClientError("mcp.oauthConfigurationInvalid")
+                template_payload = read_credential(template)
+                await store_credential(
+                    db,
+                    owner_id=None,
+                    kind=template.kind,
+                    label=template.label,
+                    payload={**template_payload, "catalog_initialized": True},
+                    credential=template,
+                )
+            elif not attempt.payload:
+                raise McpClientError("mcp.oauthFailed")
+            else:
+                canonical_endpoint = attempt.payload.get("endpoint")
+                if not canonical_endpoint or httpx.URL(canonical_endpoint) != httpx.URL(
+                    instance.config["endpoint"]
+                ):
+                    raise IntegrationSettingsError("integration.changed")
+            await store_credential(
+                db,
+                owner_id=attempt.user_id,
+                kind=OAUTH_CREDENTIAL_KIND,
+                label=attempt.draft["name"],
+                payload=oauth_payload_without_shared_secret(attempt.payload),
+                metadata={"integration_id": str(instance.id)},
+                credential=previous,
+            )
+            if attempt.bootstrap:
+                instance.config = {
+                    **instance.config,
+                    "endpoint": attempt.draft["endpoint"],
+                    "tools": attempt.tools or [],
+                }
+                validate_integration(instance)
+                tool_settings = await _load_tools(db, None, for_update=True)
+                resource_keys = {
+                    mcp_resource_key(tool["name"])
+                    for tool in instance.config["tools"]
+                }
+                if cls._prune_tool_state(tool_settings, instance, resource_keys):
+                    await _save_settings(db, tool_settings, None)
+                if any(
+                    instance.config.get(key) != attempt.revision.get("config", {}).get(key)
+                    for key in ("endpoint", "tools")
+                ):
+                    await cls._clear_binding_policies(db, instance)
+            await _save_settings(db, settings, attempt.owner_id)
+            await db.commit()
+            return instance
         if instance is None:
             instance = IntegrationInstance(
                 name=attempt.draft["name"],
@@ -318,6 +645,8 @@ class McpIntegrationService:
             settings.instances.append(instance)
         instance.owner_id = attempt.owner_id
         old_credential_id = instance.credential_id
+        if user_scoped_oauth(instance):
+            await delete_user_oauth_credentials(db, instance.id)
         credential = await store_credential(
             db,
             owner_id=attempt.owner_id,
