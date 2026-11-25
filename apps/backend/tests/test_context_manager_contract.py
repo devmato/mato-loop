@@ -1208,6 +1208,83 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
     assert json.dumps(retained) == json.dumps(bodies[0])
 
 
+@pytest.mark.parametrize("serialize, history_key, api_type", [
+    (service_module._chat_body, "messages", "chat_completions"),
+    (service_module._responses_body, "input", "responses"),
+])
+@pytest.mark.parametrize("pseudonymization_enabled", [False, True])
+async def test_readback_makes_progress_under_context_pressure_without_rewriting_the_prefix(
+    serialize, history_key, api_type, pseudonymization_enabled,
+) -> None:
+    session = _session()
+    model = _model(context_window_tokens=5_000, max_output_tokens=512)
+    provider = LlmProviderConfig(
+        id=model.provider_id, name="Test", adapter_type="openai-compatible", config={"api_type": api_type},
+        pseudonymization_enabled=pseudonymization_enabled,
+    )
+    privacy_cache = service_module.ProtectionCache()
+
+    async def prepare(messages):
+        return await ProviderService.prepare_request(
+            provider=provider, model=model, tools=[], messages=messages,
+            pseudonymization_key=b"r" * 32, pseudonymization_cache=privacy_cache,
+        )
+
+    async def estimate(messages):
+        return (await prepare(messages)).estimated_input_tokens
+
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+
+    async def build(records):
+        return await ContextManager.build(
+            db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+            model=model, settings=_settings(), estimate_request=estimate,
+            summarize=AsyncMock(side_effect=AssertionError("A shorter readback should fit without compaction")),
+            pseudonymization_enabled=pseudonymization_enabled,
+        )
+
+    tab_id = str(uuid4())
+    user = _message(session.id, "user", "Inspect the open tab.")
+    call = _message(session.id, "assistant", "")
+    call.tool_calls = [{"id": "tabs", "name": "browser_tabs", "arguments": {"action": "list"}}]
+    source = _message(session.id, "tool", json.dumps({"tabId": tab_id, "tabs": [{"id": tab_id, "title": "x" * 6_000}]}))
+    source.tool_call_id = "tabs"
+    source.provider_data = {"_matoloop": {"contextOutputOmitted": True}}
+    records = [user, call, source]
+    before = serialize((await prepare((await build(records)).messages)).request)
+
+    reader = _message(session.id, "assistant", "")
+    reader.tool_calls = [{"id": "reader", "name": "session_tool_result_read",
+                          "arguments": {"message_id": str(source.id), "offset": 0}}]
+    original = _tool_result_page(source, "browser_tabs", 0, TrustLevel.PUBLIC)
+    result = _message(session.id, "tool", json.dumps(original))
+    result.tool_call_id = "reader"
+    records.extend([reader, result])
+    projected = await build(records)
+    prepared = await prepare(projected.messages)
+    page = json.loads(prepared.request.messages[-1]["content"])
+    assert tab_id in page["content"]
+    assert page["content"] == original["content"][:page["nextOffset"]]
+    assert page["hasMore"] and 0 < page["nextOffset"] < original["totalCharacters"]
+    fitted = serialize(prepared.request)
+    assert json.dumps({**fitted, history_key: fitted[history_key][:len(before[history_key])]}) == json.dumps(before)
+
+    # Re-project on the next tool round, then on a follow-up from saved metadata.
+    probe = _message(session.id, "assistant", "")
+    probe.tool_calls = [{"id": "probe", "name": "browser_snapshot", "arguments": {"tabId": tab_id}}]
+    snapshot = _message(session.id, "tool", '{"text":"page"}')
+    snapshot.tool_call_id = "probe"
+    records.extend([probe, snapshot])
+    round_two = serialize((await prepare((await build(records)).messages)).request)
+    assert json.dumps(round_two[history_key][:len(fitted[history_key])]) == json.dumps(fitted[history_key])
+    for record in records:
+        record.provider_data = json.loads(json.dumps(record.provider_data, sort_keys=True))
+    followup = serialize((await prepare((await build([
+        *records, _message(session.id, "user", "Continue."),
+    ])).messages)).request)
+    assert json.dumps({**followup, history_key: followup[history_key][:len(fitted[history_key])]}) == json.dumps(fitted)
+
 def test_generic_preview_keeps_readback_reference_under_context_pressure() -> None:
     session = _session()
     call = _message(session.id, "assistant", "")
@@ -1218,6 +1295,25 @@ def test_generic_preview_keeps_readback_reference_under_context_pressure() -> No
         "System", None, [call, result], TrustLevel.PRIVATE, current_turn_tool_output_tokens=500,
     )
     assert json.loads(messages[-1]["content"])["toolResultReference"]["arguments"]["message_id"] == str(result.id)
+
+
+def test_new_browser_tab_keeps_its_id_and_readback_reference_under_pressure() -> None:
+    session = _session()
+    tab_id = str(uuid4())
+    call = _message(session.id, "assistant", "")
+    call.tool_calls = [{"id": "open", "name": "browser_tabs", "arguments": {"action": "new"}}]
+    result = _message(session.id, "tool", json.dumps({
+        "tabId": tab_id, "text": "- button: Weiter\n" * 500,
+        "playwrightCode": {"completed": "page = await page.context.new_page()"},
+    }))
+    result.tool_call_id = "open"
+    messages = _projection_messages(
+        "System", None, [call, result], TrustLevel.PRIVATE, current_turn_tool_output_tokens=25,
+    )
+    page = json.loads(messages[-1]["content"])
+    assert (page["tabId"], page["toolResultReference"]["arguments"]) == (
+        tab_id, {"message_id": str(result.id), "offset": 0},
+    )
 
 
 @pytest.mark.parametrize("source", ["builtin", "shared", "execution", "dynamic"])

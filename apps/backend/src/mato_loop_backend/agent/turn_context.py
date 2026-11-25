@@ -24,7 +24,11 @@ from mato_loop_backend.models import AgentRun, ChatSession, Message
 from mato_loop_backend.providers.base import ProviderImageInput
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import AgentRuntimeSettings, AiSettings, InstanceLimits
-from mato_loop_backend.settings.models import ModelConfig, TrustLevel
+from mato_loop_backend.settings.models import (
+    ModelConfig,
+    TrustLevel,
+    effective_model_pseudonymization,
+)
 
 
 async def build_turn_context(
@@ -81,6 +85,9 @@ async def build_turn_context(
         )
 
     token_ratio = 1.0
+    pseudonymization_enabled = request_options.get("pseudonymization_enabled")
+    if pseudonymization_enabled is None:
+        pseudonymization_enabled = effective_model_pseudonymization(request_options["provider"], model)
     server_counts: dict[str, int] = {}
     counting_available: bool | None = None
     prepared_request = None
@@ -170,6 +177,7 @@ async def build_turn_context(
                     settings=settings,
                     attachment_service=attachment_service(settings=instance_limits, run_id=run.id),
                     pdf_context=pdf_context,
+                    pseudonymization_enabled=pseudonymization_enabled,
                     summarize=summarize,
                     estimate_request=estimate_request,
                     live_tool_calls=live_tool_calls,

@@ -26,39 +26,44 @@ from presidio_analyzer.predefined_recognizers import (
 
 _PROTECTION_CACHE_MAX_BYTES = 16 * 1024 * 1024
 _SESSION_PROTECTION_CACHE_MAX_BYTES = 64 * 1024 * 1024
+READBACK_LIMIT = "_matoloopProtectedReadbackLimit"
 
 
 class ProtectionCache:
     def __init__(self, max_bytes: int = _PROTECTION_CACHE_MAX_BYTES) -> None:
         self._entries: OrderedDict[
-            tuple[bytes, str, str | None], tuple[str, dict[str, str], int]
+            tuple[bytes, str, str | None], tuple[str, dict[str, str], tuple[tuple[int, int], ...], int]
         ] = OrderedDict()
         self._size_bytes = 0
         self._lock = Lock()
         self._max_bytes = max_bytes
 
-    def get(self, key: tuple[str, str | None]) -> tuple[str, dict[str, str]] | None:
+    def get(self, key: tuple[bytes, str, str | None]) -> tuple[str, dict[str, str], tuple[tuple[int, int], ...]] | None:
         with self._lock:
             entry = self._entries.get(key)
             if entry is not None:
                 self._entries.move_to_end(key)
-                return entry[0], entry[1]
+                return entry[:3]
         return None
 
-    def store(self, key: tuple[str, str | None], protected: str, originals: dict[str, str]) -> None:
+    def store(
+        self, key: tuple[bytes, str, str | None], protected: str, originals: dict[str, str],
+        spans: tuple[tuple[int, int], ...],
+    ) -> None:
         # Allow for containers and conservatively count shared strings twice.
         size = (256 + sum(getsizeof(value) for value in (*key, protected)) + getsizeof(originals)
-                + sum(getsizeof(marker) + getsizeof(original) for marker, original in originals.items()))
+                + getsizeof(spans) + sum(getsizeof(span) + sum(map(getsizeof, span)) for span in spans)
+                 + sum(getsizeof(marker) + getsizeof(original) for marker, original in originals.items()))
         if size > self._max_bytes:
             return
         with self._lock:
             previous = self._entries.pop(key, None)
             if previous is not None:
-                self._size_bytes -= previous[2]
+                self._size_bytes -= previous[-1]
             while self._size_bytes + size > self._max_bytes:
                 _, oldest = self._entries.popitem(last=False)
-                self._size_bytes -= oldest[2]
-            self._entries[key] = (protected, originals, size)
+                self._size_bytes -= oldest[-1]
+            self._entries[key] = (protected, originals, spans, size)
             self._size_bytes += size
 
 
@@ -243,6 +248,7 @@ class RequestPseudonymizer:
             protected = copy.deepcopy(messages)
             for message in protected:
                 content = message.get("content")
+                readback_limit = message.pop(READBACK_LIMIT, None)
                 if isinstance(content, str):
                     if message.get("role") == "tool":
                         try:
@@ -251,7 +257,11 @@ class RequestPseudonymizer:
                             message["content"] = self.protect_text(content)
                         else:
                             # Store decoded originals so tool arguments restore real newlines, not JSON escapes.
-                            message["content"] = json.dumps(self.protect_value(value, protect_keys=True), ensure_ascii=False)
+                            if readback_limit is not None:
+                                value = self._protect_readback(value, readback_limit)
+                            else:
+                                value = self.protect_value(value, protect_keys=True)
+                            message["content"] = json.dumps(value, ensure_ascii=False)
                     else:
                         message["content"] = self.protect_text(content)
                 if message.get("role") != "assistant":
@@ -305,19 +315,46 @@ class RequestPseudonymizer:
         return value
 
     def protect_text(self, text: str, *, field_name: str | None = None) -> str:
+        protected, originals, _ = self._protect_text(text, field_name)
+        self._originals.update(originals)
+        return protected
+
+    def _protect_readback(self, page: dict[str, Any], limit: int) -> dict[str, Any]:
+        # Scan the whole authorized page before trimming. Include any intersected
+        # marker in full and advance the cursor in source characters.
+        protected, originals, spans = self._protect_text(page["content"], "content")
+        limit = min(limit, len(page["content"]))
+        adjustment = 0
+        for start, end in spans:
+            if start >= limit:
+                break
+            limit = max(limit, end)
+            position = start + adjustment
+            marker = protected[position:position + self.max_marker_length]
+            self._originals[marker] = originals[marker]
+            adjustment += self.max_marker_length - (end - start)
+        end = page["offset"] + limit
+        has_more = end < page["totalCharacters"]
+        result = self.protect_value({
+            **page, "content": "", "hasMore": has_more, "nextOffset": end if has_more else None,
+        }, protect_keys=True)
+        result[self.protect_text("content")] = protected[:limit + adjustment]
+        return result
+
+    def _protect_text(
+        self, text: str, field_name: str | None,
+    ) -> tuple[str, dict[str, str], tuple[tuple[int, int], ...]]:
         if not text:
-            return text
-        cache_key = (text, field_name)
+            return text, {}, ()
+        cache_key = None
         cached = None
         if self._protection_cache is not None:
             if self._protection_cache_key is None:
                 self._protection_cache_key = hmac.digest(self._key, b"matoloop:privacy-text-cache:v1", "sha256")
-            cache_key = (self._protection_cache_key, *cache_key)
+            cache_key = (self._protection_cache_key, text, field_name)
             cached = self._protection_cache.get(cache_key)
         if cached is not None:
-            protected, originals = cached
-            self._originals.update(originals)
-            return protected
+            return cached
         try:
             results = _analyze(text)
             # Keep keyword-based protection for structured fields such as {"password": "value"}.
@@ -346,13 +383,14 @@ class RequestPseudonymizer:
             identity = json.dumps((result.entity_type, original), ensure_ascii=False).encode()
             digest = hmac.digest(self._key, identity, "sha256").hex()[:32].upper()
             marker = f"{self.marker_prefix}{digest}]]"
-            if marker in self._originals and self._originals[marker] != original:
+            if detected.get(marker, self._originals.get(marker, original)) != original:
                 raise PseudonymizationError("privacy.pseudonymizationFailed")
-            self._originals[marker] = detected[marker] = original
+            detected[marker] = original
             protected = protected[: result.start] + marker + protected[result.end :]
-        if self._protection_cache is not None:
-            self._protection_cache.store(cache_key, protected, detected)
-        return protected
+        spans = tuple(sorted(occupied))
+        if self._protection_cache is not None and cache_key is not None:
+            self._protection_cache.store(cache_key, protected, detected, spans)
+        return protected, detected, spans
 
     def restore_text(
         self,

@@ -207,6 +207,55 @@ def test_protection_cache_rescans_only_new_text_and_separates_keys(monkeypatch) 
     assert calls == ["new@example.com", "anna@example.com"]
 
 
+def test_readback_cut_preserves_a_complete_marker_and_source_cursor_on_cache_hit(monkeypatch) -> None:
+    secret = "synthetic-sensitive-value-for-readback"
+    content = "ä=" + secret + " tail"
+    span_end = 2 + len(secret)
+    analyzed = []
+
+    def analyze(text):
+        if text == content:
+            analyzed.append(text)
+            return [pseudonymization_module.RecognizerResult("SECRET", 2, span_end, 1.0)]
+        return []
+
+    monkeypatch.setattr(pseudonymization_module, "_analyze", analyze)
+    cache = ProtectionCache()
+    message = {
+        "role": "tool", pseudonymization_module.READBACK_LIMIT: 5,
+        "content": json.dumps({"content": content, "offset": 100, "totalCharacters": 100 + len(content)}),
+    }
+    for _ in range(2):
+        protector = RequestPseudonymizer(key=b"r" * 32, protection_cache=cache)
+        protected = protector.protect_messages([message])[-1]
+        page = json.loads(protected["content"])
+        assert secret not in page["content"] and pseudonymization_module.READBACK_LIMIT not in protected
+        assert (protector.restore_text(page["content"]), page["nextOffset"], page["hasMore"]) == (
+            content[:span_end], 100 + span_end, True,
+        )
+    assert analyzed == [content]
+
+
+def test_readback_does_not_activate_markers_from_the_omitted_tail(monkeypatch) -> None:
+    secret = "synthetic-sensitive-tail"
+    content = "visible " + secret
+    monkeypatch.setattr(pseudonymization_module, "_analyze", lambda text: [
+        pseudonymization_module.RecognizerResult("SECRET", text.index(secret), len(text), 1.0),
+    ] if secret in text else [])
+    key = b"r" * 32
+    marker = RequestPseudonymizer(key=key).protect_text(secret)
+    protector = RequestPseudonymizer(key=key)
+    messages = protector.protect_messages([
+        {"role": "user", "content": marker},
+        {"role": "tool", pseudonymization_module.READBACK_LIMIT: 8, "content": json.dumps({
+            "content": content, "offset": 0, "totalCharacters": len(content),
+        })},
+    ])
+    protector.retain_transmitted({"messages": messages})
+    with pytest.raises(PseudonymizationError):
+        protector.restore_text(marker)
+
+
 def test_protection_cache_evicts_old_candidates_and_skips_oversized_text(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(pseudonymization_module, "_analyze", lambda text: calls.append(text) or [])

@@ -28,6 +28,7 @@ from mato_loop_backend.media.attachments import (
 )
 from mato_loop_backend.memory.service import memory_visible_to
 from mato_loop_backend.models import ContextSummary, Message
+from mato_loop_backend.privacy.pseudonymization import READBACK_LIMIT
 from mato_loop_backend.settings.models import TrustLevel
 from mato_loop_backend.tools.process_output import redact_process_output
 from mato_loop_backend.tools.references import (
@@ -59,6 +60,7 @@ _OMITTED_TOOL_OUTPUT = "[Historical tool output omitted from the active context.
 _HOST_TOOL_RESULT_REFERENCE = "_matoloopToolResultReference"
 
 _HOST_TOOL_RESULT_FALLBACK = "_matoloopToolResultFallback"
+_HOST_FRESH_READBACK = "_matoloopFreshReadback"
 
 
 _HOST_CHECKLIST_RESULT = "_matoloopChecklistResult"
@@ -761,6 +763,7 @@ def _projection_messages(
     characters_per_token: float = 4.0,
     historical_tool_output_tokens: int = 2_000,
     current_turn_tool_output_tokens: int | None = None,
+    pseudonymization_enabled: bool = False,
     live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
     pdf_context: dict[str, dict] | None = None,
     attachment_text_characters: int = MAX_ATTACHMENT_EXCERPT_CHARACTERS,
@@ -894,6 +897,9 @@ def _projection_messages(
     historical_tool_indices: list[int] = []
     historical_omitted_markers: dict[int, str] = {}
     current_tool_indices: list[int] = []
+    latest_batch_start = next(
+        (index + 1 for index in range(len(records) - 1, -1, -1) if records[index].role != "tool"), 0,
+    )
     browser_inspect_calls: set[str] = set()
     user_edited_tool_arguments = False
     previous_memory_context = None
@@ -1057,6 +1063,19 @@ def _projection_messages(
                         original_references.get(item.id),
                     )
                 current_tool_indices.append(len(messages))
+            if not omitted and item.id in history.reader_sources:
+                page = _readback_page(projected["content"])
+                if page is not None:
+                    limit = (item.provider_data or {}).get("_matoloop", {}).get("readbackPageCharacters")
+                    if pseudonymization_enabled:
+                        projected[READBACK_LIMIT] = len(page["content"])
+                    if type(limit) is int and 0 < limit < len(page["content"]):
+                        if pseudonymization_enabled:
+                            projected[READBACK_LIMIT] = limit
+                        else:
+                            projected["content"] = _readback_prefix(page, limit)
+                    if record_index >= latest_batch_start and record_index >= latest_user_index:
+                        projected[_HOST_FRESH_READBACK] = (item.id, len(page["content"]))
             if tool_name == "webfetch":
                 original_content = str(projected.get("content") or "")
                 projected["content"] = _model_webfetch_result(item.id, original_content)
@@ -1280,6 +1299,17 @@ def _shorten_evidence_output(
                 if len(content) <= max_characters:
                     return content
                 outcome = {"toolOutputShortened": True}
+                if browser.tab_id is not None:
+                    outcome["tabId"] = browser.tab_id
+                if preserve_tool_result_reference:
+                    reference = payload.get("toolResultReference")
+                    if not isinstance(reference, dict) and omitted_marker is not None:
+                        try:
+                            reference = json.loads(omitted_marker).get("toolResultReference")
+                        except (ValueError, AttributeError):
+                            pass
+                    if isinstance(reference, dict):
+                        outcome["toolResultReference"] = reference
                 if browser.batch is not None:
                     outcome["batch"] = browser.batch.model_dump(exclude_none=True)
                 if browser.script is not None:
@@ -1298,8 +1328,6 @@ def _shorten_evidence_output(
                             "truncated": True, "errorCode": browser.playwright_code.error_code,
                         }
                 # Effect/outcome metadata is irreducible, even under a tiny soft text budget.
-                if preserve_tool_result_reference and isinstance(payload.get("toolResultReference"), dict):
-                    outcome["toolResultReference"] = payload["toolResultReference"]
                 if browser.script is None:
                     return serialized(outcome)
                 browser_outcome = serialized(outcome)
@@ -1509,6 +1537,51 @@ def _shorten_evidence_output(
     return None
 
 
+def _readback_page(content: str) -> dict[str, Any] | None:
+    try:
+        page = json.loads(content)
+    except (TypeError, ValueError):
+        return None
+    if (isinstance(page, dict) and isinstance(page.get("content"), str) and page["content"]
+            and type(page.get("offset")) is int and type(page.get("totalCharacters")) is int
+            and 0 <= page["offset"] <= page["totalCharacters"] - len(page["content"])):
+        return page
+    return None
+
+
+def _readback_prefix(page: dict[str, Any], size: int) -> str:
+    end = page["offset"] + size
+    has_more = end < page["totalCharacters"]
+    return json.dumps({
+        **page, "content": page["content"][:size], "hasMore": has_more, "nextOffset": end if has_more else None,
+    }, ensure_ascii=False, separators=(",", ":"))
+
+
+def _fit_readback_page(content: str, max_characters: int, minimum: int) -> str:
+    """Fit a prefix of an authorized page without losing its continuation position."""
+    if len(content) <= max_characters:
+        return content
+    page = json.loads(content)
+    body = page["content"]
+    if len(body) <= minimum:
+        return content
+    best = _readback_prefix(page, minimum)
+    low, high = minimum + 1, len(body) - 1
+    while low <= high:
+        middle = (low + high) // 2
+        candidate = _readback_prefix(page, middle)
+        if len(candidate) <= max_characters:
+            best = candidate
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
+
+
+def _tool_output_fallback(message: dict[str, Any]) -> str | None:
+    return message.get(_HOST_RETAINED_TOOL_RESULT) or message.get(_HOST_TOOL_RESULT_FALLBACK)
+
+
 def _limit_tool_output_tokens(
     messages: list[dict[str, Any]],
     indices: list[int],
@@ -1520,7 +1593,9 @@ def _limit_tool_output_tokens(
     preserve_tool_result_references: bool = False,
     fair_share: bool = False,
 ) -> None:
-    indices = [index for index in indices if not messages[index].get(_HOST_CHECKLIST_RESULT)]
+    indices = [index for index in indices if not (
+        messages[index].get(_HOST_CHECKLIST_RESULT) or messages[index].get(_HOST_FRESH_READBACK)
+    )]
     total = sum(
         estimate_tokens(str(messages[index].get("content") or ""), characters_per_token)
         for index in indices
@@ -1561,6 +1636,11 @@ def _limit_tool_output_tokens(
                     or messages[index].get(_HOST_TOOL_RESULT_FALLBACK)
                 ),
             )
+            if READBACK_LIMIT in messages[index]:
+                # Older protected pages can be omitted, never sliced before scanning.
+                replacement = _tool_output_fallback(messages[index])
+                if replacement is None:
+                    return False
             if replacement is None:
                 keep_characters = max(200, max_characters) - len(_SHORTENED_TOOL_OUTPUT)
                 exact_marker = (omitted_markers or {}).get(index, messages[index].get(_HOST_RETAINED_TOOL_RESULT))
@@ -1576,6 +1656,7 @@ def _limit_tool_output_tokens(
             if replacement == content or after >= before:
                 return False
             messages[index]["content"] = replacement
+            messages[index].pop(READBACK_LIMIT, None)
             return True
 
         for index in indices:
@@ -1623,6 +1704,10 @@ def _limit_tool_output_tokens(
                 or messages[index].get(_HOST_TOOL_RESULT_FALLBACK)
             ),
         )
+        if READBACK_LIMIT in messages[index]:
+            replacement = _tool_output_fallback(messages[index])
+            if replacement is None:
+                continue
         if replacement is None:
             exact_marker = (omitted_markers or {}).get(index, messages[index].get(_HOST_RETAINED_TOOL_RESULT))
             if exact_marker is not None:
@@ -1636,6 +1721,7 @@ def _limit_tool_output_tokens(
         if len(replacement) >= len(content):
             continue
         messages[index]["content"] = replacement
+        messages[index].pop(READBACK_LIMIT, None)
         total += estimate_tokens(replacement, characters_per_token) - before
 
 
@@ -2397,6 +2483,7 @@ def _strip_projection_metadata(messages: list[dict[str, Any]]) -> None:
     for message in messages:
         message.pop(_HOST_TOOL_RESULT_REFERENCE, None)
         message.pop(_HOST_TOOL_RESULT_FALLBACK, None)
+        message.pop(_HOST_FRESH_READBACK, None)
         message.pop(_HOST_CHECKLIST_RESULT, None)
         message.pop(_HOST_RETAINED_TOOL_RESULT, None)
         message.pop(_HOST_RUNTIME_CONTEXT, None)
@@ -2430,6 +2517,7 @@ async def _prune_tool_outputs_to_budget(
         message for message in messages
         if (message.get("role") == "tool" or message.get(_HOST_RETAINED_TOOL_RESULT))
         and not message.get(_HOST_CHECKLIST_RESULT)
+        and not message.get(_HOST_FRESH_READBACK)
     ]
     while estimated > input_budget:
         changed = False
@@ -2450,6 +2538,10 @@ async def _prune_tool_outputs_to_budget(
                     or message.get(_HOST_TOOL_RESULT_FALLBACK)
                 ),
             )
+            if READBACK_LIMIT in message:
+                shortened = _tool_output_fallback(message)
+                if shortened is None:
+                    continue
             if shortened is None:
                 if fallback := message.get(_HOST_RETAINED_TOOL_RESULT):
                     shortened = fallback
@@ -2466,8 +2558,53 @@ async def _prune_tool_outputs_to_budget(
             if len(shortened) >= len(content):
                 continue
             message["content"] = shortened
+            message.pop(READBACK_LIMIT, None)
             estimated = await estimate_request(messages)
             changed = True
         if not changed:
             break
     return estimated
+
+
+async def _fit_fresh_readbacks(
+    messages: list[dict[str, Any]], estimated: int, token_budget: int,
+    characters_per_token: float, estimate_request: EstimateCallback, *, minimum: int = 1024,
+) -> int:
+    """Try the new pages before rewriting any part of the retained prefix."""
+    async def shorten(message: dict[str, Any], content: str, target: int) -> bool:
+        nonlocal estimated
+        shortened = _fit_readback_page(content, target, minimum)
+        if len(shortened) >= len(content):
+            return False
+        if READBACK_LIMIT in message:
+            message[READBACK_LIMIT] = len(json.loads(shortened)["content"])
+        else:
+            message["content"] = shortened
+        estimated = await estimate_request(messages)
+        return True
+
+    for message in reversed(messages):
+        if estimated <= token_budget:
+            break
+        if not message.get(_HOST_FRESH_READBACK):
+            continue
+        page = json.loads(message["content"]) if READBACK_LIMIT in message else None
+        # Recheck measured overflow once; the hard-budget pass may try the smallest page.
+        for attempt in range(3 if minimum == 1 else 2):
+            content = _readback_prefix(page, message[READBACK_LIMIT]) if page is not None else message["content"]
+            overflow = math.ceil((estimated - token_budget) * characters_per_token)
+            target = 0 if attempt == 2 else len(content) - overflow
+            if not await shorten(message, content, target) and minimum != 1:
+                break
+            if estimated <= token_budget:
+                break
+    return estimated
+
+
+def _shortened_readbacks(messages: list[dict[str, Any]]) -> Iterator[tuple[UUID, int]]:
+    for message in messages:
+        if marker := message.get(_HOST_FRESH_READBACK):
+            message_id, full_length = marker
+            size = message[READBACK_LIMIT] if READBACK_LIMIT in message else len(json.loads(message["content"])["content"])
+            if size < full_length:
+                yield message_id, size

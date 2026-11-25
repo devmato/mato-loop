@@ -96,6 +96,7 @@ class ContextManager:
         attachment_service: AttachmentService | None = None,
         tool_snapshots: list[dict[str, Any]] | None = None,
         pdf_context: dict[str, dict] | None = None,
+        pseudonymization_enabled: bool = False,
         available_secret_references: set[str] | None = None,
     ) -> ContextProjection:
         """Budget original projections with raw request estimates, before slack and safety."""
@@ -150,16 +151,30 @@ class ContextManager:
         tool_history = (agent_projection._ToolHistory(list(projection_records.values()))
                         if load_skill_results is not None else None)
 
-        async def persist_omissions() -> None:
-            for item in active_records:
-                if item.id in omitted_tool_result_ids and not getattr(item, "_interleaved_review", False):
-                    data = item.provider_data or {}
-                    item.provider_data = {
-                        **data,
-                        "_matoloop": {**data.get("_matoloop", {}), "contextOutputOmitted": True},
-                    }
-            if omitted_tool_result_ids or pending_summary is not None:
+        async def finish(messages: list[dict[str, Any]], estimated: int, *, compacted: bool = False) -> ContextProjection:
+            readback_limits = dict(agent_projection._shortened_readbacks(messages))
+            changed = False
+            affected = omitted_tool_result_ids | readback_limits.keys()
+            for item in (active_records if affected else ()):
+                if item.id not in affected or getattr(item, "_interleaved_review", False):
+                    continue
+                data = item.provider_data or {}
+                host = data.get("_matoloop", {})
+                updated = dict(host)
+                if item.id in omitted_tool_result_ids:
+                    updated["contextOutputOmitted"] = True
+                if (limit := readback_limits.get(item.id)) is not None:
+                    updated["readbackPageCharacters"] = limit
+                if updated != host:
+                    item.provider_data = {**data, "_matoloop": updated}
+                    changed = True
+            if changed or pending_summary is not None:
                 await db.commit()
+            agent_projection._strip_projection_metadata(messages)
+            return ContextProjection(
+                messages, estimated, input_budget, compacted=compacted, context_summary=pending_summary,
+                reserved_output_tokens=reserved_output_tokens,
+            )
 
         async def project(
             summary: ContextSummary | None, selected: list[Message]
@@ -202,6 +217,7 @@ class ContextManager:
                     include_attachment_text=not tool_schemas,
                     attachment_service=attachment_service,
                     pdf_context=pdf_context,
+                    pseudonymization_enabled=pseudonymization_enabled,
                     attachment_text_characters=attachment_characters,
                     available_records=list(projection_records.values()),
                     characters_per_token=characters_per_token,
@@ -218,6 +234,12 @@ class ContextManager:
                         + runtime_context + "\n</system-reminder>",
                     })
                 total = await estimate_request(messages)
+                if total > trigger_tokens:
+                    # Leave room for the next exchange without changing context limits.
+                    total = await agent_projection._fit_fresh_readbacks(
+                        messages, total, max(0, trigger_tokens - reserved_output_tokens),
+                        characters_per_token, estimate_request,
+                    )
                 if not pdf_context or total <= input_budget or attachment_characters == 0:
                     return messages, total
                 attachment_characters = max(0, min(
@@ -227,11 +249,7 @@ class ContextManager:
 
         messages, estimated = await project(latest, active_records)
         if estimated <= max(1, trigger_tokens):
-            agent_projection._strip_projection_metadata(messages)
-            return ContextProjection(
-                messages, estimated, input_budget,
-                reserved_output_tokens=reserved_output_tokens,
-            )
+            return await finish(messages, estimated)
 
         async def estimate_minimum_request(indices: list[int]) -> int:
             if not indices:
@@ -280,12 +298,7 @@ class ContextManager:
         if omitted_tool_result_ids:
             messages, estimated = await project(latest, active_records)
             if estimated <= trigger_tokens:
-                await persist_omissions()
-                agent_projection._strip_projection_metadata(messages)
-                return ContextProjection(
-                    messages, estimated, input_budget,
-                    reserved_output_tokens=reserved_output_tokens,
-                )
+                return await finish(messages, estimated)
         current_tool_indices = agent_projection._current_tool_output_indices(messages)
         minimum_request_tokens = await estimate_minimum_request(current_tool_indices)
         protected_tool_call_ids = {
@@ -380,17 +393,12 @@ class ContextManager:
                 input_budget=input_budget,
             )
         if estimated > input_budget:
+            estimated = await agent_projection._fit_fresh_readbacks(
+                messages, estimated, input_budget, characters_per_token, estimate_request, minimum=1,
+            )
+        if estimated > input_budget:
             raise ContextError("agent.contextWindowExceeded")
         if pending_summary is not None:
             db.add(pending_summary)
             omitted_tool_result_ids.clear()
-        await persist_omissions()
-        agent_projection._strip_projection_metadata(messages)
-        return ContextProjection(
-            messages,
-            estimated,
-            input_budget,
-            compacted=compacted,
-            context_summary=pending_summary,
-            reserved_output_tokens=reserved_output_tokens,
-        )
+        return await finish(messages, estimated, compacted=compacted)
