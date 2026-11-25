@@ -223,7 +223,7 @@ async def _application_lifespan(_app: FastAPI):
         await asyncio.gather(
             terminal_coordinator.shutdown(), browser_coordinator.shutdown(), AgentRuntime.shutdown(), voice_coordinator.shutdown()
         )
-        await NotificationService.stop_response_pushes()
+        await NotificationService.stop_pushes()
         await oauth_logins.shutdown()
         session_secrets.clear_all()
         await embedding_client.close()

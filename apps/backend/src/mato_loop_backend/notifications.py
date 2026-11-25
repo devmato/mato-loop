@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from asyncio import sleep
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -29,11 +29,12 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.notification_content import NotificationPriority, notification_title
 from mato_loop_backend.sessions.presence import (
-    response_push_delay,
+    presence_remaining,
     session_is_present,
     user_is_present,
 )
 from mato_loop_backend.sessions.state import deleted_session_clause
+from mato_loop_backend.settings import SettingsStore, UserPreferences
 from mato_loop_backend.web_push import (
     WebPushMemoryApprovalTarget,
     WebPushNotificationCenterTarget,
@@ -45,8 +46,20 @@ from mato_loop_backend.web_push import (
 
 SESSION_REQUEST_KINDS = ("approval.requested", "question.requested")
 READ_ONCE_KINDS = ("session.response", *SESSION_REQUEST_KINDS)
+IMMEDIATE_PUSH_KINDS = (*SESSION_REQUEST_KINDS, "memory.approval")
+PUSH_BATCH_SECONDS = 30.0
 logger = logging.getLogger(__name__)
-_pending_response_pushes: dict[UUID, tuple[set[UUID], asyncio.Task[None]]] = {}
+
+
+@dataclass
+class _PushBatch:
+    ready_at: float = 0.0
+    notices: dict[UUID, bool] = field(default_factory=dict)
+    block_changed: asyncio.Event = field(default_factory=asyncio.Event)
+    task: asyncio.Task[None] | None = None
+
+
+_push_batches: dict[UUID, _PushBatch] = {}
 
 
 def _notification_push_payload(item: Notification, *, silent: bool = False) -> WebPushPayload:
@@ -62,30 +75,71 @@ def _notification_push_payload(item: Notification, *, silent: bool = False) -> W
     )
 
 
-async def _deliver_response_push_batch(user_id: UUID, ids: set[UUID], delay: float) -> None:
+async def _wait_for_push(batch: _PushBatch, delay: float) -> None:
     try:
-        await sleep(delay)
-        if user_is_present(user_id):
-            return
+        await asyncio.wait_for(batch.block_changed.wait(), timeout=delay)
+    except TimeoutError:
+        pass
+
+
+async def _send_pending_push(
+    user_id: UUID, notices: dict[UUID, bool], *, batch: _PushBatch | None = None,
+) -> float | None:
+    """Return a deferral in seconds, or None if this set of notices is finished."""
+    delivery = await WebPushService.prepare_delivery(user_id)
+    pending = notices.copy()
+    items = []
+    pause = 0.0
+    if delivery is not None:
         async with AsyncSessionFactory() as db:
-            items = (await db.scalars(select(Notification).join(ChatSession).where(
-                Notification.user_id == user_id, Notification.id.in_(ids),
-                Notification.kind == "session.response", Notification.read_at.is_(None),
-                ~deleted_session_clause(),
-            ))).all()
-        if items:
-            payload = _notification_push_payload(items[0]) if len(items) == 1 else web_push_payload(
-                title=f"{len(items)} neue Session-Hinweise",
-                body="Öffne die Benachrichtigungen, um die ungelesenen Antworten zu sehen.",
-                tag="session-responses", target=WebPushNotificationCenterTarget(type="actions"),
-            )
-            await WebPushService.deliver_after_commit(user_id, payload)
+            if batch is not None:
+                preferences = await SettingsStore.load(db, UserPreferences, user_id=user_id)
+                if preferences.push_paused_until is not None:
+                    pause = (preferences.push_paused_until - datetime.now(UTC)).total_seconds()
+            if pause <= 0:
+                items = (await db.scalars(select(Notification).outerjoin(ChatSession).where(
+                    Notification.user_id == user_id, Notification.id.in_(pending),
+                    Notification.read_at.is_(None),
+                    or_(Notification.session_id.is_(None), ~deleted_session_clause()),
+                ))).all()
+
+    if batch is not None and (batch.block_changed.is_set() or pending != notices):
+        return 0.0
+    delay = max(pause, presence_remaining(user_id)) if delivery is not None else 0.0
+    if delay > 0:
+        return delay
+
+    # Retire the validated window at handoff, not after network I/O: new arrivals
+    # during the send get their own window, including corrections to existing IDs.
+    notices.clear()
+    if delivery is not None and items:
+        silent = all(pending[item.id] for item in items)
+        payload = _notification_push_payload(items[0], silent=silent) if len(items) == 1 else web_push_payload(
+            title=f"{len(items)} neue Session-Hinweise",
+            body="Öffne die Benachrichtigungen, um die ungelesenen Hinweise zu sehen.",
+            tag="session-responses", target=WebPushNotificationCenterTarget(type="actions"), silent=silent,
+        )
+        await WebPushService.send(delivery, payload)
+    return None
+
+
+async def _deliver_push_batch(user_id: UUID, batch: _PushBatch) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+        while batch.notices:
+            batch.block_changed.clear()
+            delay = max(batch.ready_at - loop.time(), presence_remaining(user_id))
+            if delay > 0:
+                await _wait_for_push(batch, delay)
+                continue
+            delay = await _send_pending_push(user_id, batch.notices, batch=batch)
+            if delay is not None and delay > 0:
+                await _wait_for_push(batch, delay)
     except Exception:
-        logger.exception("Deferred session response push delivery failed")
+        logger.exception("Deferred notification push delivery failed")
     finally:
-        pending = _pending_response_pushes.get(user_id)
-        if pending is not None and pending[1] is asyncio.current_task():
-            _pending_response_pushes.pop(user_id)
+        if _push_batches.get(user_id) is batch:
+            _push_batches.pop(user_id)
 
 
 class NotificationDraft(BaseModel):
@@ -266,48 +320,48 @@ class NotificationService:
     async def deliver_after_commit(notification_id: UUID, *, silent: bool = False) -> None:
         async with AsyncSessionFactory() as db:
             item = await db.get(Notification, notification_id)
-            if item is None or item.read_at is not None:
-                return
-            user_id = item.user_id
-            payload = _notification_push_payload(item, silent=silent)
-        await WebPushService.deliver_after_commit(user_id, payload)
+        if item is not None:
+            await NotificationService._dispatch_push(item, silent=silent)
 
     @staticmethod
     async def deliver_message_after_commit(message_id: UUID | None) -> None:
         if message_id is None:
             return
         async with AsyncSessionFactory() as db:
-            row = (await db.execute(select(Notification.user_id, Notification.id).where(
+            item = await db.scalar(select(Notification).where(
                 Notification.deduplication_key == f"message:{message_id}",
                 Notification.kind == "session.response", Notification.read_at.is_(None),
-            ))).one_or_none()
-        if row is None:
-            return
-        user_id, notification_id = row
-        if user_is_present(user_id):
-            return
-        delay = response_push_delay(user_id)
-        if delay <= 0:
-            await NotificationService.deliver_after_commit(notification_id)
-            return
-        pending = _pending_response_pushes.get(user_id)
-        if pending is not None:
-            pending[0].add(notification_id)
-        else:
-            ids = {notification_id}
-            task = asyncio.create_task(_deliver_response_push_batch(user_id, ids, delay))
-            _pending_response_pushes[user_id] = (ids, task)
+            ))
+        if item is not None:
+            await NotificationService._dispatch_push(item)
 
     @staticmethod
-    def cancel_response_pushes(user_id: UUID) -> None:
-        pending = _pending_response_pushes.pop(user_id, None)
-        if pending is not None:
-            pending[1].cancel()
+    async def _dispatch_push(item: Notification, *, silent: bool = False) -> None:
+        if item.read_at is not None:
+            return
+        user_id = item.user_id
+        if item.kind in IMMEDIATE_PUSH_KINDS:
+            if not user_is_present(user_id):
+                await _send_pending_push(user_id, {item.id: silent})
+            return
+        batch = _push_batches.get(user_id)
+        if batch is None:
+            batch = _push_batches[user_id] = _PushBatch()
+        if not batch.notices:
+            batch.ready_at = asyncio.get_running_loop().time() + PUSH_BATCH_SECONDS
+        batch.notices[item.id] = batch.notices.get(item.id, True) and silent
+        if batch.task is None:
+            batch.task = asyncio.create_task(_deliver_push_batch(user_id, batch))
 
     @staticmethod
-    async def stop_response_pushes() -> None:
-        tasks = [task for _, task in _pending_response_pushes.values()]
-        _pending_response_pushes.clear()
+    def push_block_changed(user_id: UUID) -> None:
+        if batch := _push_batches.get(user_id):
+            batch.block_changed.set()
+
+    @staticmethod
+    async def stop_pushes() -> None:
+        tasks = [batch.task for batch in _push_batches.values() if batch.task is not None]
+        _push_batches.clear()
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

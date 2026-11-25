@@ -3,12 +3,12 @@ from __future__ import annotations
 import base64
 import binascii
 import json
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +25,7 @@ from mato_loop_backend.notification_content import (
 from mato_loop_backend.notifications import NotificationError, NotificationService
 from mato_loop_backend.security import require_admin, require_user
 from mato_loop_backend.sessions.presence import mark_user_present
-from mato_loop_backend.settings import SettingsStore, WebPushSettings
+from mato_loop_backend.settings import SettingsStore, UserPreferences, WebPushSettings
 from mato_loop_backend.web_push import (
     VapidKeyStore,
     WebPushConfigurationError,
@@ -81,6 +81,7 @@ class NotificationListResponse(BaseModel):
     items: list[NotificationResponse]
     next_cursor: str | None = Field(alias="nextCursor")
     unread_count: int = Field(alias="unreadCount")
+    push_paused_until: datetime | None = Field(default=None, alias="pushPausedUntil")
 
 
 class NotificationReadResponse(BaseModel):
@@ -194,8 +195,8 @@ async def mark_notification_presence(
             user.id, client_id=payload.client_id, session_id=payload.session_id,
             active=payload.active,
         )
-    if payload is None or payload.active:
-        NotificationService.cancel_response_pushes(user.id)
+    if payload is not None and not payload.active:
+        NotificationService.push_block_changed(user.id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -273,6 +274,30 @@ async def update_web_push_settings(
     return await _web_push_settings_payload(db)
 
 
+class PushPauseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    paused: StrictBool
+
+
+class PushPauseResponse(BaseModel):
+    push_paused_until: datetime | None = Field(alias="pushPausedUntil")
+
+
+@router.put("/push/pause", response_model=PushPauseResponse)
+async def set_push_pause(
+    payload: PushPauseRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> PushPauseResponse:
+    preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id, for_update=True)
+    preferences.push_paused_until = datetime.now(UTC) + timedelta(minutes=30) if payload.paused else None
+    await SettingsStore.save(db, preferences, user_id=user.id)
+    await db.commit()
+    NotificationService.push_block_changed(user.id)
+    return PushPauseResponse(pushPausedUntil=preferences.push_paused_until)
+
+
 @router.put("/push/subscriptions/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def put_web_push_subscription(
     device_id: UUID,
@@ -322,6 +347,8 @@ async def list_notifications(
         db, user.id, page_size=page_size, cursor=decoded_cursor
     )
     page = rows[:page_size]
+    preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
+    paused_until = preferences.push_paused_until
     return NotificationListResponse(
         items=[_notification_payload(item) for item in page],
         nextCursor=(
@@ -330,6 +357,7 @@ async def list_notifications(
             else None
         ),
         unreadCount=await NotificationService.unread_count(db, user.id),
+        pushPausedUntil=paused_until if paused_until and paused_until > datetime.now(UTC) else None,
     )
 
 

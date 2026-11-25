@@ -7,7 +7,7 @@ import { quasarOptions } from './quasar-options'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
-vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() } }))
+vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() } }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 
 import NotificationCenterApp from '../src/features/notifications/NotificationCenterApp.vue'
@@ -58,6 +58,29 @@ async function mountCenter(dark = false) {
 }
 
 describe('notification center', () => {
+  it('pauses and resumes push for the account even when this device is not subscribed', async () => {
+    const store = useInAppNotificationStore()
+    store.pushSupported = false
+    const until = new Date(Date.now() + 30 * 60_000).toISOString()
+    api.put.mockImplementation(async (_path, { paused }) => {
+      response.pushPausedUntil = paused ? until : null
+      return { data: { pushPausedUntil: response.pushPausedUntil } }
+    })
+    await mountCenter()
+    api.get.mockResolvedValueOnce({ data: { enabled: true, configured: true } })
+    await store.reconcilePush()
+    await nextTick()
+    const button = (label) => [...root.querySelectorAll('button')].find((item) => item.textContent.includes(label))
+    button('Push 30 Min. pausieren').click()
+    await vi.waitFor(() => expect(root.textContent).toContain('Auf allen Geräten pausiert bis'))
+    button('Push-Pause beenden').click()
+    await vi.waitFor(() => expect(button('Push 30 Min. pausieren')).toBeDefined())
+    expect(api.put.mock.calls).toEqual([
+      ['/notifications/push/pause', { paused: true }],
+      ['/notifications/push/pause', { paused: false }]
+    ])
+  })
+
   it('toggles the locally stored notification sound independently of push', async () => {
     await mountCenter()
     const button = root.querySelector('button[aria-label="Benachrichtigungston"]')

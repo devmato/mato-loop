@@ -33,12 +33,7 @@ def test_session_presence_tracks_tabs_and_releases_only_the_leaving_tab(monkeypa
     presence.mark_user_present(user_id, client_id=second, session_id=None)
     assert not presence.session_is_present(user_id, session_id)
     assert presence.user_is_present(user_id)
+    assert presence.presence_remaining(user_id) == presence.PRESENCE_TTL_SECONDS
     presence.mark_user_present(user_id, client_id=second, active=False)
     assert not presence.user_is_present(user_id)
-    assert presence.response_push_delay(user_id) == 120
-    now += 60
-    presence.mark_user_present(user_id, client_id=second, active=False)
-    assert presence.response_push_delay(user_id) == 60
-    assert presence.response_push_delay(uuid4()) == 0
-    now += 60
-    assert presence.response_push_delay(user_id) == 0
+    assert presence.presence_remaining(user_id) == 0

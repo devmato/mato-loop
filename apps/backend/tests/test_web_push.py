@@ -212,22 +212,19 @@ async def test_subscription_delete_is_owner_and_device_scoped() -> None:
     assert "web_push_subscriptions.device_id =" in sql
 
 
-async def test_delivery_is_skipped_for_a_present_user(monkeypatch) -> None:
+async def test_prepare_delivery_only_loads_active_subscriptions_for_owner(monkeypatch) -> None:
     user_id = uuid4()
-    factory = MagicMock()
-    monkeypatch.setattr(web_push, "user_is_present", lambda *_args: True)
-    monkeypatch.setattr(web_push, "AsyncSessionFactory", factory)
+    db = AsyncMock(spec=AsyncSession)
+    db.__aenter__.return_value = db
+    db.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
+    monkeypatch.setattr(web_push, "AsyncSessionFactory", lambda: db)
+    monkeypatch.setattr(web_push, "load_effective_web_push_settings", AsyncMock(return_value=_effective()))
+    monkeypatch.setattr(VapidKeyStore, "public_key", lambda _self: "public-key")
 
-    await WebPushService.deliver_after_commit(
-        user_id,
-        WebPushPayload(
-            notification=WebPushNotificationPayload(
-                title="Fertig",
-            )
-        ),
-    )
-
-    factory.assert_not_called()
+    assert await WebPushService.prepare_delivery(user_id) is None
+    statement = db.scalars.await_args.args[0]
+    assert user_id in statement.compile().params.values()
+    assert "user_accounts.is_active IS true" in str(statement)
 
 
 @pytest.mark.parametrize("status_code, stale", [(410, True), (503, False)])

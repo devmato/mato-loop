@@ -26,7 +26,6 @@ from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.models import UserAccount, WebPushSubscription
 from mato_loop_backend.notification_content import notification_body_preview
 from mato_loop_backend.security import CredentialCipher
-from mato_loop_backend.sessions.presence import user_is_present
 from mato_loop_backend.settings.models import WebPushSettings
 from mato_loop_backend.settings.store import SettingsStore
 
@@ -48,6 +47,13 @@ class EffectiveWebPushSettings:
     allowed_origins: frozenset[str]
     allow_apple_subdomains: bool = False
     legacy: bool = False
+
+
+@dataclass(frozen=True)
+class PreparedWebPush:
+    config: EffectiveWebPushSettings
+    subscriptions: list[WebPushSubscription]
+    cipher: CredentialCipher
 
 
 def _origin(value: str, *, origin_only: bool = False) -> str:
@@ -373,13 +379,8 @@ class WebPushService:
         )
 
     @staticmethod
-    async def deliver_after_commit(
-        user_id: UUID,
-        payload: WebPushPayload,
-    ) -> None:
-        """Best-effort delivery. Call only after the producer transaction commits."""
-        if user_is_present(user_id):
-            return
+    async def prepare_delivery(user_id: UUID) -> PreparedWebPush | None:
+        """Snapshot the transport settings and the owner's active subscriptions."""
         try:
             async with AsyncSessionFactory() as db:
                 config = await load_effective_web_push_settings(db)
@@ -389,7 +390,7 @@ class WebPushService:
                     or not config.allowed_origins
                     or VapidKeyStore().public_key() is None
                 ):
-                    return
+                    return None
                 subscriptions = list(
                     (
                         await db.scalars(
@@ -402,20 +403,23 @@ class WebPushService:
                         )
                     ).all()
                 )
-            cipher = CredentialCipher()
+            if subscriptions:
+                return PreparedWebPush(config, subscriptions, CredentialCipher())
         except Exception:
             logger.error("Web Push delivery could not be prepared")
-            return
-        if user_is_present(user_id):
-            return
+        return None
+
+    @staticmethod
+    async def send(delivery: PreparedWebPush, payload: WebPushPayload) -> None:
+        """Send a prepared push without making notification policy decisions."""
         try:
             timeout = aiohttp.ClientTimeout(total=_DELIVERY_TIMEOUT_SECONDS)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 sender = _NoRedirectSession(session)
                 await asyncio.gather(
                     *(
-                        WebPushService._deliver_one(item, payload, config, cipher, sender)
-                        for item in subscriptions
+                        WebPushService._deliver_one(item, payload, delivery.config, delivery.cipher, sender)
+                        for item in delivery.subscriptions
                     )
                 )
         except Exception:
