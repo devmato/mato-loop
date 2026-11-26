@@ -58,27 +58,11 @@ async function mountCenter(dark = false) {
 }
 
 describe('notification center', () => {
-  it('pauses and resumes push for the account even when this device is not subscribed', async () => {
+  it('does not offer a manual push pause when web push is enabled', async () => {
     const store = useInAppNotificationStore()
-    store.pushSupported = false
-    const until = new Date(Date.now() + 30 * 60_000).toISOString()
-    api.put.mockImplementation(async (_path, { paused }) => {
-      response.pushPausedUntil = paused ? until : null
-      return { data: { pushPausedUntil: response.pushPausedUntil } }
-    })
+    store.$patch({ pushConfigured: true, pushServerEnabled: true })
     await mountCenter()
-    api.get.mockResolvedValueOnce({ data: { enabled: true, configured: true } })
-    await store.reconcilePush()
-    await nextTick()
-    const button = (label) => [...root.querySelectorAll('button')].find((item) => item.textContent.includes(label))
-    button('Push 30 Min. pausieren').click()
-    await vi.waitFor(() => expect(root.textContent).toContain('Auf allen Geräten pausiert bis'))
-    button('Push-Pause beenden').click()
-    await vi.waitFor(() => expect(button('Push 30 Min. pausieren')).toBeDefined())
-    expect(api.put.mock.calls).toEqual([
-      ['/notifications/push/pause', { paused: true }],
-      ['/notifications/push/pause', { paused: false }]
-    ])
+    expect(root.textContent).not.toContain('Push 30 Min. pausieren')
   })
 
   it('toggles the locally stored notification sound independently of push', async () => {

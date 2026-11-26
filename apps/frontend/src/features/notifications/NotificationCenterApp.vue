@@ -70,15 +70,6 @@
             />
           </q-item-section>
         </q-item>
-        <div v-if="notifications.loaded && notifications.pushServerEnabled" class="row items-center justify-between q-gutter-sm q-mb-md">
-          <span v-if="pushPaused" class="text-caption">Auf allen Geräten pausiert bis {{ formatAbsoluteDateTime(notifications.pushPausedUntil) }}</span>
-          <q-btn
-            flat no-caps color="primary"
-            :label="pushPaused ? 'Push-Pause beenden' : 'Push 30 Min. pausieren'"
-            :loading="notifications.pushPauseSaving"
-            @click="togglePushPause"
-          />
-        </div>
         <div v-if="notifications.loading && !notifications.loaded">
           <div v-for="index in 3" :key="index" class="row items-center no-wrap q-gutter-md q-py-sm">
             <q-skeleton type="QAvatar" />
@@ -138,7 +129,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { isNavigationFailure, NavigationFailureType, useRouter } from 'vue-router'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import { useAuthStore } from 'stores/auth'
@@ -155,7 +146,6 @@ const controlCenter = useControlCenterStore()
 const notifications = useInAppNotificationStore()
 const refreshing = ref(false)
 const timestampNow = ref(new Date())
-const pushPaused = computed(() => Date.parse(notifications.pushPausedUntil) > timestampNow.value.getTime())
 const pushToggleDisabled = computed(() => (
   !notifications.pushSupported
   || !notifications.pushLoaded
@@ -181,24 +171,6 @@ const pushStatus = computed(() => {
     : 'Push-Benachrichtigungen sind auf diesem Gerät deaktiviert.'
 })
 let timestampTimer = null
-let pushPauseTimer = null
-
-watch(() => notifications.pushPausedUntil, (until) => {
-  window.clearTimeout(pushPauseTimer)
-  timestampNow.value = new Date()
-  const remaining = Date.parse(until) - timestampNow.value.getTime()
-  if (remaining > 0) {
-    pushPauseTimer = window.setTimeout(() => { timestampNow.value = new Date() }, remaining)
-  }
-}, { immediate: true })
-
-async function togglePushPause() {
-  try {
-    await notifications.setPushPaused(!pushPaused.value)
-  } catch {
-    // API errors are displayed centrally.
-  }
-}
 
 async function setPushEnabled(enabled) {
   try {
@@ -262,6 +234,5 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   window.clearInterval(timestampTimer)
-  window.clearTimeout(pushPauseTimer)
 })
 </script>

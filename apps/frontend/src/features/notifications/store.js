@@ -88,8 +88,6 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
     pushSubscribed: false,
     pushPermission: pushSupported() ? window.Notification.permission : 'unsupported',
     pushLoading: false,
-    pushPausedUntil: null,
-    pushPauseSaving: false,
     revision: 0
   }),
   actions: {
@@ -100,17 +98,6 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
     },
     async markPresent(presence = null) {
       await api.put('/notifications/presence', presence, { suppressErrorToast: true })
-    },
-    async setPushPaused(paused) {
-      if (this.pushPauseSaving) return
-      this.pushPauseSaving = true
-      try {
-        await api.put('/notifications/push/pause', { paused })
-        // Use the canonical notification refresh for this tab and for change events on other devices.
-        await this.fetchLatest()
-      } finally {
-        this.pushPauseSaving = false
-      }
     },
     async fetchLatest(config = {}) {
       return queueRefresh(this, config, async (revision) => {
@@ -126,7 +113,6 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
           this.items = Array.isArray(data.items) ? data.items : []
           this.nextCursor = data.nextCursor || null
           this.unreadCount = Number(data.unreadCount) || 0
-          this.pushPausedUntil = data.pushPausedUntil || null
           this.loaded = true
           const previous = this.latestSoundPage
           this.latestSoundPage = {

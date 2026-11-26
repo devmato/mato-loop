@@ -11,7 +11,6 @@ from uuid import UUID, uuid4
 from pydantic import (
     AfterValidator,
     AliasChoices,
-    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -2020,7 +2019,6 @@ class UserPreferences(SettingsDocument):
     session_tabs_limit: int = Field(default=DEFAULT_SESSION_TABS_LIMIT, ge=1, le=MAX_SESSION_TABS_LIMIT, strict=True)
     session_tabs: SessionTabs = Field(default_factory=list)
     control_center_open: StrictBool = False
-    push_paused_until: AwareDatetime | None = None
     trash_enabled: bool = False
     trash_retention_days: int = Field(default=30, ge=1, le=3650)
     project_order: list[UUID] = Field(default_factory=list)

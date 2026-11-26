@@ -49,7 +49,7 @@ The owner-scoped browser outbox uses stable request IDs and FIFO follow-up deliv
 
 The service worker caches the application shell, not authenticated APIs, files or chats. A user-confirmed update reloads app windows and can lose unsaved memory-only state. API and documentation requests stay outside the shell cache.
 
-Web Push uses encrypted owner/device subscriptions and allowlisted browser push services. After canonical state commits, the notification service dispatches requests without additional delay and batches ordinary notices per owner. Focused-client presence and delivery batches are process-local; the account's manual pause is stored in user preferences. Delivery is best effort, never a transaction prerequisite. See [Push setup](user/betrieb-und-datensicherung.md#app-und-push-benachrichtigungen).
+Web Push uses encrypted owner/device subscriptions and allowlisted browser push services. After canonical state commits, the notification service dispatches requests without additional delay and batches ordinary notices per owner. Focused-client presence and delivery batches are process-local. Delivery is best effort, never a transaction prerequisite. See [Push setup](user/betrieb-und-datensicherung.md#app-und-push-benachrichtigungen).
 
 ## Configuration Boundaries
 

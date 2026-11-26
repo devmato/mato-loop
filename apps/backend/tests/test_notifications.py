@@ -18,7 +18,6 @@ from mato_loop_backend import notifications
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.notifications import (
     NotificationPresenceRequest,
-    PushPauseRequest,
     _decode_cursor,
     _encode_cursor,
     _notification_payload,
@@ -27,7 +26,6 @@ from mato_loop_backend.api.routes.notifications import (
     mark_all_notifications_read,
     mark_notification_presence,
     mark_notification_read,
-    set_push_pause,
 )
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.models import (
@@ -43,7 +41,6 @@ from mato_loop_backend.notifications import (
     NotificationError,
     NotificationService,
 )
-from mato_loop_backend.settings import SettingsStore, UserPreferences
 from mato_loop_backend.web_push import WebPushMemoryApprovalTarget, web_push_payload
 
 
@@ -76,8 +73,8 @@ async def test_mark_notification_presence_is_user_scoped(monkeypatch) -> None:
     mark.assert_called_once_with(user.id)
 
 
-@pytest.mark.parametrize("block", ["none", "presence", "pause"])
-async def test_response_and_agent_notice_share_one_push_batch(monkeypatch, block) -> None:
+@pytest.mark.parametrize("focused", [False, True])
+async def test_response_and_agent_notice_share_one_push_batch(monkeypatch, focused) -> None:
     user = _user()
     unread = [_notification(user.id), _notification(user.id)]
     unread[0].kind, unread[1].kind = "session.response", "agent.notice"
@@ -87,7 +84,6 @@ async def test_response_and_agent_notice_share_one_push_batch(monkeypatch, block
     db.get.return_value = unread[1]
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=unread))
     deliver = AsyncMock()
-    preferences = UserPreferences()
     remaining = 0
     waits = []
 
@@ -96,17 +92,9 @@ async def test_response_and_agent_notice_share_one_push_batch(monkeypatch, block
         deliver.assert_not_awaited()
         waits.append(delay)
         batch.ready_at = 0
-        if len(waits) == 1:
-            if block == "presence":
-                remaining = 15
-            if block == "pause":
-                preferences.push_paused_until = datetime.now(UTC) + timedelta(minutes=30)
-        else:
-            remaining = 0
-            preferences.push_paused_until = None
+        remaining = 15 if focused and len(waits) == 1 else 0
 
     monkeypatch.setattr(notifications, "AsyncSessionFactory", lambda: db)
-    monkeypatch.setattr(notifications.SettingsStore, "load", AsyncMock(return_value=preferences))
     monkeypatch.setattr(notifications, "presence_remaining", lambda _: remaining)
     monkeypatch.setattr(notifications, "_wait_for_push", wait)
     monkeypatch.setattr(notifications.WebPushService, "prepare_delivery", AsyncMock(return_value=object()))
@@ -118,20 +106,18 @@ async def test_response_and_agent_notice_share_one_push_batch(monkeypatch, block
     await notifications._push_batches[user.id].task
 
     assert 29 < waits[0] <= 30
-    assert len(waits) == (1 if block == "none" else 2)
+    assert len(waits) == (2 if focused else 1)
     deliver.assert_awaited_once()
     payload = deliver.await_args.args[1].notification
     assert (payload.title, payload.target.type, payload.notification_id) == ("2 neue Session-Hinweise", "actions", None)
 
 
-@pytest.mark.parametrize("block", ["focus", "pause"])
-async def test_block_during_push_preparation_preserves_unread_batch(monkeypatch, block) -> None:
+async def test_focus_during_push_preparation_preserves_unread_batch(monkeypatch) -> None:
     user = _user()
     notice = _notification(user.id)
     db = AsyncMock(spec=AsyncSession)
     db.__aenter__.return_value = db
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=[notice]))
-    preferences = UserPreferences()
     batch = notifications._PushBatch(notices={notice.id: False})
     client_id = uuid4()
     send = AsyncMock()
@@ -150,8 +136,6 @@ async def test_block_during_push_preparation_preserves_unread_batch(monkeypatch,
         await resume.wait()
 
     monkeypatch.setattr(notifications, "AsyncSessionFactory", lambda: db)
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=preferences))
-    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     monkeypatch.setattr(notifications.WebPushService, "prepare_delivery", prepare)
     monkeypatch.setattr(notifications.WebPushService, "send", send)
     monkeypatch.setattr(notifications, "_wait_for_push", wait)
@@ -159,17 +143,11 @@ async def test_block_during_push_preparation_preserves_unread_batch(monkeypatch,
     async with asyncio.timeout(2), asyncio.TaskGroup() as tasks:
         tasks.create_task(notifications._deliver_push_batch(user.id, batch))
         await preparing.wait()
-        if block == "focus":
-            await mark_notification_presence(user, db, NotificationPresenceRequest(clientId=client_id))
-        else:
-            await set_push_pause(PushPauseRequest(paused=True), user, db)
+        await mark_notification_presence(user, db, NotificationPresenceRequest(clientId=client_id))
         prepared.set()
         await waiting.wait()
         send.assert_not_awaited()
-        if block == "focus":
-            await mark_notification_presence(user, db, NotificationPresenceRequest(clientId=client_id, active=False))
-        else:
-            await set_push_pause(PushPauseRequest(paused=False), user, db)
+        await mark_notification_presence(user, db, NotificationPresenceRequest(clientId=client_id, active=False))
         resume.set()
 
     send.assert_awaited_once()
@@ -209,26 +187,6 @@ async def test_deferred_push_checks_current_notice_state(request, monkeypatch, s
             assert deliver.await_count == (1 if state == "unread" else 0)
     finally:
         await engine.dispose()
-
-
-async def test_push_pause_is_account_scoped_and_wakes_pending_delivery(monkeypatch) -> None:
-    user = _user()
-    db = AsyncMock(spec=AsyncSession)
-    batch = notifications._PushBatch()
-    monkeypatch.setitem(notifications._push_batches, user.id, batch)
-    load = AsyncMock(return_value=UserPreferences())
-    save = AsyncMock()
-    monkeypatch.setattr(SettingsStore, "load", load)
-    monkeypatch.setattr(SettingsStore, "save", save)
-    now = datetime.now(UTC)
-    result = await set_push_pause(PushPauseRequest(paused=True), user, db)
-    assert now + timedelta(minutes=30) <= result.push_paused_until <= datetime.now(UTC) + timedelta(minutes=30)
-    assert batch.block_changed.is_set()
-    batch.block_changed.clear()
-    assert (await set_push_pause(PushPauseRequest(paused=False), user, db)).push_paused_until is None
-    assert batch.block_changed.is_set()
-    load.assert_awaited_with(db, UserPreferences, user_id=user.id, for_update=True)
-    save.assert_awaited_with(db, load.return_value, user_id=user.id)
 
 
 def test_notification_model_deletes_notices_when_session_is_deleted() -> None:
@@ -462,7 +420,6 @@ async def test_notification_previews_remove_markdown_before_truncating(monkeypat
 
 async def test_notification_list_returns_cursor_target_and_global_unread_count(monkeypatch) -> None:
     monkeypatch.setattr("mato_loop_backend.api.routes.notifications.MemoryService.reconcile_approvals", AsyncMock(return_value=False))
-    monkeypatch.setattr(notifications.SettingsStore, "load", AsyncMock(return_value=UserPreferences()))
     user = _user()
     first = _notification(user.id)
     first.session_id = uuid4()

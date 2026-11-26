@@ -79,7 +79,7 @@ App-Meldungen erscheinen rechts unten, im Chat oberhalb des Eingabebereichs. Sie
 
 Der globale Bereich **Benachrichtigungen** zeigt eine chronologische Liste. Sein Zähler zählt ausschließlich ungelesene Hinweise. Die schwebende Control-Center-Schaltfläche öffnet bei vorhandenem Zähler direkt diese Liste; sonst die zuletzt verwendete App.
 
-Schalte den **Benachrichtigungston** über das Lautsprechersymbol oben im Benachrichtigungscenter ein, um einen kurzen Ton für neue Hinweise zu hören. Die Einstellung bleibt in diesem Browser bzw. in der installierten Web-App gespeichert. Nach dem Neuladen kann der Browser den Ton bis zur ersten Interaktion blockieren. Ist MatoLoop geschlossen oder pausiert, steuern Browser und Betriebssystem den Ton für Web Push.
+Schalte den **Benachrichtigungston** über das Lautsprechersymbol oben im Benachrichtigungscenter ein, um einen kurzen Ton für neue Hinweise zu hören. Die Einstellung bleibt in diesem Browser bzw. in der installierten Web-App gespeichert. Nach dem Neuladen kann der Browser den Ton bis zur ersten Interaktion blockieren. Ist MatoLoop geschlossen oder im Hintergrund, steuern Browser und Betriebssystem den Ton für Web Push.
 
 Hinweise auf Freigaben und Rückfragen öffnen den zugehörigen Chat. Neue [Memory-Vorschläge](memory-und-dreaming.md#anderungsrichtlinien) prüfst du im Chat **Persönlicher Assistent**; ältere bleiben in ihrer bisherigen Quell-Session erreichbar. Normale Antworten und Laufzeitfehler erzeugen ebenfalls Hinweise, sofern ihre Session nicht sichtbar und fokussiert ist. Antwort- und Sessionanfrage-Hinweise verschwinden nach dem Lesen; andere Hinweise können einen gelesenen Verlauf behalten. Lesen oder Löschen entscheidet niemals die zugrunde liegende Anfrage.
 
@@ -95,7 +95,7 @@ Die Produktionsanwendung lässt sich über deinen Browser als Web-App installier
 
 Antworten und Agentenhinweise erscheinen sofort in der App. Für Web Push bündelt MatoLoop sie pro Konto 30 Sekunden lang ab dem ersten Hinweis. Neue Hinweise verlängern das Fenster nicht. Solange MatoLoop auf einem deiner Geräte im Fokus ist, wartet der Push weiter. Zugestellt werden nur noch ungelesene Hinweise. Freigaben und Rückfragen haben keine zusätzliche Wartezeit.
 
-Arbeitest du gerade außerhalb von MatoLoop, wähle im Benachrichtigungscenter **Push 30 Min. pausieren**. Die Pause gilt für normale Pushs auf allen Geräten deines Kontos. Du kannst sie vorzeitig beenden; noch ungelesene Hinweise werden danach gebündelt, sobald MatoLoop nicht mehr im Fokus ist. Freigaben, Rückfragen und Hinweise in der App bleiben unverändert. Push ist bestmöglich; die Hinweise in der App bleiben maßgeblich. Offline steht nur die Anwendungshülle bereit, keine Chats, Dateien oder Anmeldedaten.
+Die Zustellung per Web Push ist nicht garantiert; die Hinweise in der App bleiben maßgeblich. Offline steht nur die Anwendungshülle bereit, keine Chats, Dateien oder Anmeldedaten.
 
 !!! warning "Vor einem App-Update speichern"
     Ein von dir bestätigtes App-Update lädt offene Appfenster neu. Ungespeicherte Editorzustände und andere Eingaben im Arbeitsspeicher können verloren gehen.

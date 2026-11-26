@@ -34,7 +34,6 @@ from mato_loop_backend.sessions.presence import (
     user_is_present,
 )
 from mato_loop_backend.sessions.state import deleted_session_clause
-from mato_loop_backend.settings import SettingsStore, UserPreferences
 from mato_loop_backend.web_push import (
     WebPushMemoryApprovalTarget,
     WebPushNotificationCenterTarget,
@@ -89,23 +88,17 @@ async def _send_pending_push(
     delivery = await WebPushService.prepare_delivery(user_id)
     pending = notices.copy()
     items = []
-    pause = 0.0
     if delivery is not None:
         async with AsyncSessionFactory() as db:
-            if batch is not None:
-                preferences = await SettingsStore.load(db, UserPreferences, user_id=user_id)
-                if preferences.push_paused_until is not None:
-                    pause = (preferences.push_paused_until - datetime.now(UTC)).total_seconds()
-            if pause <= 0:
-                items = (await db.scalars(select(Notification).outerjoin(ChatSession).where(
-                    Notification.user_id == user_id, Notification.id.in_(pending),
-                    Notification.read_at.is_(None),
-                    or_(Notification.session_id.is_(None), ~deleted_session_clause()),
-                ))).all()
+            items = (await db.scalars(select(Notification).outerjoin(ChatSession).where(
+                Notification.user_id == user_id, Notification.id.in_(pending),
+                Notification.read_at.is_(None),
+                or_(Notification.session_id.is_(None), ~deleted_session_clause()),
+            ))).all()
 
     if batch is not None and (batch.block_changed.is_set() or pending != notices):
         return 0.0
-    delay = max(pause, presence_remaining(user_id)) if delivery is not None else 0.0
+    delay = presence_remaining(user_id) if delivery is not None else 0.0
     if delay > 0:
         return delay
 
