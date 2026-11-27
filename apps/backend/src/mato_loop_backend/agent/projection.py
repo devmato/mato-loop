@@ -61,6 +61,13 @@ _HOST_TOOL_RESULT_REFERENCE = "_matoloopToolResultReference"
 
 _HOST_TOOL_RESULT_FALLBACK = "_matoloopToolResultFallback"
 _HOST_FRESH_READBACK = "_matoloopFreshReadback"
+_HOST_TOOL_PREVIEW_ID = "_matoloopToolPreviewId"
+_HOST_TOOL_PREVIEW_LIMIT = "_matoloopToolPreviewLimit"
+_HOST_NEW_TOOL_PREVIEW = "_matoloopNewToolPreview"
+_HOST_TOOL_PREVIEW_REFERENCE = "_matoloopToolPreviewReference"
+_TOOL_PREVIEW_METADATA = frozenset({
+    _HOST_TOOL_PREVIEW_ID, _HOST_TOOL_PREVIEW_LIMIT, _HOST_NEW_TOOL_PREVIEW, _HOST_TOOL_PREVIEW_REFERENCE,
+})
 
 
 _HOST_CHECKLIST_RESULT = "_matoloopChecklistResult"
@@ -120,6 +127,7 @@ class ContextProjection:
     counted_input_fingerprint: str | None = None
     prepared_request: PreparedRequest | None = field(default=None, repr=False, compare=False)
     preparation: dict[str, int] = field(default_factory=dict)
+    tool_preview_limits: dict[UUID, int | None] = field(default_factory=dict)
 
 
 def compaction_messages(source: str) -> list[dict[str, str]]:
@@ -772,6 +780,7 @@ def _projection_messages(
     pdf_context: dict[str, dict] | None = None,
     attachment_text_characters: int = MAX_ATTACHMENT_EXCERPT_CHARACTERS,
     omitted_tool_result_ids: set[UUID] | None = None,
+    track_tool_previews: bool = False,
     available_secret_references: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     from mato_loop_backend.tools.catalog import tool_registry
@@ -1086,6 +1095,28 @@ def _projection_messages(
                 if projected["content"] != original_content:
                     projected[_HOST_TOOL_RESULT_REFERENCE] = True
                     projected[_HOST_RETAINED_TOOL_RESULT] = _omitted_tool_result(item.id, original_content)
+            if track_tool_previews and not omitted and tool_name not in {"todo_write", "secret_input"} and not (
+                item.id in history.reader_sources and _readback_page(projected["content"]) is not None
+            ):
+                host = (item.provider_data or {}).get("_matoloop", {})
+                limit = host.get("contextPreviewCharacters")
+                recorded = "contextPreviewCharacters" in host and (
+                    limit is None or (type(limit) is int and limit >= 0)
+                )
+                fresh = record_index >= max(latest_batch_start, latest_user_index)
+                if recorded or fresh:
+                    projected[_HOST_TOOL_PREVIEW_ID] = str(item.id)
+                    projected[_HOST_TOOL_PREVIEW_REFERENCE] = _omitted_tool_result(
+                        item.id, item.content, original_references.get(item.id),
+                    )
+                    if recorded:
+                        projected[_HOST_TOOL_PREVIEW_LIMIT] = limit
+                        if limit is not None:
+                            projected["content"] = _tool_preview(
+                                projected, limit, pseudonymization_enabled=pseudonymization_enabled,
+                            )
+                    else:
+                        projected[_HOST_NEW_TOOL_PREVIEW] = True
         runtime_data = (item.provider_data or {}).get("_matoloop", {})
         if item.role == "assistant" and isinstance(runtime_data.get("subagentResults"), dict):
             references = [
@@ -1584,6 +1615,26 @@ def _fit_readback_page(content: str, max_characters: int, minimum: int) -> str:
 
 def _tool_output_fallback(message: dict[str, Any]) -> str | None:
     return message.get(_HOST_RETAINED_TOOL_RESULT) or message.get(_HOST_TOOL_RESULT_FALLBACK)
+
+
+def _tool_preview(
+    message: dict[str, Any], max_characters: int, *, pseudonymization_enabled: bool,
+) -> str:
+    """Limit only the currently authorized projection, not the stored result."""
+    content = str(message.get("content") or "")
+    if len(content) <= max_characters:
+        return content
+    # Identify the original identically in the live and historical projections.
+    fallback = message[_HOST_TOOL_PREVIEW_REFERENCE]
+    if pseudonymization_enabled:
+        # An arbitrary text cut can hide part of a sensitive span from the scanner.
+        # Refer to the original so it can be read through protected pagination.
+        return fallback if len(fallback) < len(content) else content
+    shortened = _shorten_evidence_output(content, max_characters, omitted_marker=fallback)
+    if shortened is None:
+        keep = max_characters - len(_SHORTENED_TOOL_OUTPUT)
+        shortened = content[:keep] + _SHORTENED_TOOL_OUTPUT if keep >= 200 else fallback
+    return shortened if len(shortened) < len(content) else content
 
 
 def _limit_tool_output_tokens(
@@ -2488,6 +2539,8 @@ def _strip_projection_metadata(messages: list[dict[str, Any]]) -> None:
         message.pop(_HOST_TOOL_RESULT_REFERENCE, None)
         message.pop(_HOST_TOOL_RESULT_FALLBACK, None)
         message.pop(_HOST_FRESH_READBACK, None)
+        for key in _TOOL_PREVIEW_METADATA:
+            message.pop(key, None)
         message.pop(_HOST_CHECKLIST_RESULT, None)
         message.pop(_HOST_RETAINED_TOOL_RESULT, None)
         message.pop(_HOST_RUNTIME_CONTEXT, None)
@@ -2515,20 +2568,30 @@ async def _prune_tool_outputs_to_budget(
     estimate_request: EstimateCallback,
     characters_per_token: float,
     input_budget: int,
+    pseudonymization_enabled: bool = False,
 ) -> int:
     estimated = await estimate_request(messages)
-    candidates = [
+    candidates = sorted((
         message for message in messages
         if (message.get("role") == "tool" or message.get(_HOST_RETAINED_TOOL_RESULT))
         and not message.get(_HOST_CHECKLIST_RESULT)
         and not message.get(_HOST_FRESH_READBACK)
-    ]
+    ), key=lambda message: _HOST_TOOL_PREVIEW_LIMIT in message)
     while estimated > input_budget:
         changed = False
         for message in candidates:
             if estimated <= input_budget:
                 break
             content = str(message.get("content") or "")
+            if _HOST_TOOL_PREVIEW_ID in message:
+                # Emergency fit: use the same reproducible reference on the next round.
+                shortened = _tool_preview(message, 0, pseudonymization_enabled=pseudonymization_enabled)
+                if shortened != content:
+                    message["content"] = shortened
+                    message[_HOST_TOOL_PREVIEW_LIMIT] = 0
+                    estimated = await estimate_request(messages)
+                    changed = True
+                continue
             overflow_chars = math.ceil((estimated - input_budget) * characters_per_token)
             keep_chars = max(200, len(content) - overflow_chars - 120)
             shortened = _shorten_evidence_output(

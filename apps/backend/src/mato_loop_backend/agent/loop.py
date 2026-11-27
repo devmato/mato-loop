@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.run_support as agent_run_support
-from mato_loop_backend.agent.context import load_missing_attachments
+from mato_loop_backend.agent.context import load_missing_attachments, record_tool_previews
 from mato_loop_backend.agent.media_model_helpers import media_model_handlers
 from mato_loop_backend.agent.memory_context import MemoryCache, prepare_memory_context
 from mato_loop_backend.agent.model_turn import complete_model_turn, persist_model_response
@@ -702,6 +702,7 @@ async def execute_loop_body(
                 memory_read_enabled=memory_state.read_enabled,
                 request_options=request_options,
                 live_tool_calls=live_tool_calls,
+                previous_chat_usage=provider_turn_state.chat_usage,
                 ephemeral_images=ephemeral_images,
                 attachment_service=AttachmentService,
                 session_automations=await AutomationService.session_definitions(db, chat_session) if not delegated else None,
@@ -746,6 +747,8 @@ async def execute_loop_body(
         if model_turn is None:
             continuation_context_stale = True
             continue
+        if record_tool_previews(records, projection):
+            await db.commit()
         result = model_turn.result
         provider_duration_ms = model_turn.duration_ms
         provider_started_at = model_turn.started_at

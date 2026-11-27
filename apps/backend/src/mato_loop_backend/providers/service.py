@@ -71,7 +71,11 @@ from mato_loop_backend.providers.output_budget import (
     output_token_limit,
 )
 from mato_loop_backend.providers.reasoning import reasoning_profile
-from mato_loop_backend.providers.token_counting import chat_token_count_payload, count_chat_tokens
+from mato_loop_backend.providers.token_counting import (
+    ChatUsageSample,
+    chat_token_count_payload,
+    count_chat_tokens,
+)
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings.models import (
     AgentRuntimeSettings,
@@ -903,6 +907,11 @@ class ProviderService:
 
         async def finalize(result: ProviderResult) -> ProviderResult:
             result.provider_data["output_budget"] = output_budget
+            if turn_state is not None:
+                turn_state.chat_usage = (
+                    ChatUsageSample.record(request, prepared.estimated_input_tokens, result.usage.get("input_tokens"))
+                    if api_type == "chat_completions" and adapter.adapter_type == "openai-compatible" else None
+                )
             if request.reasoning_configuration is not None:
                 result.provider_data["reasoning_configuration"] = request.reasoning_configuration
             try:

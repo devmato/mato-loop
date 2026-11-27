@@ -93,6 +93,22 @@ async def test_server_token_count_uses_protected_request_and_caches_failures(mon
         assert (first, second, len(requests)) == (None, None, 1)
 
 
+def test_chat_usage_calibration_requires_matching_serialized_prefix():
+    request = ProviderRequest(model="model", messages=[{"role": "user", "content": "Original"}])
+    sample = token_counting.ChatUsageSample.record(request, 100, 125)
+    assert sample is not None
+    appended = replace(request, messages=[*request.messages, {"role": "assistant", "content": "Reply"}])
+    assert sample.calibrated_tokens(appended, 110) == 135
+    for changed in (
+        replace(appended, messages=[{"role": "user", "content": "Compacted"}]),
+        replace(appended, model="different"),
+        replace(appended, continuation_scope={"endpoint": "http://other.test/v1"}),
+        replace(appended, tools=[{"name": "read", "parameters": {"type": "object"}}]),
+        replace(appended, reasoning_effort=ReasoningEffort.HIGH),
+    ):
+        assert sample.calibrated_tokens(changed, 110) == 110
+
+
 async def test_stale_server_count_cannot_bypass_final_budget():
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False)
     model = ModelConfig(provider_id=provider.id, model_id="test", context_window_tokens=2_048, max_output_tokens=100)

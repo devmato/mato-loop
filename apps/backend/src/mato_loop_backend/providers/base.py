@@ -3,10 +3,13 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from mato_loop_backend.error_contract import safe_provider_error_code
 from mato_loop_backend.settings.models import ReasoningEffort
+
+if TYPE_CHECKING:
+    from mato_loop_backend.providers.token_counting import ChatUsageSample
 
 DeltaCallback = Callable[[str], Awaitable[None]]
 ReasoningDeltaCallback = Callable[[str, str], Awaitable[None]]
@@ -207,6 +210,7 @@ def select_provider_images(
 class ProviderTurnState:
     binding: tuple[str | None, ...] | None = None
     routing_token: str | None = None
+    chat_usage: ChatUsageSample | None = None
 
 
 @dataclass(slots=True)

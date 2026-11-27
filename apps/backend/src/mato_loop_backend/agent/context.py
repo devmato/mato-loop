@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any
@@ -34,6 +35,21 @@ SummaryCallback = Callable[[str, int], Awaitable[SummaryResult]]
 
 EstimateCallback = Callable[[list[dict[str, Any]]], Awaitable[int]]
 SkillResultsLoader = Callable[[set[UUID]], Awaitable[dict[UUID, str]]]
+
+
+def record_tool_previews(records: list[Message], projection: ContextProjection) -> bool:
+    """Remember selected previews only after the provider accepted the request."""
+    changed = False
+    for item in records if projection.tool_preview_limits else ():
+        if item.id not in projection.tool_preview_limits or getattr(item, "_interleaved_review", False):
+            continue
+        data = item.provider_data or {}
+        host = data.get("_matoloop", {})
+        limit = projection.tool_preview_limits[item.id]
+        if "contextPreviewCharacters" not in host or host["contextPreviewCharacters"] != limit:
+            item.provider_data = {**data, "_matoloop": {**host, "contextPreviewCharacters": limit}}
+            changed = True
+    return changed
 
 
 async def load_missing_attachments(db: AsyncSession, records: list[Message]) -> None:
@@ -100,6 +116,17 @@ class ContextManager:
         available_secret_references: set[str] | None = None,
     ) -> ContextProjection:
         """Budget original projections with raw request estimates, before slack and safety."""
+        provider_estimate = estimate_request
+
+        async def estimate_request(messages: list[dict[str, Any]]) -> int:
+            # The fitting recipe is host-only and makes identical candidate bodies
+            # look different to request preparation's reuse check.
+            return await provider_estimate([
+                {key: value for key, value in message.items() if key not in agent_projection._TOOL_PREVIEW_METADATA}
+                if agent_projection._HOST_TOOL_PREVIEW_ID in message else message
+                for message in messages
+            ])
+
         # Reorder only the model's view; persisted timestamps and message order stay intact.
         records = [item for item in records if item.error_code is None]
         canonical_positions = {item.id: index for index, item in enumerate(records)}
@@ -153,6 +180,10 @@ class ContextManager:
 
         async def finish(messages: list[dict[str, Any]], estimated: int, *, compacted: bool = False) -> ContextProjection:
             readback_limits = dict(agent_projection._shortened_readbacks(messages))
+            preview_limits = {
+                UUID(message[agent_projection._HOST_TOOL_PREVIEW_ID]): message.get(agent_projection._HOST_TOOL_PREVIEW_LIMIT)
+                for message in messages if agent_projection._HOST_TOOL_PREVIEW_ID in message
+            }
             changed = False
             affected = omitted_tool_result_ids | readback_limits.keys()
             for item in (active_records if affected else ()):
@@ -174,6 +205,7 @@ class ContextManager:
             return ContextProjection(
                 messages, estimated, input_budget, compacted=compacted, context_summary=pending_summary,
                 reserved_output_tokens=reserved_output_tokens,
+                tool_preview_limits=preview_limits,
             )
 
         async def project(
@@ -224,6 +256,7 @@ class ContextManager:
                     historical_tool_output_tokens=settings.historical_tool_output_tokens,
                     live_tool_calls=live_tool_calls,
                     omitted_tool_result_ids=omitted_tool_result_ids,
+                    track_tool_previews=True,
                     available_secret_references=available_secret_references,
                 )
                 if runtime_context:
@@ -249,6 +282,62 @@ class ContextManager:
 
         messages, estimated = await project(latest, active_records)
         if estimated <= max(1, trigger_tokens):
+            return await finish(messages, estimated)
+
+        def has_retained_previews() -> bool:
+            return any(
+                agent_projection._HOST_TOOL_PREVIEW_LIMIT in message
+                and not message.get(agent_projection._HOST_NEW_TOOL_PREVIEW)
+                for message in messages
+            )
+
+        async def fit_new_previews(goal: int) -> None:
+            nonlocal estimated
+            fresh = [message for message in messages if message.get(agent_projection._HOST_NEW_TOOL_PREVIEW)]
+            if not fresh or estimated <= goal:
+                return
+            originals = [message["content"] for message in fresh]
+            sizes = sorted(map(len, originals), reverse=True)
+            limit = sizes[0]
+            for attempt in range(3):
+                overflow = math.ceil((estimated - goal) * characters_per_token)
+                # Share the reduction among the large new outputs; leave short ones intact.
+                if attempt == 0:
+                    for count, size in enumerate(sizes, 1):
+                        next_size = sizes[count] if count < len(sizes) else 0
+                        reduction = (size - next_size) * count
+                        if overflow <= reduction:
+                            limit = max(0, size - (overflow + count - 1) // count)
+                            break
+                        overflow -= reduction
+                    else:
+                        limit = 0
+                else:
+                    limit = max(0, limit - (overflow + len(fresh) - 1) // len(fresh)) if attempt == 1 else 0
+                shortened_outputs = [
+                    agent_projection._tool_preview(
+                        {**message, "content": original}, limit,
+                        pseudonymization_enabled=pseudonymization_enabled,
+                    )
+                    for message, original in zip(fresh, originals, strict=True)
+                ]
+                for message, shortened in zip(fresh, shortened_outputs, strict=True):
+                    message["content"] = shortened
+                estimated = await estimate_request(messages)
+                if estimated <= goal or limit == 0:
+                    break
+            for message, original in zip(fresh, originals, strict=True):
+                message[agent_projection._HOST_TOOL_PREVIEW_LIMIT] = limit if message["content"] != original else None
+
+        # Use headroom when it keeps the whole new result. If that result still
+        # needs fitting, aim for the soft trigger to leave space for the next round.
+        extending_previews = has_retained_previews() and any(
+            message.get(agent_projection._HOST_NEW_TOOL_PREVIEW) for message in messages
+        )
+        if extending_previews and estimated <= input_budget:
+            return await finish(messages, estimated)
+        await fit_new_previews(trigger_tokens)
+        if estimated <= trigger_tokens or (extending_previews and estimated <= input_budget):
             return await finish(messages, estimated)
 
         async def estimate_minimum_request(indices: list[int]) -> int:
@@ -278,12 +367,14 @@ class ContextManager:
         # crossed canonical group. Completed groups do not become permanent barriers.
         canonical_active = sorted(canonical_positions[item.id] for item in active_records)
         safe = [0]
-        selected_positions = set()
+        high_position = -1
         for index, item in enumerate(active_records[:protected_start], 1):
-            selected_positions.add(canonical_positions[item.id])
-            if selected_positions == set(canonical_active[:index]):
+            high_position = max(high_position, canonical_positions[item.id])
+            if high_position == canonical_active[index - 1]:
                 safe.append(index)
-        protected_start = max(safe)
+        protected_start = agent_projection._compaction_boundary(active_records, safe[-1], within_turn=False)
+        while protected_start not in safe:
+            protected_start = agent_projection._compaction_boundary(active_records, protected_start - 1, within_turn=False)
         prefix = active_records[:protected_start]
         suffix = active_records[protected_start:]
         # Clear an old batch only under budget pressure, and never expand it on a later run.
@@ -291,12 +382,14 @@ class ContextManager:
         omitted_tool_result_ids.update(
             item.id for item in prefix if item.role == "tool"
             and prefix_tool_names.get(item.id) != "todo_write"
+            and "contextPreviewCharacters" not in (item.provider_data or {}).get("_matoloop", {})
             and not (prefix_tool_names.get(item.id) == "load_skill"
                      and '"authorizedSkill"' in (skill_results or {}).get(item.id, ""))
             and not (item.provider_data or {}).get("_matoloop", {}).get("contextOutputOmitted")
         )
         if omitted_tool_result_ids:
             messages, estimated = await project(latest, active_records)
+            await fit_new_previews(trigger_tokens)
             if estimated <= trigger_tokens:
                 return await finish(messages, estimated)
         current_tool_indices = agent_projection._current_tool_output_indices(messages)
@@ -318,9 +411,33 @@ class ContextManager:
             else await estimate_minimum_request(protected_tool_indices)
         )
         compacted = False
-        if (prefix or latest is not None) and compaction_request_tokens > trigger_tokens:
-            target_tokens = max(256, int(input_budget * settings.compaction_target_ratio))
+        if (prefix or latest is not None) and (
+            compaction_request_tokens > trigger_tokens
+            or (estimated > input_budget and has_retained_previews())
+        ):
+            target_tokens = min(trigger_tokens, max(256, int(input_budget * settings.compaction_target_ratio)))
             summary_limit = max(256, min(2_048, target_tokens // 3))
+            # Keep more complete recent turns when they fit with the planned summary.
+            # In a single long tool turn, retain the existing whole-batch boundary.
+            earlier_turns = [
+                index for index in safe if 0 < index < protected_start
+                and active_records[index].role == "user"
+            ]
+            low, high = 0, len(earlier_turns) - 1
+            for _ in range(5):
+                if low > high:
+                    break
+                middle = (low + high) // 2
+                boundary = earlier_turns[middle]
+                _, retained_tokens = await project(latest, active_records[boundary:])
+                # Include room for the summary, its framing, and the evidence appendix.
+                if retained_tokens + summary_limit + math.ceil(2_256 / characters_per_token) <= target_tokens:
+                    protected_start = boundary
+                    high = middle - 1
+                else:
+                    low = middle + 1
+            prefix, suffix = active_records[:protected_start], active_records[protected_start:]
+            omitted_tool_result_ids.clear()
             result = await summarize(
                 agent_projection._summary_source(latest, prefix),
                 summary_limit,
@@ -350,29 +467,35 @@ class ContextManager:
             latest = pending_summary
             messages, estimated = await project(latest, suffix)
             compacted = True
+            await fit_new_previews(target_tokens)
             current_tool_indices = agent_projection._current_tool_output_indices(messages)
-            minimum_request_tokens = await estimate_minimum_request(current_tool_indices)
 
-        current_tool_budget = max(
-            0, trigger_tokens - minimum_request_tokens
-        )
+        fitting_goal = target_tokens if compacted else trigger_tokens
+        # A recorded preview already has a stable rendering. Ordinary fitting
+        # should not rewrite it, even if a later request has no new tool batch.
+        legacy_indices = [
+            index for index in current_tool_indices
+            if agent_projection._HOST_TOOL_PREVIEW_LIMIT not in messages[index]
+        ]
+        minimum_request_tokens = await estimate_minimum_request(legacy_indices)
+        current_tool_budget = max(0, fitting_goal - minimum_request_tokens)
         agent_projection._limit_tool_output_tokens(
             messages,
-            current_tool_indices,
+            legacy_indices,
             current_tool_budget,
             characters_per_token,
             omitted_marker=_SHORTENED_TOOL_OUTPUT.lstrip(),
             fair_share=True,
         )
         estimated = await estimate_request(messages)
-        while estimated > trigger_tokens and current_tool_budget > 0:
+        while estimated > fitting_goal and current_tool_budget > 0:
             previous = estimated
             current_tool_budget = max(
-                0, current_tool_budget - (estimated - trigger_tokens)
+                0, current_tool_budget - (estimated - fitting_goal)
             )
             agent_projection._limit_tool_output_tokens(
                 messages,
-                current_tool_indices,
+                legacy_indices,
                 current_tool_budget,
                 characters_per_token,
                 omitted_marker=_SHORTENED_TOOL_OUTPUT.lstrip(),
@@ -391,6 +514,7 @@ class ContextManager:
                 estimate_request=estimate_request,
                 characters_per_token=characters_per_token,
                 input_budget=input_budget,
+                pseudonymization_enabled=pseudonymization_enabled,
             )
         if estimated > input_budget:
             estimated = await agent_projection._fit_fresh_readbacks(

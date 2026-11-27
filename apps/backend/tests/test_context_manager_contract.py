@@ -10,7 +10,7 @@ from context_helpers import _build_context, _request_estimator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from mato_loop_backend.agent.context import ContextManager
+from mato_loop_backend.agent.context import ContextManager, record_tool_previews
 from mato_loop_backend.agent.memory_context import MemoryTurn
 from mato_loop_backend.agent.projection import (
     _HOST_RETAINED_TOOL_RESULT,
@@ -3505,6 +3505,93 @@ async def test_first_turn_shortens_tool_output_before_compaction(
     else:
         assert len(projection.messages[-1]["content"]) < len(records[-1].content)
         db.add.assert_not_called()
+
+
+async def test_new_tool_output_does_not_rebudget_a_sent_preview() -> None:
+    session = _session()
+    records = [_message(session.id, "user", "Compare the two results.")]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    model = _model(context_window_tokens=5_000)
+    provider = LlmProviderConfig(
+        id=model.provider_id, name="Test", adapter_type="openai-compatible", pseudonymization_enabled=False,
+    )
+
+    async def wire():
+        projection = await _build_context(
+            db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+            model=model, settings=_settings(), summarize=AsyncMock(),
+        )
+        prepared = await ProviderService.prepare_request(
+            provider=provider, model=model, messages=projection.messages, tools=[],
+        )
+        record_tool_previews(records, projection)
+        return _chat_messages(prepared.request.messages)
+
+    before_wire = None
+    for call_id in ("a", "b"):
+        call = _message(session.id, "assistant", "")
+        call.tool_calls = [{"id": call_id, "name": "read", "arguments": {}}]
+        result = _message(session.id, "tool", call_id * 6_000)
+        result.tool_call_id = call_id
+        records.extend((call, result))
+        after_wire = await wire()
+        if before_wire is not None:
+            assert json.dumps(after_wire[:len(before_wire)]) == json.dumps(before_wire)
+        before_wire = after_wire
+    records.append(_message(session.id, "user", "Continue the comparison."))
+    followup = await wire()
+    assert json.dumps(followup[:len(before_wire)]) == json.dumps(before_wire)
+
+
+async def test_fitting_new_tool_output_uses_headroom_before_omitting_it():
+    session = _session()
+    records = [_message(session.id, "user", "Compare the results.")]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    model = _model(context_window_tokens=5_000)
+
+    async def project():
+        return await _build_context(
+            db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+            model=model, settings=_settings(), summarize=AsyncMock(),
+        )
+
+    fresh = "NEW_FACT " + "x" * 280
+    for call_id, body in (("old", "a" * 3_000), ("fresh", fresh)):
+        call = _message(session.id, "assistant", "")
+        call.tool_calls = [{"id": call_id, "name": "read", "arguments": {}}]
+        output = _message(session.id, "tool", body)
+        output.tool_call_id = call_id
+        records.extend((call, output))
+        projection = await project()
+        record_tool_previews(records, projection)
+
+    assert next(m["content"] for m in projection.messages if m.get("tool_call_id") == "fresh") == fresh
+
+
+async def test_saved_tool_preview_does_not_slice_sensitive_text_before_protection():
+    session = _session()
+    user = _message(session.id, "user", "Inspect the result.")
+    call = _message(session.id, "assistant", "")
+    call.tool_calls = [{"id": "read", "name": "read", "arguments": {}}]
+    prefix, local = "filler " * 35 + "Contact: ", "qa-fixture-identifier"
+    output = _message(session.id, "tool", prefix + local + "@example.com\n" + "filler " * 70)
+    output.tool_call_id = "read"
+    output.provider_data = {"_matoloop": {"contextPreviewCharacters": len(prefix + local + _SHORTENED_TOOL_OUTPUT)}}
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    model = _model(context_window_tokens=5_000)
+    projection = await _build_context(
+        db, chat_session=session, records=[user, call, output], system_prompt="System", tool_schemas=[],
+        model=model, settings=_settings(), summarize=AsyncMock(), pseudonymization_enabled=True,
+    )
+    prepared = await ProviderService.prepare_request(
+        provider=LlmProviderConfig(id=model.provider_id, name="Test", adapter_type="openai-compatible"),
+        model=model, messages=projection.messages, tools=[], pseudonymization_enabled=True,
+        pseudonymization_key=b"t" * 32,
+    )
+    assert local not in next(m["content"] for m in _chat_messages(prepared.request.messages) if m["role"] == "tool")
 
 
 async def test_large_current_tool_output_does_not_compact_older_history() -> None:

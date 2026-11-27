@@ -502,6 +502,8 @@ Opt-in account/resource snapshots may reuse bounded fields from authorized canon
 
 Compaction persists a marked summary of a completed contiguous prefix. It never modifies canonical messages, splits a tool batch, covers pending work or replays effects. It retains the latest user request and at least two complete current-turn batches. A covered latest request is restored only as a projection anchor, not repeatedly summarized as new history.
 
+Fit new tool output first. When extending a retained tool prefix, use headroom up to the hard input budget before shortening new results. After the provider responds, store the selected preview limit with the original message, not a second copy of its contents. Rebuild the preview from currently authorized data. With pseudonymization enabled, a preview that needs shortening uses a result reference instead of slicing text before the privacy scan. Protected readback still scans the full authorized page before fitting it. Ordinary fitting does not resize recorded previews; deliberate history omission, compaction, hard-budget recovery and changes in visibility can invalidate the prefix. After compaction, aim below the trigger and retain more complete turns when they fit. The target is best effort when recent work or fixed input costs cannot be reduced.
+
 Summary input includes chat goals, decisions and open work plus allowlisted operational metadata and exact evidence references, not arbitrary full tool output, arguments or reasoning. Up to 6,000 characters of tool evidence and a separate 6,000 of already-authorized `session_read` chat excerpts may be supplied. A deterministic evidence block of up to 2,000 characters, with trust/coverage markers and retrieval anchors, is appended. Successful tool execution is not proof of task success.
 
 The summary model falls back to the active model and then a marked deterministic summary. One 20-second deadline, or a shorter configured timeout, covers model attempts/retries. Expiry cancels provider work; external cancellation still propagates. Required context that still cannot fit fails safely. The transcript exposes fallback status and persisted summary generations.
@@ -541,7 +543,7 @@ Text uses the configured character/token ratio; binary/base64 is not counted as 
 
 Helpers keep explicit small ceilings: titles start at 2,048 with one repair up to 4,096; compaction targets 256–2,048 and reserves that effective target in full; the model connection test uses 1,024, all subject to transport/manual/provider limits. Auto allocation changes neither reasoning selection nor thinking behavior.
 
-Host diagnostics distinguish computed `allocatedOutputTokens` from actual `transmittedMaxOutputTokens`; an omitted option is null even when local allowance is known. Estimation source is `server`, `server-calibrated` or `estimate`, separately from actual provider usage. Diagnostics are not proof a provider enforces a local allowance.
+When server counting is unavailable, text-only compatible Chat Completions can correct an underestimate using the preceding provider usage within the same model turn. Apply the correction only if the provider binding, chat options, tools and serialized message prefix still match. Keep the safety margin and final provider budget check. Diagnostics report `server`, `server-calibrated`, `usage-calibrated` or `estimate` separately from actual usage, and distinguish computed `allocatedOutputTokens` from actual `transmittedMaxOutputTokens`. They do not prove a provider enforces a local allowance.
 
 ### One-Time Auto Migration
 

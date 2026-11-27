@@ -1,7 +1,12 @@
 """Optional chat-template-aware counting on OpenAI-compatible inference servers."""
 
+from __future__ import annotations
+
 import asyncio
+import hashlib
+import json
 import time
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -17,6 +22,37 @@ _unavailable_until: dict[tuple[UUID, str, UUID | None, str], float] = {}
 def chat_token_count_payload(request: ProviderRequest) -> dict[str, Any]:
     body = _chat_body(request)
     return {name: body[name] for name in ("model", "messages", "tools", "chat_template_kwargs") if name in body}
+
+
+@dataclass(frozen=True, slots=True)
+class ChatUsageSample:
+    """Conservative calibration for an append-only text request within a turn."""
+
+    message_count: int
+    fingerprint: bytes
+    estimate: int
+    actual: int
+
+    @staticmethod
+    def _fingerprint(request: ProviderRequest, prefix_length: int | None = None) -> tuple[int, bytes]:
+        payload = chat_token_count_payload(request)
+        if prefix_length is not None:
+            payload["messages"] = payload["messages"][:prefix_length]
+        binding = [request.continuation_scope, request.reasoning_effort, request.tool_choice, payload]
+        serialized = json.dumps(binding, ensure_ascii=False, separators=(",", ":")).encode()
+        return len(payload["messages"]), hashlib.sha256(serialized).digest()
+
+    @classmethod
+    def record(cls, request: ProviderRequest, estimate: int, actual: int | None) -> ChatUsageSample | None:
+        if request.media or type(actual) is not int or actual <= estimate or estimate <= 0:
+            return None
+        count, fingerprint = cls._fingerprint(request)
+        return cls(count, fingerprint, estimate, actual)
+
+    def calibrated_tokens(self, request: ProviderRequest, estimate: int) -> int:
+        if request.media or self._fingerprint(request, self.message_count) != (self.message_count, self.fingerprint):
+            return estimate
+        return self.actual + max(0, estimate - self.estimate)
 
 
 async def count_chat_tokens(

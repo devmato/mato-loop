@@ -23,6 +23,7 @@ from mato_loop_backend.media.attachments import AttachmentService
 from mato_loop_backend.models import AgentRun, ChatSession, Message
 from mato_loop_backend.providers.base import ProviderImageInput
 from mato_loop_backend.providers.service import ProviderService
+from mato_loop_backend.providers.token_counting import ChatUsageSample
 from mato_loop_backend.settings import AgentRuntimeSettings, AiSettings, InstanceLimits
 from mato_loop_backend.settings.models import (
     ModelConfig,
@@ -60,6 +61,7 @@ async def build_turn_context(
     runtime_context: str | None = None,
     session_contexts: dict[UUID, str | dict[str, str]] | None = None,
     load_skill_results: SkillResultsLoader | None = None,
+    previous_chat_usage: ChatUsageSample | None = None,
     available_secret_references: set[str] | None = None,
 ) -> tuple[ContextProjection, int, int]:
     async def summarize(source: str, output_tokens: int) -> SummaryResult:
@@ -121,6 +123,12 @@ async def build_turn_context(
             token_ratio = counted / max(1, prepared.estimated_input_tokens)
         return counted
 
+    def usage_estimate(prepared) -> int:
+        estimate = prepared.estimated_input_tokens
+        if previous_chat_usage is not None and prepared.input_token_fingerprint is not None:
+            return previous_chat_usage.calibrated_tokens(prepared.request, estimate)
+        return estimate
+
     async def estimate_request(messages: list[dict[str, Any]]) -> int:
         nonlocal counting_available
         prepared = await prepare(messages)
@@ -133,7 +141,8 @@ async def build_turn_context(
             fingerprint = prepared.input_token_fingerprint
             if fingerprint in server_counts:
                 return server_counts[fingerprint]
-        return math.ceil(prepared.estimated_input_tokens * token_ratio)
+            return math.ceil(prepared.estimated_input_tokens * token_ratio)
+        return usage_estimate(prepared)
 
     scope_payload = (
         {"total": memory_turn.scope.total, "pinned": memory_turn.scope.pinned}
@@ -244,6 +253,8 @@ async def build_turn_context(
                 projection.estimated_input_tokens = final_count
                 projection.input_token_source = "server"
                 projection.counted_input_fingerprint = prepared.input_token_fingerprint
+        elif usage_estimate(prepared) > prepared.estimated_input_tokens:
+            projection.input_token_source = "usage-calibrated"
         projection.prepared_request = prepared
         projection.preparation = preparation
         break
