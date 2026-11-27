@@ -187,8 +187,6 @@
       </div>
     </q-scroll-area>
 
-    <div :ref="setAppNoticeTarget" class="app-notice-anchor" />
-
     <div
       v-if="!chat.loadError && (audioNavigationPending || (!composerReadOnly && (chat.loading || !routeSessionId || routeSession || chat.current)))"
       v-show="!routeSubagentId && !composerReadOnly"
@@ -343,7 +341,7 @@
 
 <script setup>
 import AppSelect from 'src/shared/ui/AppSelect.vue'
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import RequestDock from 'src/features/chat/components/RequestDock.vue'
@@ -403,7 +401,6 @@ const router = useRouter()
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const chat = useChatStore()
-const setAppNoticeTarget = inject('setAppNoticeTarget', () => {})
 const { enabled: sessionTabsEnabled, tabs: sessionTabs, position: sessionTabsPosition, activeKey: activeSessionTabKey } = useSessionTabs({ chat, route })
 const subagents = useSubagentStore()
 const agentProfiles = useAgentProfileStore()

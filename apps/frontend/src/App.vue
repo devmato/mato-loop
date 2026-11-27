@@ -1,6 +1,6 @@
 <template>
-  <Teleport :to="noticeTarget || 'body'" :disabled="!noticeTarget">
-    <div ref="noticeArea" class="app-notices" :class="{ 'app-notices--fixed': !noticeTarget }">
+  <Teleport to="body">
+    <div ref="noticeArea" class="app-notices">
       <AppNotice v-if="backendUnavailable && !outageDismissed" icon="wifi_off" tone="warning" title="Verbindung unterbrochen" @dismiss="outageDismissed = true">
         MatoLoop prüft die Verbindung automatisch.
       </AppNotice>
@@ -32,7 +32,7 @@
 </template>
 
 <script setup>
-import { defineAsyncComponent, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue'
+import { defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppNotice from 'src/shared/ui/AppNotice.vue'
 import { useChangelogStore } from 'src/features/changelog/store'
@@ -56,8 +56,6 @@ const changelog = useChangelogStore()
 const route = useRoute()
 const ChangelogDialog = defineAsyncComponent(() => import('src/features/changelog/ChangelogDialog.vue'))
 const noticeArea = ref(null)
-const noticeTarget = shallowRef(null)
-provide('setAppNoticeTarget', (element) => { noticeTarget.value = element })
 const showChanges = ref(true)
 const startupSlow = ref(false)
 const updateAvailable = ref(false)

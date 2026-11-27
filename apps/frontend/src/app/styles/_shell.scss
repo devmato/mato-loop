@@ -32,24 +32,13 @@
   height: auto;
 }
 
-.app-notice-anchor {
-  position: relative;
-  flex: none;
-  height: 0;
-}
-
-// Let the notice reach the modal layer instead of trapping it inside the splitter.
-body:has(.q-dialog[aria-modal='true']) .chat-workspace-splitter > .q-splitter__before {
-  z-index: auto;
-}
-
 .app-notices {
   --notice-right: max(12px, env(safe-area-inset-right));
   --notice-left: max(12px, env(safe-area-inset-left));
-  position: absolute;
-  z-index: 2;
+  position: fixed;
+  z-index: 3000;
   right: var(--notice-right);
-  bottom: 12px;
+  bottom: max(12px, env(safe-area-inset-bottom));
   width: min(380px, calc(100% - var(--notice-left) - var(--notice-right)));
   &:not(:has(.app-notice-card)) { display: none; }
   display: grid;
@@ -57,13 +46,6 @@ body:has(.q-dialog[aria-modal='true']) .chat-workspace-splitter > .q-splitter__b
   max-height: min(48dvh, 300px);
   overflow: auto;
   overscroll-behavior: contain;
-
-  &--fixed,
-  body:has(.q-dialog[aria-modal='true']) & {
-    position: fixed;
-    bottom: max(12px, env(safe-area-inset-bottom));
-    z-index: 3000;
-  }
 
   // Dialog errors must not be hidden behind the portalled modal.
   body:has(.q-dialog[aria-modal='true']) & {
