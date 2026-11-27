@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createApp, h, nextTick, reactive } from 'vue'
+import { createApp, h, inject, nextTick, reactive } from 'vue'
 import { createPinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import MainLayout from '../src/app/MainLayout.vue'
@@ -11,7 +11,7 @@ import { useIntegrationStore } from 'stores/integrations'
 import { useAutomationStore } from 'stores/automations'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useHomeStore } from 'src/features/home/store'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useUserPreferencesStore } from '../src/features/settings/user-preferences-store'
 
 const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, terminal, workspace } = vi.hoisted(() => {
@@ -196,7 +196,13 @@ beforeEach(async () => {
   for (const name of ['QLayout', 'QDrawer', 'QToolbar', 'QSpace', 'QSeparator', 'QScrollArea', 'QItem', 'QItemSection', 'QItemLabel', 'QIcon', 'QList', 'QAvatar', 'QBadge', 'QCard', 'QCardSection', 'QCardActions', 'QCheckbox', 'QBanner', 'QPageContainer', 'RouterLink']) {
     app.component(name, container)
   }
-  for (const name of ['QTooltip', 'QInput', 'QSkeleton', 'QSpinner', 'QSpinnerDots', 'QSpinnerGrid', 'RouterView']) app.component(name, { render: () => null })
+  for (const name of ['QTooltip', 'QInput', 'QSkeleton', 'QSpinner', 'QSpinnerDots', 'QSpinnerGrid']) app.component(name, { render: () => null })
+  app.component('RouterView', {
+    setup() {
+      const { maximized } = inject('controlCenterLayout')
+      return () => h('button', { onClick: () => { maximized.value = true } }, maximized.value ? 'Maximized' : 'Split')
+    }
+  })
   app.component('QMenu', {
     props: ['modelValue'], emits: ['update:modelValue'],
     render() {
@@ -234,6 +240,34 @@ beforeEach(async () => {
   await nextTick()
 })
 afterEach(() => { app?.unmount(); vi.useRealTimers(); vi.unstubAllGlobals() })
+
+it('restores the split for chat destinations, not for tool navigation', async () => {
+  const router = useRouter()
+  const go = async (query) => {
+    await router.push({ name: 'chat', query })
+    await nextTick()
+  }
+  const center = useControlCenterStore()
+  await center.setOpen(true)
+  await go({ session: 'standalone' })
+  const layout = [...root.querySelectorAll('button')].find(button => button.textContent === 'Split')
+  layout.click()
+  await go({ session: 'standalone', controlCenter: 'automation', automation: 'example' })
+  expect(layout.textContent).toBe('Maximized')
+  await go({ session: 'standalone', message: 'message' })
+  expect(layout.textContent).toBe('Split')
+  layout.click()
+  await go({ session: 'standalone', controlCenter: 'automation', automation: 'example' })
+  expect(layout.textContent).toBe('Maximized')
+  await go({ session: 'project-session', project: 'a' })
+  expect([layout.textContent, center.open]).toEqual(['Split', true])
+  layout.click()
+  await go({ new: '1' })
+  expect(layout.textContent).toBe('Split')
+  layout.click()
+  await go({})
+  expect(layout.textContent).toBe('Split')
+})
 
 it('moves the sessions section before projects in DOM order', async () => {
   useUserPreferencesStore().sessionsPosition = 'aboveProjects'

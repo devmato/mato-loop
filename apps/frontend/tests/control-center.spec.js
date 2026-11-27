@@ -509,6 +509,23 @@ describe('control center store', () => {
     expect(store.activeAppId).toBe('files')
   })
 
+  it('returns to each file explorer rather than a neighboring file tab', async () => {
+    const store = useControlCenterStore()
+    await store.ensureApp('computer-files')
+    const stored = await store.openFile({
+      scope: 'session', path: 'notes.md', rootIdentity: '550e8400-e29b-41d4-a716-446655440000'
+    }, { returnTabId: 'files' })
+    const local = await store.openFile({
+      scope: 'filesystem', path: '/repo/local.md', executionAgentId: 'agent-1', currentDirectory: '/repo'
+    }, { returnTabId: 'computer-files' })
+
+    await store.closeFile(local)
+    const afterLocal = store.activeAppId
+    await store.openApp(stored)
+    await store.closeFile(stored)
+    expect([afterLocal, store.activeAppId]).toEqual(['computer-files', 'files'])
+  })
+
   it('reveals a legacy read-only computer tab as an editable file from session state', async () => {
     const store = useControlCenterStore()
     const tabId = 'file-550e8400-e29b-41d4-a716-446655440000'

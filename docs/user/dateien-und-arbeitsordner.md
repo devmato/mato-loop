@@ -35,6 +35,8 @@ Native Linux-Dateioperationen folgen keinen symbolischen Links – auch nicht mi
 
 Bis zu vier Dateien lassen sich gemeinsam auswählen und nacheinander hochladen. Transfers und normale Chat-Anhänge unterstützen bis zu 1 GiB, soweit Instanzlimits und Speicherkontingent es erlauben. Vorschau-, Format-, Medien- und Providergrenzen bleiben getrennt. Große Dateien können bei der Verarbeitung mehr Arbeitsspeicher als ihre Dateigröße benötigen.
 
+Wenn du den aktiven Dateitab schließt, kehrst du zur **Ablage** oder zu **Computer-Dateien** zurück, je nachdem, wo du die Datei geöffnet hast. Der Ausgangstab muss dafür noch offen sein.
+
 Wechsle in der **Ablage** über **Zum übergeordneten Ordner** vom Stammordner deiner Projekt-Session in den Ordner **Projekt**. Erst dort werden die Session-Ordner des Projekts geladen. Öffne einen Ordner, um die Ablage dieser Session zu sehen. Das ändert weder die aktive Chat-Session noch die Anzahl der angezeigten Sessions in der Seitenleiste. Beim Verschieben einer Session bleibt ihr vollständiger Dateiverlauf erhalten. Verweisen andere Sessions darauf, kann die besitzende Session nicht verschoben oder gelöscht werden.
 
 ## Text und Markdown bearbeiten

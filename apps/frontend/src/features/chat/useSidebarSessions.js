@@ -17,7 +17,7 @@ const emptySidebarList = Object.freeze({
 
 export function useSidebarSessions({
   chat, projects, approvals, questions, workspace, controlCenter, automations,
-  route, router, $q, confirm, drawerOpen, selectedProjectId, confirmDiscardedEdit
+  route, router, $q, confirm, drawerOpen, selectedProjectId, confirmDiscardedEdit, restoreSplit
 }) {
   const projectOptions = computed(() => [
     { label: 'Ohne Projekt', value: null },
@@ -228,7 +228,8 @@ export function useSidebarSessions({
       // The new-session draft remains usable while the sidebar offers a list retry.
     }
     await chat.loadSession(null)
-    await router.push({ name: 'chat', query: chatQuery(null, projectId, { new: '1' }) })
+    const failure = await router.push({ name: 'chat', query: chatQuery(null, projectId, { new: '1' }) })
+    if (isNavigationFailure(failure, NavigationFailureType.duplicated)) restoreSplit?.()
     return true
   }
 
@@ -245,7 +246,9 @@ export function useSidebarSessions({
         messageId ? { message: messageId } : {}
       )
     })
-    if (!messageId && alreadyOpen && (!failure || isNavigationFailure(failure, NavigationFailureType.duplicated))) {
+    const duplicate = isNavigationFailure(failure, NavigationFailureType.duplicated)
+    if (!failure || duplicate) restoreSplit?.()
+    if (!messageId && alreadyOpen && (!failure || duplicate)) {
       tabs.followLatestRequest = { sessionId: session.id }
     }
   }

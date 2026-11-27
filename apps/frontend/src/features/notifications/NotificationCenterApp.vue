@@ -129,7 +129,8 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useQuasar } from 'quasar'
 import { isNavigationFailure, NavigationFailureType, useRouter } from 'vue-router'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import { useAuthStore } from 'stores/auth'
@@ -141,8 +142,10 @@ import { notificationTargetRoute } from 'src/features/notifications/target'
 defineOptions({ name: 'NotificationCenterApp' })
 
 const router = useRouter()
+const $q = useQuasar()
 const auth = useAuthStore()
 const controlCenter = useControlCenterStore()
+const { restoreSplit } = inject('controlCenterLayout', {})
 const notifications = useInAppNotificationStore()
 const refreshing = ref(false)
 const timestampNow = ref(new Date())
@@ -197,7 +200,10 @@ async function openNotification(notification) {
     if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
   }
   try {
-    if (target && controlCenter.open) await controlCenter.setOpen(false)
+    if (target && controlCenter.open) {
+      if ($q.screen.lt.md || target.name !== 'chat') await controlCenter.setOpen(false)
+      else restoreSplit?.()
+    }
     if (!notification.readAt) await notifications.markRead(notification.id)
   } catch {
     // Navigation already succeeded; the unread notification remains available for retry.

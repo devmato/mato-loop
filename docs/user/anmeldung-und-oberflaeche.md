@@ -102,7 +102,7 @@ Die Zustellung per Web Push ist nicht garantiert; die Hinweise in der App bleibe
 
 ## Desktop und Mobilgeräte
 
-Auf größeren Bildschirmen teilen sich Chat und Control Center einen verstellbaren Bereich. Auf schmalen Geräten öffnet ein Vollbilddialog. Bei geschlossener Seitenleiste erscheint eine schwebende Navigationstaste.
+Zieh auf größeren Bildschirmen die Trennlinie, um Chat und Control Center unterschiedlich viel Platz zu geben. Mit **Control Center maximieren** neben dem × nutzt du den gesamten Chatbereich; die Seitenleiste bleibt sichtbar. **Geteilte Ansicht wiederherstellen** bringt die vorherige Aufteilung zurück. Zu dieser Aufteilung kehrst du auch zurück, wenn du zu einer anderen Session, zu Home oder zu einer Nachricht wechselst. Das Control Center bleibt dabei offen. Beim Wechsel zwischen Werkzeugen bleibt es maximiert. Auf schmalen Geräten öffnet das Control Center als Vollbilddialog. Ist die Seitenleiste geschlossen, findest du **Navigation öffnen** in der maximierten Ansicht links in der Tab-Leiste. Außerhalb der maximierten Ansicht schwebt die Taste wie gewohnt über der Seite.
 
 ## Heller und dunkler Modus
 

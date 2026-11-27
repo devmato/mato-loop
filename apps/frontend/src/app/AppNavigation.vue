@@ -13,7 +13,7 @@
         <router-link
           to="/"
           class="app-brand col row no-wrap items-center q-gutter-sm"
-          @click="closeDrawerOnMobile"
+          @click="revealHome"
         >
           <AppLogo />
           <div class="app-brand__name ellipsis">{{ appearance.appName }}</div>
@@ -25,7 +25,7 @@
       <q-separator class="lt-md" />
 
       <div class="col column no-wrap drawer-navigation q-py-xs">
-        <SidebarNavItem icon="home" icon-color="primary" label="Home" :to="{ name: 'chat' }" :active="route.name === 'chat' && !routeSessionId && !Object.hasOwn(route.query, 'new') && !Object.hasOwn(route.query, 'personal')" class="q-mx-xs q-mb-xs" @click="closeDrawerOnMobile" />
+        <SidebarNavItem icon="home" icon-color="primary" label="Home" :to="{ name: 'chat' }" :active="route.name === 'chat' && !routeSessionId && !Object.hasOwn(route.query, 'new') && !Object.hasOwn(route.query, 'personal')" class="q-mx-xs q-mb-xs" @click="revealHome" />
         <q-scroll-area
           ref="sidebarScrollArea"
           class="col session-scroll-area"
@@ -296,7 +296,7 @@ import { useChangelogStore } from 'src/features/changelog/store'
 import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
 
 import AppMenu from 'src/shared/ui/AppMenu.vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { mdiFolderOutline } from '@quasar/extras/mdi-v7'
 import { isNavigationFailure, NavigationFailureType, useRoute, useRouter } from 'vue-router'
@@ -341,6 +341,7 @@ const sidebarSections = computed(() => preferences.sessionsPosition === 'abovePr
   ? ['sessions', 'projects'] : ['projects', 'sessions'])
 const chat = useChatStore()
 const controlCenter = useControlCenterStore()
+const { restoreSplit } = inject('controlCenterLayout', {})
 const workspace = useWorkspaceStore()
 const approvals = useApprovalStore()
 const automations = useAutomationStore()
@@ -375,7 +376,7 @@ const {
   retrySessionPagination, removeSession, archiveSession
 } = useSidebarSessions({
   chat, projects, approvals, questions, workspace, controlCenter, automations,
-  route, router, $q, confirm, drawerOpen, selectedProjectId, confirmDiscardedEdit: props.confirmDiscardedEdit
+  route, router, $q, confirm, drawerOpen, selectedProjectId, restoreSplit, confirmDiscardedEdit: props.confirmDiscardedEdit
 })
 const {
   projectsSectionOpen, expandedProjects, openProjectActionMenuId,
@@ -452,6 +453,14 @@ async function archiveProject(project) {
   } catch {
     // The Axios interceptor displays the error.
   }
+}
+
+function revealHome(event) {
+  closeDrawerOnMobile()
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return
+  // A click on Home can leave the current route unchanged while the chat is covered.
+  if (route.name === 'chat' && !['session', 'project', 'new', 'personal', 'subagent', 'message']
+    .some(key => Object.hasOwn(route.query, key))) restoreSplit?.()
 }
 
 function closeDrawerOnMobile() {

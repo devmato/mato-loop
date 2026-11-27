@@ -20,7 +20,7 @@ const definition = () => ({
   enabled: true, archivedAt: null, schedules: [], effectiveState: { activeRunStatus: null }
 })
 
-async function mount(value = definition(), selected = value ? 'automation' : 'new', query = {}) {
+async function mount(value = definition(), selected = value ? 'automation' : 'new', query = {}, mobile = false) {
   let saved = value ? (Array.isArray(value) ? value : [value]) : []
   const store = reactive({
     items: saved, sessionItems: saved,
@@ -46,9 +46,12 @@ async function mount(value = definition(), selected = value ? 'automation' : 'ne
   app = createApp({ render: () => h(RouterView, null, { default: ({ Component }) => h(Component, { ref: (value) => { if (value) page = value.$.setupState } }) }) })
   app.use(router).use(Quasar, { components: { QBanner, QBtn, QCheckbox, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QMenu, QPopupProxy, QScrollArea, QSelect, QSeparator, QSpinner, QToggle }, directives: { ClosePopup, Ripple } })
   app.config.globalProperties.$q.notify = vi.fn()
+  app.config.globalProperties.$q.screen.lt.md = mobile
+  const restoreSplit = vi.fn()
+  app.provide('controlCenterLayout', { restoreSplit })
   app.mount(root)
   await vi.waitFor(() => expect(page?.savedDraft).toBeTruthy())
-  return { page, store, router }
+  return { page, store, router, restoreSplit }
 }
 
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); mocks.confirm.mockClear() })
@@ -204,21 +207,23 @@ it('leaves an automation reopened before its pending deletion completes', async 
   await vi.waitFor(() => expect(router.currentRoute.value.query).toEqual({ session: 'session' }))
 })
 
-it.each(['completed', 'failed'])('opens the last %s run at its original session message', async (status) => {
-  const { router } = await mount({ ...definition(), lastRun: {
+it.each([['completed', false], ['failed', true]])('opens the last %s run at its original session message (mobile=%s)', async (status, mobile) => {
+  const { router, restoreSplit } = await mount({ ...definition(), lastRun: {
     id: 'run', status, startedAt: '2026-10-06T14:32:00Z', messageId: 'message'
-  } })
+  } }, 'automation', {}, mobile)
+  const reveal = mobile ? mocks.stores.controlCenter.setOpen : restoreSplit
+  const unused = mobile ? restoreSplit : mocks.stores.controlCenter.setOpen
   const button = [...root.querySelectorAll('button')].find((item) => item.textContent.includes('Letzter Lauf:'))
   expect(button.textContent).toContain(status === 'failed' ? 'Fehlgeschlagen' : 'Abgeschlossen')
   expect(root.textContent).not.toContain('Bisherige Ausführungen')
   button.click()
   await vi.waitFor(() => expect(router.currentRoute.value.query).toEqual({ session: 'session', message: 'message' }))
-  await vi.waitFor(() => expect(mocks.stores.controlCenter.setOpen).toHaveBeenCalledWith(false))
+  await vi.waitFor(() => expect(reveal).toHaveBeenCalledExactlyOnceWith(...(mobile ? [false] : [])))
   await vi.waitFor(() => expect([...root.querySelectorAll('button')].some((item) => item.textContent.includes('Letzter Lauf:'))).toBe(true))
-  mocks.stores.controlCenter.setOpen.mockClear()
   const repeatedButton = [...root.querySelectorAll('button')].find((item) => item.textContent.includes('Letzter Lauf:'))
   repeatedButton.click()
-  await vi.waitFor(() => expect(mocks.stores.controlCenter.setOpen).toHaveBeenCalledWith(false))
+  await vi.waitFor(() => expect(reveal).toHaveBeenCalledTimes(2))
+  expect(unused).not.toHaveBeenCalled()
 })
 
 it('resolves an old session-bound run link to its message', async () => {

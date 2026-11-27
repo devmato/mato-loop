@@ -47,6 +47,20 @@
   border-left: 1px solid var(--app-surface-border);
 }
 
+.chat-workspace-splitter--maximized {
+  isolation: isolate;
+
+  .q-splitter__after {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+  }
+
+  .chat-workspace-pane {
+    border-left: 0;
+  }
+}
+
 .control-center {
   min-width: 0;
   min-height: 0;
@@ -57,6 +71,74 @@
   min-width: 0;
   min-height: 40px;
   flex: 0 0 auto;
+  padding-block: 4px;
+}
+
+.control-center__resize {
+  color: var(--app-muted);
+
+  &:is(:hover, :focus-visible) { color: var(--app-text); }
+
+  &:focus-visible {
+    outline: 1px solid var(--q-primary);
+    outline-offset: -2px;
+  }
+}
+
+@media (pointer: fine) {
+  .control-center__tabs--desktop {
+    min-height: 32px;
+    padding-block: 0;
+
+    > .q-btn {
+      min-width: 32px;
+      min-height: 32px;
+      margin-left: 2px;
+
+      .q-icon { font-size: 16px; }
+    }
+
+    .control-center__tab-add .q-icon { font-size: 16px; }
+
+    > .control-center__close {
+      background: transparent;
+      color: var(--app-muted);
+
+      &:is(:hover, :focus-visible) { color: var(--app-text); }
+    }
+
+    .control-center__tab-shell {
+      max-width: min(180px, 100%);
+
+      &.app-closable-tab--active {
+        background: var(--app-page-bg);
+        border-color: var(--app-surface-border);
+        border-radius: 8px 8px 0 0;
+        box-shadow: none;
+        color: var(--app-text);
+      }
+
+      .app-closable-tab__tab {
+        min-height: 30px;
+        padding: 0 1px 0 5px;
+        font-size: 13px;
+      }
+
+      .q-tab__content { padding: 0; }
+
+      .app-closable-tab__icon {
+        font-size: 14px;
+        margin-right: 3px;
+      }
+
+      .app-closable-tab__close {
+        min-width: 24px;
+        flex-basis: 24px;
+
+        .q-icon { font-size: 14px; }
+      }
+    }
+  }
 }
 
 // Quasar 2.18 has no desktop no-arrows prop or public overflow state.

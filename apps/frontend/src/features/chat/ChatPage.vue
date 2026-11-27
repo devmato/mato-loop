@@ -2,16 +2,17 @@
   <q-page class="chat-page column no-wrap" style="min-height: 0">
     <q-splitter
       v-model="splitPosition"
-      class="chat-workspace-splitter col"
+      class="chat-workspace-splitter col relative-position"
+      :class="{ 'chat-workspace-splitter--maximized': controlCenterMaximized }"
       :limits="splitLimits"
-      :disable="!desktopControlCenterOpen"
+      :disable="!splitterHandleVisible"
       separator-class="bg-transparent"
-      :separator-style="desktopControlCenterOpen
+      :separator-style="splitterHandleVisible
         ? { width: '12px', margin: '0 6px' }
         : { display: 'none' }"
     >
       <template #before>
-        <div class="chat-page__pane column no-wrap full-height">
+        <div class="chat-page__pane column no-wrap full-height" :inert="controlCenterMaximized">
           <SubagentInspector
             v-if="routeSessionId && routeSubagentId"
             :parent-id="routeSessionId"
@@ -307,7 +308,7 @@
 
       <template #separator>
         <div
-          v-if="desktopControlCenterOpen"
+          v-if="splitterHandleVisible"
           class="chat-workspace-splitter__handle flex flex-center"
           role="separator"
           aria-label="Breite des Chat-Bereichs ändern"
@@ -329,7 +330,25 @@
           class="chat-workspace-pane full-height"
           aria-label="Control Center"
         >
-          <ControlCenterPanel />
+          <ControlCenterPanel
+            maximizable
+            :maximized="controlCenterMaximized"
+            @toggle-maximized="controlCenterMaximized = !controlCenterMaximized"
+          >
+            <template v-if="showControlCenterNavigation" #navigation>
+              <q-btn
+                id="app-navigation-toggle"
+                class="q-mr-xs"
+                flat
+                round
+                icon="menu"
+                aria-label="Navigation öffnen"
+                aria-controls="app-navigation-drawer"
+                aria-expanded="false"
+                @click="openNavigation"
+              />
+            </template>
+          </ControlCenterPanel>
         </aside>
       </template>
     </q-splitter>
@@ -341,7 +360,7 @@
 
 <script setup>
 import AppSelect from 'src/shared/ui/AppSelect.vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import RequestDock from 'src/features/chat/components/RequestDock.vue'
@@ -641,6 +660,15 @@ const sessionLoadErrorMessage = computed(() => (
   apiErrorMessage(chat.loadError, 'Die Session konnte nicht geladen werden.')
 ))
 const desktopControlCenterOpen = computed(() => controlCenter.open && $q.screen.gt.sm)
+const { maximized: controlCenterMaximized, showNavigation: showControlCenterNavigation, openNavigation } = inject(
+  'controlCenterLayout',
+  () => ({ maximized: ref(false) }),
+  true
+)
+const splitterHandleVisible = computed(() => desktopControlCenterOpen.value && !controlCenterMaximized.value)
+watch(desktopControlCenterOpen, (open) => {
+  if (!open) controlCenterMaximized.value = false
+})
 const splitLimits = computed(() => (
   desktopControlCenterOpen.value
     ? [MIN_CONTROL_CENTER_SPLIT_RATIO, MAX_CONTROL_CENTER_SPLIT_RATIO]
@@ -649,7 +677,7 @@ const splitLimits = computed(() => (
 const splitPosition = computed({
   get: () => desktopControlCenterOpen.value ? controlCenter.splitRatio : 100,
   set: (value) => {
-    if (desktopControlCenterOpen.value) controlCenter.setSplitRatio(value)
+    if (splitterHandleVisible.value) controlCenter.setSplitRatio(value)
   }
 })
 
@@ -932,6 +960,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   chat.liveTranscriptSessionId = null
+  controlCenterMaximized.value = false
   draftProjectCreationContext = null
   window.clearInterval(messageTimestampTimer)
   executionAgents.stopPolling()

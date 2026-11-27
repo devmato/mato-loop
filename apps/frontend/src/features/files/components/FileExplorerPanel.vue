@@ -553,7 +553,9 @@ async function openViewer({ entry, edit = false }) {
   if (entry?.kind !== 'file') return
   const target = workspace.fileTarget(entry, edit)
   if (!target) return
-  const tabId = await controlCenter.openFile(target)
+  const tabId = await controlCenter.openFile(target, {
+    returnTabId: props.scope === 'filesystem' ? 'computer-files' : 'files'
+  })
   if (edit && tabId) workspace.startFileTabEdit(tabId)
 }
 

@@ -2,7 +2,7 @@
 import { createApp, h, nextTick, reactive } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Quasar } from 'quasar'
 import { quasarOptions } from './quasar-options'
 import { useSessionTabsStore } from '../src/features/chat/session-tabs-store'
@@ -22,7 +22,17 @@ import { api } from 'src/boot/axios'
 let app, root
 const a = { id: 'a', title: 'Alpha', projectId: null }
 const b = { id: 'b', title: 'Beta', projectId: 'project' }
-afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks() })
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
+beforeEach(() => {
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
+})
+afterEach(() => {
+  app?.unmount()
+  root?.remove()
+  if (originalScrollIntoView) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView)
+  else delete HTMLElement.prototype.scrollIntoView
+  vi.restoreAllMocks()
+})
 
 async function mount({ restoring = false } = {}) {
   const pinia = createPinia()
@@ -84,6 +94,23 @@ it('retains the active tab when navigation is cancelled', async () => {
   router.beforeEach(() => false)
   root.querySelector('[aria-label="Tab Alpha schließen"]').click()
   await vi.waitFor(() => expect(tabs.items.map(tab => tab.key)).toEqual(['a']))
+})
+
+it('moves focus with plain arrows without swallowing the session reorder shortcut', async () => {
+  const { tabs, settings } = await mount()
+  settings.sessionTabsEnabled = true
+  tabs.visit(b, { keep: true })
+  tabs.visit({ id: 'c', title: 'Gamma', projectId: b.projectId }, { keep: true })
+  await nextTick()
+  const beta = root.querySelector('[role="tab"][aria-label="Beta"]')
+  const gamma = root.querySelector('[role="tab"][aria-label="Gamma"]')
+  beta.focus()
+  beta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+  expect(document.activeElement).toBe(gamma)
+  gamma.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', altKey: true, bubbles: true }))
+  await nextTick()
+  expect([...root.querySelectorAll('[role="tab"]')].map(tab => tab.getAttribute('aria-label')))
+    .toEqual(['Alpha, Vorschau', 'Gamma', 'Beta'])
 })
 
 it('makes room for a newly opened tab by dropping the least recently visited tab, not its draft', async () => {

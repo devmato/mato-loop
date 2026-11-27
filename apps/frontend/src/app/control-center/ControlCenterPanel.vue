@@ -1,6 +1,7 @@
 <template>
   <section id="control-center-panel" class="control-center column full-height no-wrap" aria-label="Control Center">
-    <div class="control-center__tabs row items-center no-wrap q-px-sm q-py-xs">
+    <div class="control-center__tabs row items-center no-wrap q-px-sm" :class="{ 'control-center__tabs--desktop': maximizable }">
+      <slot name="navigation" />
       <q-tabs
         :model-value="activeFlexibleTabId"
         class="control-center__tab-strip col"
@@ -149,11 +150,25 @@
       </q-btn>
 
       <q-btn
+        v-if="maximizable"
         flat
         round
         dense
         size="20px"
-        class="q-ml-sm app-surface-tonal"
+        class="control-center__resize q-ml-sm"
+        :icon="maximized ? 'fullscreen_exit' : 'fullscreen'"
+        :aria-label="maximizeLabel"
+        @click="emit('toggle-maximized')"
+      >
+        <q-tooltip>{{ maximizeLabel }}</q-tooltip>
+      </q-btn>
+
+      <q-btn
+        flat
+        round
+        dense
+        size="20px"
+        class="control-center__close q-ml-sm app-surface-tonal"
         icon="close"
         aria-label="Control Center schließen"
         @click="closePanel"
@@ -265,7 +280,11 @@ import {
 
 defineOptions({ name: 'ControlCenterPanel' })
 
-const emit = defineEmits(['close'])
+const props = defineProps({ maximizable: Boolean, maximized: Boolean })
+const emit = defineEmits(['close', 'toggle-maximized'])
+const maximizeLabel = computed(() => props.maximized
+  ? 'Geteilte Ansicht wiederherstellen'
+  : 'Control Center maximieren')
 const { confirm } = useConfirm()
 const controlCenter = useControlCenterStore()
 const notifications = useInAppNotificationStore()

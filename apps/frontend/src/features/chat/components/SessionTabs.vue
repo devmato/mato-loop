@@ -1,32 +1,58 @@
 <template>
   <div v-if="enabled && tabs.items.length" class="session-tabs row no-wrap items-center col-auto" :class="{ 'session-tabs--top': position === 'top' }" aria-label="Offene Sessions">
     <q-resize-observer :debounce="0" @resize="barWidth = $event.width" />
-    <q-tabs :model-value="activeKey" align="left" :breakpoint="0" no-caps dense class="col session-tabs__list" aria-label="Session-Tabs" @update:model-value="select">
-      <q-tab v-for="(tab, index) in visibleTabs" :key="tab.key" :name="tab.key" class="session-tabs__tab" :class="{ 'session-tabs__preview': tab.preview, 'session-tabs__dragging': draggedId === tab.key, 'session-tabs__drop-before': dropTarget?.id === tab.key && !dropTarget.after, 'session-tabs__drop-after': dropTarget?.id === tab.key && dropTarget.after }" :aria-label="`${tab.label}${tab.preview ? ', Vorschau' : ''}`" :title="tab.label" :draggable="projectOrder" @dragstart="projectOrder && startDrag($event, tab.key)" @dragover="dragOver($event, tab)" @drop="drop" @dragend="endDrag" @keydown.alt.left.prevent.stop="move(index, -1)" @keydown.alt.right.prevent.stop="move(index, 1)" @dblclick="tabs.keep(tab.key)">
-        <div class="session-tabs__content row no-wrap items-center">
+    <q-tabs :model-value="activeKey" align="left" :breakpoint="0" no-caps dense inline-label class="col session-tabs__list" aria-label="Session-Tabs" @update:model-value="select">
+      <AppClosableTab
+        v-for="(tab, index) in visibleTabs"
+        :key="tab.key"
+        :name="tab.key"
+        :label="tab.label"
+        :text="tab.title"
+        :accessible-label="`${tab.label}${tab.preview ? ', Vorschau' : ''}`"
+        :close-label="`Tab ${tab.label} schließen`"
+        :active="tab.key === activeKey"
+        class="session-tabs__tab"
+        :class="{
+          'session-tabs__preview': tab.preview,
+          'session-tabs__dragging': draggedId === tab.key,
+          'session-tabs__drop-before': dropTarget?.id === tab.key && !dropTarget.after,
+          'session-tabs__drop-after': dropTarget?.id === tab.key && dropTarget.after
+        }"
+        :draggable="projectOrder"
+        @dragstart="projectOrder && startDrag($event, tab.key)"
+        @dragover="dragOver($event, tab)"
+        @drop="drop"
+        @dragend="endDrag"
+        @keydown.alt.left.prevent.stop="move(index, -1)"
+        @keydown.alt.right.prevent.stop="move(index, 1)"
+        @dblclick="tabs.keep(tab.key)"
+        @close="close(tab)"
+      >
+        <template #leading>
           <ProjectIcon v-if="tab.projectName" class="session-tabs__project-badge" :project-id="tab.projectId" :name="tab.projectName" :icon-initials="tab.project.iconInitials" :icon-color="tab.project.iconColor">
             <SessionStatusIndicator v-if="tab.status" :status="tab.status" class="session-tabs__status-badge" />
           </ProjectIcon>
           <span v-else-if="tab.status" class="session-tabs__status">
             <SessionStatusIndicator :status="tab.status" />
           </span>
-          <span class="session-tabs__title">{{ tab.title }}</span>
-          <q-btn flat round dense size="xs" icon="close" class="session-tabs__close" :aria-label="`Tab ${tab.label} schließen`" @click.stop="close(tab)" @keydown.stop />
-        </div>
-        <q-menu v-if="projectOrder" touch-position context-menu>
-          <q-list dense>
-            <q-item clickable v-close-popup :disable="!canMove(index, -1)" @click="move(index, -1)"><q-item-section>Nach links verschieben</q-item-section></q-item>
-            <q-item clickable v-close-popup :disable="!canMove(index, 1)" @click="move(index, 1)"><q-item-section>Nach rechts verschieben</q-item-section></q-item>
-          </q-list>
-        </q-menu>
-      </q-tab>
+        </template>
+        <template #menu>
+          <q-menu v-if="projectOrder" touch-position context-menu>
+            <q-list dense>
+              <q-item clickable v-close-popup :disable="!canMove(index, -1)" @click="move(index, -1)"><q-item-section>Nach links verschieben</q-item-section></q-item>
+              <q-item clickable v-close-popup :disable="!canMove(index, 1)" @click="move(index, 1)"><q-item-section>Nach rechts verschieben</q-item-section></q-item>
+            </q-list>
+          </q-menu>
+        </template>
+      </AppClosableTab>
     </q-tabs>
   </div>
 </template>
 
 <script setup>
 import { computed, ref } from 'vue'
-import { ClosePopup, QBtn, QTab, QTabs, QMenu, QList, QItem, QItemSection, QResizeObserver } from 'quasar'
+import { ClosePopup, QTabs, QMenu, QList, QItem, QItemSection, QResizeObserver } from 'quasar'
+import AppClosableTab from 'src/shared/ui/AppClosableTab.vue'
 import SessionStatusIndicator from './SessionStatusIndicator.vue'
 import ProjectIcon from 'src/features/projects/ProjectIcon.vue'
 import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
@@ -119,7 +145,6 @@ async function close(tab) {
 
 <style scoped>
 .session-tabs {
-  --session-tab-close-size: 24px;
   min-width: 0;
   box-shadow: inset 0 1px var(--app-surface-border);
   background: var(--app-shell-bg);
@@ -136,41 +161,37 @@ async function close(tab) {
   max-width: 180px;
   flex: 0 1 auto;
   min-height: 32px;
-  padding: 0 3px 0 6px;
-  border-right: 1px solid var(--app-surface-border);
   color: var(--app-text);
-  opacity: 1;
 }
 
 .session-tabs .session-tabs__tab:has(.session-tabs__project-badge, .session-tabs__status) {
   min-width: min(100%, 75px);
 }
 
-.session-tabs__tab:hover { background: var(--app-hover); }
 .session-tabs__dragging { opacity: .45 !important; }
-.session-tabs__drop-before { box-shadow: inset 2px 0 var(--q-primary); }
-.session-tabs__drop-after { box-shadow: inset -2px 0 var(--q-primary); }
 
-.session-tabs__tab.q-tab--active {
+.session-tabs .session-tabs__tab.app-closable-tab--active {
   background: var(--app-page-bg);
-  border: 1px solid var(--app-surface-border);
-  border-top: 0;
+  border-color: var(--app-surface-border);
+  border-top-color: transparent;
   border-radius: 0 0 9px 9px;
-  padding-left: 5px;
+  box-shadow: none;
 }
 
-.session-tabs--top .session-tabs__tab.q-tab--active {
-  border-top: 1px solid var(--app-surface-border);
-  border-bottom: 0;
+.session-tabs--top.session-tabs .session-tabs__tab.app-closable-tab--active {
+  border-top-color: var(--app-surface-border);
+  border-bottom-color: transparent;
   border-radius: 9px 9px 0 0;
 }
 
-:global(body.body--dark .session-tabs .session-tabs__tab.q-tab--active) {
+:global(body.body--dark .session-tabs .session-tabs__tab.app-closable-tab--active) {
   background: color-mix(in srgb, var(--app-page-bg) 93%, white);
   border-color: rgba(255, 255, 255, 0.38);
 }
 
-.session-tabs__content { min-width: 0; width: 100%; text-align: left; font-size: 13px; }
+.session-tabs .session-tabs__tab.session-tabs__drop-before { box-shadow: inset 2px 0 var(--q-primary); }
+.session-tabs .session-tabs__tab.session-tabs__drop-after { box-shadow: inset -2px 0 var(--q-primary); }
+
 .session-tabs__status { flex: 0 0 16px; margin-right: 4px; }
 .session-tabs__project-badge { margin-right: 5px; }
 .session-tabs__project-badge > .session-tabs__status-badge {
@@ -187,12 +208,11 @@ async function close(tab) {
   flex-wrap: nowrap;
   overflow: hidden;
 }
-.session-tabs :deep(.q-tab__content) { min-width: 0; width: 100%; padding: 0; }
+.session-tabs :deep(.app-closable-tab__tab) { min-height: 30px; padding: 0 2px 0 5px; font-size: 13px; opacity: 1; }
+.session-tabs :deep(.q-tab__content) { min-width: 0; width: 100%; justify-content: flex-start; padding: 0; }
 .session-tabs :deep(.q-tab__indicator) { display: none; }
 .session-tabs :deep(.q-tabs__arrow) { display: none; }
-.session-tabs__title { min-width: 0; flex: 0 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.session-tabs__preview .session-tabs__title { font-style: italic; }
-
-.session-tabs__close { min-width: var(--session-tab-close-size); min-height: 24px; flex: 0 0 var(--session-tab-close-size); margin-left: 2px; color: var(--app-muted); }
-.session-tabs__close:hover { color: var(--app-text); }
+.session-tabs__preview :deep(.app-closable-tab__label) { font-style: italic; }
+.session-tabs :deep(.app-closable-tab__close) { min-width: 24px; flex-basis: 24px; }
+.session-tabs :deep(.app-closable-tab__close .q-icon) { font-size: 14px; }
 </style>

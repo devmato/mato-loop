@@ -121,7 +121,7 @@
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { isNavigationFailure, NavigationFailureType, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import AutomationScheduleEditor from 'src/features/automations/AutomationScheduleEditor.vue'
@@ -141,6 +141,7 @@ const { confirm } = useConfirm()
 const automations = useAutomationStore()
 const chat = useChatStore()
 const controlCenter = useControlCenterStore()
+const { restoreSplit } = inject('controlCenterLayout', {})
 const providers = useProviderStore()
 const sessionId = computed(() => controlCenter.sessionId)
 const selectedId = computed(() => typeof route.query.automation === 'string' ? route.query.automation : null)
@@ -221,7 +222,7 @@ async function load() {
     if (value && typeof route.query.run === 'string') {
       const run = await automations.fetchRun(value.id, route.query.run)
       if (current !== version) return
-      if (!await router.replace({ name: 'chat', query: { session: sessionId.value, ...(run.messageId ? { message: run.messageId } : {}) } })) await controlCenter.setOpen(false)
+      await openChat(run.messageId, router.replace)
     }
   } catch {
     if (current === version) loadFailed.value = true
@@ -237,12 +238,17 @@ async function select(id) {
 async function openLastRun(item) {
   if (!item.lastRun?.messageId) return
   try {
-    const failure = await router.push({ name: 'chat', query: { session: sessionId.value, message: item.lastRun.messageId } })
-    if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
-    await controlCenter.setOpen(false)
+    await openChat(item.lastRun.messageId)
   } catch {
     // The Axios interceptor displays panel persistence errors.
   }
+}
+
+async function openChat(messageId, navigate = router.push) {
+  const failure = await navigate({ name: 'chat', query: { session: sessionId.value, ...(messageId ? { message: messageId } : {}) } })
+  if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
+  if ($q.screen.lt.md) await controlCenter.setOpen(false)
+  else restoreSplit?.()
 }
 
 function payload() {

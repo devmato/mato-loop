@@ -261,7 +261,8 @@ export const useControlCenterStore = defineStore('control-center', {
     confirmedState: defaultState(),
     requestedAppId: null,
     gitAutoAdded: true,
-    fileDiffModes: {}
+    fileDiffModes: {},
+    fileReturnTabs: {}
   }),
   getters: {
     open: (state) => state.pendingReveal?.mode === visibilityMode()
@@ -288,8 +289,11 @@ export const useControlCenterStore = defineStore('control-center', {
     },
     syncSession(session) {
       const sessionId = session?.id || null
-      if (this.sessionId !== sessionId) this.fileDiffModes = {}
-      if (this.sessionId !== sessionId) this.activeGlobalSectionId = null
+      if (this.sessionId !== sessionId) {
+        this.fileDiffModes = {}
+        this.fileReturnTabs = {}
+        this.activeGlobalSectionId = null
+      }
       const requestedAppId = this.sessionId === sessionId && this.pendingReveal?.mode === visibilityMode()
         ? this.requestedAppId : null
       this.requestGeneration += 1
@@ -332,6 +336,7 @@ export const useControlCenterStore = defineStore('control-center', {
       this.refreshBrowserTabAfterSave = false
       if (this.sessionId !== sessionId) {
         this.fileDiffModes = {}
+        this.fileReturnTabs = {}
         this.activeGlobalSectionId = null
       }
       if (this.sessionId !== sessionId || !this.requestedAppId) this.cancelPendingReveal()
@@ -342,6 +347,7 @@ export const useControlCenterStore = defineStore('control-center', {
     resetDraft() {
       this.gitAutoAdded = false
       this.fileDiffModes = {}
+      this.fileReturnTabs = {}
       this.requestGeneration += 1
       this.ready = true
       this.saving = false
@@ -567,7 +573,7 @@ export const useControlCenterStore = defineStore('control-center', {
       if (index < 0 || !target) return
       return this.reorderIntegration(appId, target.tabId, offset > 0)
     },
-    async openFile(fileTarget, { diff = false } = {}) {
+    async openFile(fileTarget, { diff = false, returnTabId } = {}) {
       const target = normalizedFileTarget(fileTarget)
       if (!target) return null
       const sourceKey = JSON.stringify([
@@ -586,6 +592,7 @@ export const useControlCenterStore = defineStore('control-center', {
       ]) === sourceKey)
       if (!existing && this.tabs.length >= 20) return null
       const tabId = existing?.tabId || `file-${randomUuid()}`
+      const generation = this.requestGeneration
       const previousMode = this.fileDiffModes[tabId]
       this.fileDiffModes[tabId] = diff && target.scope === 'filesystem'
       try {
@@ -597,6 +604,9 @@ export const useControlCenterStore = defineStore('control-center', {
             activeAppId: tabId, fileView: this.fileView
           }, { reveal: true })
         }
+        if (returnTabId && generation === this.requestGeneration && this.fileTabs.some((tab) => tab.tabId === tabId)) {
+          this.fileReturnTabs[tabId] = returnTabId
+        }
         return tabId
       } catch (error) {
         this.fileDiffModes[tabId] = previousMode
@@ -607,11 +617,13 @@ export const useControlCenterStore = defineStore('control-center', {
       const index = this.tabs.findIndex((tab) => tab.tabId === tabId && tab.kind === 'file')
       if (index < 0) return
       const tabs = this.tabs.filter((tab) => tab.tabId !== tabId)
+      const origin = tabs.find((tab) => tab.tabId === this.fileReturnTabs[tabId])
       const activeAppId = this.activeAppId === tabId
-        ? this.tabs[index - 1]?.tabId || this.tabs[index + 1]?.tabId || 'files'
+        ? origin?.tabId || this.tabs[index - 1]?.tabId || this.tabs[index + 1]?.tabId || 'files'
         : this.activeAppId
       await this.save({ tabs, activeAppId, fileView: this.fileView })
       delete this.fileDiffModes[tabId]
+      delete this.fileReturnTabs[tabId]
     },
     async removeFileTabs(tabIds) {
       const removed = new Set(tabIds)
@@ -621,7 +633,10 @@ export const useControlCenterStore = defineStore('control-center', {
         ? this.activeAppId
         : tabs.find((tab) => tab.appId === 'files')?.tabId || 'session'
       const result = await this.save({ tabs, activeAppId, fileView: this.fileView })
-      for (const tabId of removed) delete this.fileDiffModes[tabId]
+      for (const tabId of removed) {
+        delete this.fileDiffModes[tabId]
+        delete this.fileReturnTabs[tabId]
+      }
       return result
     },
     async rebindFileTargets(fileTarget, destination = null, tabIds = null) {
@@ -658,7 +673,10 @@ export const useControlCenterStore = defineStore('control-center', {
         : tabs.find((tab) => tab.appId === 'files')?.tabId || 'session'
       await this.save({ tabs, activeAppId, fileView: this.fileView })
       if (destinationTarget === null) {
-        for (const tabId of affectedIds) delete this.fileDiffModes[tabId]
+        for (const tabId of affectedIds) {
+          delete this.fileDiffModes[tabId]
+          delete this.fileReturnTabs[tabId]
+        }
       }
       return [...affectedIds]
     },

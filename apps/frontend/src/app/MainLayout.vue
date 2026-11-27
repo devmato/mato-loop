@@ -69,7 +69,7 @@
 </template>
 
 <script setup>
-import { computed, provide, ref } from 'vue'
+import { computed, provide, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import AppNavigation from 'src/app/AppNavigation.vue'
@@ -102,8 +102,37 @@ const workspace = useWorkspaceStore()
 const { confirm } = useConfirm()
 const automations = useAutomationStore()
 const notifications = useInAppNotificationStore()
-const showFloatingNavigation = computed(() => !drawerOpen.value)
 const controlCenterVisible = computed(() => controlCenter.open)
+const controlCenterMaximized = ref(false)
+const showControlCenterNavigation = computed(() => (
+  route.name === 'chat' && !$q.screen.lt.md && controlCenterVisible.value
+  && controlCenterMaximized.value && !drawerOpen.value
+))
+const showFloatingNavigation = computed(() => !drawerOpen.value && !showControlCenterNavigation.value)
+provide('controlCenterLayout', {
+  maximized: controlCenterMaximized,
+  showNavigation: showControlCenterNavigation,
+  openNavigation,
+  restoreSplit
+})
+watch([
+  () => route.name,
+  () => route.query.session,
+  () => route.query.subagent,
+  () => route.query.message,
+  () => !route.query.session && route.query.project,
+  () => Object.hasOwn(route.query, 'new'),
+  () => Object.hasOwn(route.query, 'personal')
+], ([name, sessionId, subagentId, messageId, project, isNew, isPersonal], previous) => {
+  const [previousName, previousSessionId, previousSubagentId, previousMessageId, previousProject, wasNew, wasPersonal] = previous
+  // Opening a tool in a draft can create its backing session without navigating to the chat.
+  if (name === 'chat' && !previousSessionId && sessionId && sessionId === chat.current?.id
+    && !subagentId && !messageId && typeof route.query.controlCenter === 'string') return
+  // Tool links can clear a message anchor without requesting the chat.
+  if (name !== previousName || sessionId !== previousSessionId || subagentId !== previousSubagentId
+    || (messageId && messageId !== previousMessageId) || project !== previousProject
+    || isNew !== wasNew || isPersonal !== wasPersonal) restoreSplit()
+})
 const showFloatingControlCenter = computed(() => route.name === 'chat' && !controlCenterVisible.value)
 const showFloatingControls = computed(() => (
   showFloatingNavigation.value || showFloatingControlCenter.value
@@ -116,6 +145,10 @@ provide('confirmDiscardedEdit', confirmDiscardedEdit)
 
 function openNavigation() {
   drawerOpen.value = true
+}
+
+function restoreSplit() {
+  controlCenterMaximized.value = false
 }
 
 async function confirmDiscardedEdit({ discard = true } = {}) {

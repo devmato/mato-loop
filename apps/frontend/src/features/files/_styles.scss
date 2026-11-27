@@ -119,6 +119,19 @@
   flex: 0 0 auto;
 }
 
+@media (min-width: 1024px) and (pointer: fine) {
+  .workspace-editor__actions {
+    min-height: 36px;
+
+    > .q-btn {
+      min-width: 32px;
+      min-height: 32px;
+
+      .q-icon { font-size: 16px; }
+    }
+  }
+}
+
 @container (max-width: 400px) {
   .workspace-editor__secondary {
     display: none;
