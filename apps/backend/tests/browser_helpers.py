@@ -77,10 +77,17 @@ def env(monkeypatch, tmp_path):
 
         async def scalar(self, statement):
             params = statement.compile().params
+            stored_session = objects.get((ChatSession, params.get("id_1")))
+            if (stored_session is not None and params.get("user_id_1") == stored_session.user_id
+                    and stored_session.delete_at is None):
+                return stored_session
             if (params.get("id_1") == agent.id and params.get("user_id_1") == agent.user_id
                     and agent.revoked_at is None):
                 return agent.id
             return None
+
+        async def commit(self):
+            pass
 
         async def __aenter__(self):
             return self

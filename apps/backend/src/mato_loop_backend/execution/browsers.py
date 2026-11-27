@@ -19,10 +19,13 @@ from uuid import UUID, uuid4
 from anyio import CancelScope
 from fastapi import WebSocket
 from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
 from mato_loop_backend.error_contract import describe_error
+from mato_loop_backend.events import run_events
 from mato_loop_backend.execution.browser_contracts import (
     BROWSER_TRANSFER_TIMEOUT,
     MAX_BROWSER_FILE_BYTES,
@@ -60,6 +63,7 @@ from mato_loop_backend.permissions.policy import (
     integration_operation_permission,
 )
 from mato_loop_backend.providers.base import ToolCall
+from mato_loop_backend.sessions.contracts import ControlCenterTabState, default_control_center_state
 from mato_loop_backend.sessions.state import is_session_deleted
 from mato_loop_backend.settings.effective import (
     AgentProfileUnavailable,
@@ -221,6 +225,7 @@ class BrowserConnection:
     replaced_browser_id: UUID | None = None
     restore_notice_pending: bool = False
     restore_pending: bool = False
+    control_center_tab_handled: bool = False
     downloads: list[dict[str, Any]] = field(default_factory=list)
     origins: dict[str, tuple[BrowserOrigin, int]] = field(default_factory=dict)
     control_epoch: int = 0
@@ -677,6 +682,39 @@ class BrowserCoordinator:
                             digest, _ = await self._snapshot(connection, tab_id, settle=True)
                     return digest
 
+    async def _add_control_center_tab(self, connection: BrowserConnection, run_id: UUID) -> None:
+        try:
+            async with asyncio.timeout(2), AsyncSessionFactory() as db:
+                session = await db.scalar(select(ChatSession).where(
+                    ChatSession.id == connection.session_id,
+                    ChatSession.user_id == connection.owner_id,
+                    ChatSession.delete_at.is_(None),
+                ).with_for_update())
+                if session is None:
+                    return
+                state = session.control_center or {}
+                if state.get("browser_tab_handled"):
+                    connection.control_center_tab_handled = True
+                    return
+                if "tabs" not in state or "active_app_id" not in state:
+                    state = {**state, **default_control_center_state().model_dump(mode="json")}
+                tabs = state["tabs"]
+                has_browser = any(tab["app_id"] == "browser" for tab in tabs)
+                if not has_browser and len(tabs) + int(not any(tab["app_id"] == "session" for tab in tabs)) >= 21:
+                    return
+                session.control_center = {
+                    **state, "browser_tab_handled": True,
+                    "tabs": tabs if has_browser else [*tabs, ControlCenterTabState(
+                        app_id="browser", pinned=False,
+                    ).model_dump(mode="json")],
+                }
+                await db.commit()
+                connection.control_center_tab_handled = True
+        except (SQLAlchemyError, TimeoutError):
+            logger.warning("Could not save the automatic browser tab", exc_info=True)
+            return
+        await run_events.publish(run_id, {"type": "session.browserTabAdded"})
+
     async def execute(self, session_id, agent_id, integration_id, arguments: dict[str, Any]) -> BrowserActionResult:
         with _browser_latency("execute", session_id) as timings:
             connection = self.current_for(session_id, agent_id)
@@ -706,6 +744,7 @@ class BrowserCoordinator:
                     if connection.restore_pending and expected_snapshot is not None:
                         raise ExecutionClientError("browser.bindingChanged")
                     result = None
+                    tab_update = None
                     try:
                         async with self._model_action(connection, run_id):
                             if connection.restore_pending:
@@ -731,6 +770,8 @@ class BrowserCoordinator:
                                     ).snapshot_characters
                                     <= 32_768
                                 ):
+                                    if run_id is not None and not connection.control_center_tab_handled:
+                                        tab_update = asyncio.create_task(self._add_control_center_tab(connection, run_id))
                                     return inspection
                             check_binding()
                             read_action = action.action in {"tabs", "inspect", "screenshot", "diagnostics"}
@@ -749,6 +790,9 @@ class BrowserCoordinator:
                             if action.action != "fill":
                                 excluded.update({"slowly", "submit"})
                             wire_payload = wire.model_dump(mode="json", exclude=excluded)
+                            if run_id is not None and not connection.control_center_tab_handled:
+                                # Keep layout I/O off the path between the final guard and dispatch.
+                                tab_update = asyncio.create_task(self._add_control_center_tab(connection, run_id))
                             with _browser_timing(timings, "action_rpc_ms"):
                                 if action.action == "screenshot":
                                     result = await self._screenshot(connection, wire_payload, check_binding)
@@ -782,6 +826,14 @@ class BrowserCoordinator:
                         if result is not None and result._snapshot_stream is not None:
                             result._snapshot_stream.close()
                         raise
+                    finally:
+                        if tab_update is not None:
+                            try:
+                                await tab_update
+                            except BaseException:
+                                if result is not None and result._snapshot_stream is not None:
+                                    result._snapshot_stream.close()
+                                raise
                     if action.action == "screenshot":
                         await connection.check_access()
                         check_binding()

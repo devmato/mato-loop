@@ -22,6 +22,7 @@ function defaultState() {
   return {
     tabs: [appTab('session'), appTab('files')],
     activeAppId: 'session',
+    browserTabHandled: false,
     fileView: null,
     fileViews: { session: null, filesystem: null }
   }
@@ -34,6 +35,7 @@ function copyState(state) {
       ...(tab.fileTarget ? { fileTarget: { ...tab.fileTarget } } : {})
     })),
     activeAppId: state.activeAppId,
+    browserTabHandled: state.browserTabHandled === true,
     fileView: state.fileView ? { ...state.fileView } : null,
     fileViews: {
       session: state.fileViews?.session ? { ...state.fileViews.session } : null,
@@ -169,7 +171,7 @@ function normalizeState(value) {
   if (legacyFileView && !fileViews[legacyFileView.scope]) {
     fileViews[legacyFileView.scope] = legacyFileView
   }
-  return { tabs, activeAppId, fileView: legacyFileView, fileViews }
+  return { tabs, activeAppId, browserTabHandled: value?.browserTabHandled === true, fileView: legacyFileView, fileViews }
 }
 
 function normalizeFileView(value) {
@@ -252,6 +254,8 @@ export const useControlCenterStore = defineStore('control-center', {
     saving: false,
     requestGeneration: 0,
     pendingState: null,
+    pendingBrowserTabAction: null,
+    refreshBrowserTabAfterSave: false,
     pendingReveal: null,
     mobileOpen: false,
     confirmedState: defaultState(),
@@ -278,6 +282,7 @@ export const useControlCenterStore = defineStore('control-center', {
       const state = normalizeState(value)
       this.tabs = state.tabs
       this.activeAppId = state.activeAppId
+      this.browserTabHandled = state.browserTabHandled
       this.fileView = state.fileView
       this.fileViews = state.fileViews
     },
@@ -291,12 +296,30 @@ export const useControlCenterStore = defineStore('control-center', {
       this.ready = true
       this.saving = false
       this.pendingState = null
+      this.pendingBrowserTabAction = null
+      this.refreshBrowserTabAfterSave = false
       this.requestedAppId = null
       this.sessionId = sessionId
       this.pendingReveal = null
       this.confirmedState = normalizeState(session?.controlCenter || defaultState())
       this.applyState(this.confirmedState)
       if (requestedAppId) void this.openApp(requestedAppId).catch(() => {})
+    },
+    syncBrowserTab(session) {
+      if (this.sessionId !== session.id || !this.ready || this.browserTabHandled
+        || !session.controlCenter?.browserTabHandled) return
+      if (this.saving) {
+        this.refreshBrowserTabAfterSave = true
+        return
+      }
+      const browserTab = session.controlCenter.tabs.find((tab) => tab.appId === 'browser')
+      // Do not replace the local selection or reveal the panel.
+      this.applyState({
+        ...copyState(this),
+        browserTabHandled: true,
+        tabs: browserTab && !this.tabs.some((tab) => tab.appId === 'browser') ? [...this.tabs, browserTab] : this.tabs
+      })
+      this.confirmedState = copyState(this)
     },
     bindSession(session) {
       const sessionId = session?.id || null
@@ -305,6 +328,8 @@ export const useControlCenterStore = defineStore('control-center', {
       this.ready = false
       this.saving = false
       this.pendingState = null
+      this.pendingBrowserTabAction = null
+      this.refreshBrowserTabAfterSave = false
       if (this.sessionId !== sessionId) {
         this.fileDiffModes = {}
         this.activeGlobalSectionId = null
@@ -321,6 +346,8 @@ export const useControlCenterStore = defineStore('control-center', {
       this.ready = true
       this.saving = false
       this.pendingState = null
+      this.pendingBrowserTabAction = null
+      this.refreshBrowserTabAfterSave = false
       this.requestedAppId = null
       this.sessionId = null
       this.pendingReveal = null
@@ -333,6 +360,8 @@ export const useControlCenterStore = defineStore('control-center', {
       this.ready = true
       this.saving = false
       this.pendingState = null
+      this.pendingBrowserTabAction = null
+      this.refreshBrowserTabAfterSave = false
       this.pendingReveal = null
       this.sessionId = sessionId
       this.confirmedState = normalizeState(serverState)
@@ -342,9 +371,10 @@ export const useControlCenterStore = defineStore('control-center', {
       }
       return this.save(latest)
     },
-    async save(value, { reveal = false } = {}) {
+    async save(value, { reveal = false, browserTabAction = null } = {}) {
       const next = normalizeState({
         ...value,
+        browserTabHandled: value.browserTabHandled ?? this.browserTabHandled,
         fileView: Object.hasOwn(value, 'fileView') ? value.fileView : this.fileView,
         fileViews: value.fileViews || this.fileViews
       })
@@ -356,6 +386,7 @@ export const useControlCenterStore = defineStore('control-center', {
         return copyState(next)
       }
       this.pendingState = copyState(next)
+      if (browserTabAction) this.pendingBrowserTabAction = browserTabAction
       if (reveal) this.pendingReveal = { mode: visibilityMode() }
       if (this.saving) return copyState(next)
       const sessionId = this.sessionId
@@ -368,9 +399,12 @@ export const useControlCenterStore = defineStore('control-center', {
           && this.pendingState
         ) {
           const pending = this.pendingState
+          const action = this.pendingBrowserTabAction
           this.pendingState = null
+          this.pendingBrowserTabAction = null
           const { data } = await api.patch(`/sessions/${sessionId}`, {
-            control_center: controlCenterRequestState(pending)
+            control_center: controlCenterRequestState(pending),
+            ...(action ? { browser_tab_action: action } : {})
           })
           if (this.sessionId !== sessionId || this.requestGeneration !== generation) return null
           this.confirmedState = normalizeState(data.controlCenter)
@@ -379,13 +413,18 @@ export const useControlCenterStore = defineStore('control-center', {
       } catch (error) {
         if (this.sessionId === sessionId && this.requestGeneration === generation) {
           this.pendingState = null
+          this.pendingBrowserTabAction = null
           this.pendingReveal = null
           this.applyState(this.confirmedState)
+          if (error.response?.status === 409) this.refreshBrowserTabAfterSave = true
         }
         throw error
       } finally {
         if (this.sessionId === sessionId && this.requestGeneration === generation) {
           this.saving = false
+          const refresh = this.refreshBrowserTabAfterSave && !this.browserTabHandled
+          this.refreshBrowserTabAfterSave = false
+          if (refresh) void useChatStore().refreshSession(sessionId).catch(() => {})
         }
       }
       if (this.sessionId !== sessionId || this.requestGeneration !== generation) return null
@@ -458,7 +497,7 @@ export const useControlCenterStore = defineStore('control-center', {
         tabs: exists ? this.tabs : [...this.tabs, appTab(appId)],
         activeAppId: appId,
         fileView: this.fileView
-      }, { reveal: true })
+      }, { reveal: true, browserTabAction: appId === 'browser' && !exists ? 'add' : null })
     },
     ensureApp(appId) {
       if (!controlCenterIntegrationIds.has(appId) || this.tabs.some((tab) => tab.appId === appId)) return
@@ -466,7 +505,7 @@ export const useControlCenterStore = defineStore('control-center', {
         tabs: [...this.tabs, appTab(appId)],
         activeAppId: this.activeAppId,
         fileView: this.fileView
-      })
+      }, { browserTabAction: appId === 'browser' ? 'add' : null })
     },
     cancelPendingReveal() {
       this.pendingReveal = null
@@ -511,7 +550,9 @@ export const useControlCenterStore = defineStore('control-center', {
       const activeAppId = this.activeAppId === appId
         ? this.tabs[index + 1]?.tabId || this.tabs[index - 1]?.tabId || null
         : this.activeAppId
-      return this.save({ tabs, activeAppId, fileView: this.fileView })
+      return this.save({ tabs, activeAppId, fileView: this.fileView }, {
+        browserTabAction: appId === 'browser' ? 'remove' : null
+      })
     },
     async reorderIntegration(appId, targetAppId, after = false) {
       if (appId === targetAppId || controlCenterFixedAppIds.has(appId)) return

@@ -2019,8 +2019,27 @@ async def update_session(
         item.is_pinned = payload.pinned
     if "control_center" in fields:
         control_center = payload.control_center.model_dump(mode="json")
-        if "todos_collapsed" in (item.control_center or {}):
-            control_center["todos_collapsed"] = item.control_center["todos_collapsed"]
+        previous = item.control_center or {}
+        if "todos_collapsed" in previous:
+            control_center["todos_collapsed"] = previous["todos_collapsed"]
+        browser = next((tab for tab in previous.get("tabs", []) if tab.get("app_id") == "browser"), None)
+        tabs = control_center["tabs"]
+        has_browser = any(tab["app_id"] == "browser" for tab in tabs)
+        browser_action = payload.browser_tab_action
+        if browser_action == "add" and not has_browser:
+            raise SessionServiceError(422, "validation.invalid", field="control_center")
+        if previous.get("browser_tab_handled") or browser_action == "remove":
+            control_center["browser_tab_handled"] = True
+        # Full layout writes may be stale. Only explicit actions change browser membership.
+        if browser_action == "remove" or (browser is None and browser_action != "add"):
+            if has_browser:
+                control_center["tabs"] = [tab for tab in tabs if tab["app_id"] != "browser"]
+                if control_center["active_app_id"] == "browser":
+                    control_center["active_app_id"] = "session"
+        elif browser is not None and not has_browser:
+            if len(tabs) >= 21:
+                raise SessionServiceError(409, "http.conflict", field="control_center")
+            tabs.append(browser)
         item.control_center = control_center
     if "todos_collapsed" in fields and payload.todos_collapsed is not None:
         item.control_center = {

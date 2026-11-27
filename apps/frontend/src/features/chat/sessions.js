@@ -668,6 +668,7 @@ export const sessionsActions = {
               session.nextMessageCursor = this.current.nextMessageCursor
             }
             this.applySessionResult(session)
+            useControlCenterStore().syncBrowserTab(session)
             this.loadError = null
             if (session.activeRun && this.runId !== session.activeRun.id) {
               this.watchRun(id, session.activeRun.id, session.activeRun)

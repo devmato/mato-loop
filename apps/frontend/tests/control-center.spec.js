@@ -302,7 +302,29 @@ describe('control center store', () => {
     expect(store.activeAppId).toBe('files')
     expect(api.patch).toHaveBeenCalledOnce()
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
-      control_center: requestState(['session', 'files', 'browser'], 'files')
+      control_center: requestState(['session', 'files', 'browser'], 'files'),
+      browser_tab_action: 'add'
+    })
+  })
+
+  it('keeps an explicit Browser removal when a later layout write is queued', async () => {
+    let finishSave
+    api.patch.mockReturnValueOnce(new Promise(resolve => { finishSave = resolve }))
+      .mockResolvedValueOnce(response([tab('files')], 'session'))
+    const store = useControlCenterStore()
+    store.syncSession({
+      id: 'session-1', controlCenter: { tabs: [tab('files'), tab('browser')], activeAppId: 'session' }
+    })
+
+    const saving = store.activate('files')
+    await store.removeIntegration('browser')
+    await store.activate('session')
+    finishSave(response([tab('files'), tab('browser')], 'files'))
+    await saving
+
+    expect(api.patch).toHaveBeenLastCalledWith('/sessions/session-1', {
+      control_center: requestState(['session', 'files'], 'session'),
+      browser_tab_action: 'remove'
     })
   })
 

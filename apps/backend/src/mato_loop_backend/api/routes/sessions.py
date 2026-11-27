@@ -185,6 +185,7 @@ class SessionUpdateRequest(BaseModel):
     preferred_execution_agent_id: UUID | None = None
     current_directory: str | None = Field(default=None, max_length=4_096)
     control_center: ControlCenterState = Field(default=None)
+    browser_tab_action: Literal["add", "remove"] | None = None
 
 
 class SendMessageRequest(BaseModel):
@@ -352,7 +353,7 @@ def session_payload(
     try:
         control_center = ControlCenterState.model_validate(
             {key: value for key, value in item.control_center.items()
-             if key not in {"terminal_auto_attach", "todos_collapsed", "conversation_fork"}}
+             if key not in {"terminal_auto_attach", "todos_collapsed", "conversation_fork", "browser_tab_handled"}}
             if item.control_center else default_control_center_state()
         ).model_dump(mode="json")
     except (RootFileError, ValidationError):

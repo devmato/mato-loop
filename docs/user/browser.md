@@ -9,7 +9,7 @@ Mit der Browser-Integration bedienst du gemeinsam mit dem Agenten Webseiten im s
 3. Wähle denselben Computer in der Session und erlaube die Verbindung für das gewünschte Profil. Plan, Build, Interactive und Sysadmin schließen Integrationen standardmäßig aus.
 4. Öffne **Control Center > Browser** oder bitte den Agenten, eine Webseite aufzurufen.
 
-Browser-Tools starten die Laufzeit auch ohne geöffnete App. Abgelehnte Hostpakete können die Funktion unverfügbar lassen.
+Browser-Tools starten die Laufzeit auch ohne geöffnete App. Beim ersten Einsatz in einer Session erscheint der **Browser** als Tab, ohne das Control Center zu öffnen oder den aktiven Tab zu wechseln. Wenn du den Browser-Tab schließt, kannst du ihn bei Bedarf über den Launcher wieder hinzufügen. Abgelehnte Hostpakete können die Funktion unverfügbar lassen.
 
 Bei nativen Agent-Updates bleibt die eingerichtete Browser-Unterstützung erhalten. Das Update prüft die passende Chromium-Version vor der Aktivierung. Fehlen zusätzliche Systempakete, bleibt die bisherige Agent-Version aktiv. Kläre die fehlenden Pakete vor einem erneuten Update und bestätige ihre Installation ausdrücklich.
 

@@ -2042,6 +2042,44 @@ describe('chat drafts', () => {
     expect(chat.sessions[0].activeRunStatus).toBe('running')
   })
 
+  it.each([false, true])('adds the Browser tab without revealing the panel (concurrent save: %s)', async (saving) => {
+    global.EventSource = EventSourceMock
+    const chat = useChatStore()
+    const controlCenter = useControlCenterStore()
+    const tab = (appId) => ({ appId, tabId: appId, kind: 'app', pinned: false })
+    const tabs = [tab('session'), tab('files')]
+    chat.current = { id: 'session-1', messages: [], controlCenter: { tabs, activeAppId: 'files' } }
+    chat.selectedSessionId = 'session-1'
+    controlCenter.syncSession(chat.current)
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+    const updated = { data: {
+      ...chat.current,
+      controlCenter: { tabs: [...tabs, tab('browser')], activeAppId: 'session', browserTabHandled: true }
+    } }
+    api.get.mockResolvedValueOnce(updated)
+
+    let finishSave
+    let save
+    if (saving) {
+      api.get.mockResolvedValueOnce(updated)
+      api.patch.mockReturnValueOnce(new Promise(resolve => { finishSave = resolve }))
+      save = controlCenter.activate('session')
+    }
+
+    EventSourceMock.instances[0].emit('session.browserTabAdded', {})
+    await chat.sessionRefreshPromise
+    if (saving) {
+      finishSave({ data: { controlCenter: { tabs, activeAppId: 'session' } } })
+      await save
+      await chat.sessionRefreshPromise
+    }
+
+    expect([controlCenter.tabs, controlCenter.activeAppId, controlCenter.open]).toEqual([
+      [...tabs, tab('browser')], saving ? 'session' : 'files', false
+    ])
+    expect(api.patch).toHaveBeenCalledTimes(Number(saving))
+  })
+
   it('promotes a live runtime warning into the completed message', () => {
     global.EventSource = EventSourceMock
     api.get.mockResolvedValue(sessionPage())

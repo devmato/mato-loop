@@ -249,6 +249,7 @@ def test_tool_start_defers_restoration_until_authorized(env, monkeypatch, decisi
     monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
     monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(return_value=ToolSettings()))
     env.operations |= {"integration.browser.openview"}
+    env.session.control_center = {"tabs": [{"app_id": "files", "pinned": False}], "active_app_id": "files"}
     events = []
 
     async def reply(operation, arguments):
@@ -260,6 +261,7 @@ def test_tool_start_defers_restoration_until_authorized(env, monkeypatch, decisi
             return {"ok": True, "restoredTabs": 2}
 
     async def authorize(*_args, **_kwargs):
+        assert [tab["app_id"] for tab in env.session.control_center["tabs"]] == ["files"]
         events.append("permission")
         return decision
 
@@ -278,6 +280,18 @@ def test_tool_start_defers_restoration_until_authorized(env, monkeypatch, decisi
     result = env.client.portal.call(registry.execute, call, context)
     assert result.is_error == (decision == PermissionDecision.DENY), result.content
     assert events == (["permission", "restore"] if decision == PermissionDecision.ALLOW else ["permission"])
+    assert env.session.control_center["active_app_id"] == "files"
+    assert [tab["app_id"] for tab in env.session.control_center["tabs"]] == (
+        ["files", "browser"] if decision == PermissionDecision.ALLOW else ["files"]
+    )
+    if decision == PermissionDecision.ALLOW:
+        env.session.control_center = {**env.session.control_center, "tabs": [{"app_id": "files", "pinned": False}]}
+        # Reconnecting the runtime must not forget that the Browser tab was closed.
+        fresh_coordinator = execution.BrowserCoordinator()
+        monkeypatch.setattr(execution, "browser_coordinator", fresh_coordinator)
+        current = env.coordinator.connections[(env.session.id, env.agent.id)]
+        env.client.portal.call(fresh_coordinator._add_control_center_tab, current, context.run_id)
+        assert [tab["app_id"] for tab in env.session.control_center["tabs"]] == ["files"]
 
 
 @pytest.mark.parametrize("gate", ["default", "explicit", "missing-profile"])
@@ -726,6 +740,7 @@ def test_fill_form_permission_wire_and_partial_prefix(browser_tool, observe, err
 ])
 def test_fill_form_stale_or_denied_never_dispatches(browser_tool, change, code):
     case = browser_tool
+    case.env.session.control_center = {"tabs": [{"app_id": "files", "pinned": False}], "active_app_id": "files"}
     reply = case.env.reply
     if change == "source":
         case.call.arguments["snapshotSha256"] = "0" * 64
@@ -758,6 +773,7 @@ def test_fill_form_stale_or_denied_never_dispatches(browser_tool, change, code):
     case.env.reply = changed_reply
     result = case.env.client.portal.call(case.registry.execute, case.call, case.context)
     assert result.is_error and result.metadata["errorCode"] == code
+    assert [tab["app_id"] for tab in case.env.session.control_center["tabs"]] == ["files"]
     calls = [frame["arguments"] for frame in case.frames if frame.get("operation") == "integration.browser.execute"]
     assert all(call["action"] == "inspect" for call in calls)
     assert len(calls) == (0 if change == "source" else 2 if change in {"digest", "url"} else 1)

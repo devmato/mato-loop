@@ -283,6 +283,7 @@ def session_payload(
         "pinned": bool(item.is_pinned),
         "todosCollapsed": (item.control_center or {}).get("todos_collapsed") is True,
         "controlCenter": {
+            **({"browserTabHandled": True} if (item.control_center or {}).get("browser_tab_handled") else {}),
             "tabs": [_control_center_tab_payload(tab) for tab in control_center["tabs"]],
             "activeAppId": control_center["active_app_id"],
             "open": bool(control_center.get("open", False)),

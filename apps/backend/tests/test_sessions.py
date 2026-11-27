@@ -3564,6 +3564,47 @@ async def test_control_center_state_can_be_replaced() -> None:
     db.commit.assert_awaited_once()
 
 
+async def test_browser_auto_tab_survives_stale_layout_writes_but_can_be_closed() -> None:
+    user = _user()
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Test", memory_mode="disabled", control_center={
+        "tabs": [_stored_app_tab("session"), _stored_app_tab("browser")],
+        "active_app_id": "session", "browser_tab_handled": True,
+    })
+    db = AsyncMock(spec=AsyncSession)
+    without_browser = {"tabs": [], "active_app_id": "session"}
+    with_browser = {"tabs": [_stored_app_tab("browser")], "active_app_id": "browser"}
+    for layout, action, expected in [
+        (without_browser, None, ["session", "browser"]),
+        (without_browser, "remove", ["session"]),
+        (with_browser, None, ["session"]),
+        (with_browser, "add", ["session", "browser"]),
+    ]:
+        db.scalar.side_effect = [session.id, session, False]
+        result = await update_session(
+            session.id, SessionUpdateRequest(control_center=layout, browser_tab_action=action), user, db,
+        )
+        assert result["controlCenter"]["tabs"] == [_api_app_tab(app) for app in expected]
+        assert result["controlCenter"]["browserTabHandled"] is True
+
+
+async def test_full_stale_layout_cannot_evict_the_browser_tab() -> None:
+    user = _user()
+    tabs = [_stored_app_tab("session"), *[_stored_app_tab(f"app_{i}") for i in range(19)]]
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Test", control_center={
+        "tabs": [*tabs, _stored_app_tab("browser")],
+        "active_app_id": "session", "browser_tab_handled": True,
+    })
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session.id, session, False]
+    layout = {"tabs": [*tabs, _stored_app_tab("calendar")], "active_app_id": "calendar"}
+
+    with pytest.raises(ApiError, match="http.conflict") as error:
+        await update_session(session.id, SessionUpdateRequest(control_center=layout), user, db)
+
+    assert error.value.status_code == 409
+    assert session.control_center["tabs"][-1]["app_id"] == "browser"
+
+
 async def test_todo_collapse_state_round_trips_and_survives_layout_updates() -> None:
     user = _user()
     session = ChatSession(
