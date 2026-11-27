@@ -75,7 +75,7 @@ Reihenfolge, Dateiziele und Ansichten werden je Session gespeichert, Editorentw�
 
 ### Benachrichtigungen
 
-App-Meldungen erscheinen unten rechts am Fensterrand, auch wenn das Control Center geöffnet ist. Sie verschieben weder den Chat noch die Session-Tabs. Mit **Meldung schließen** (`×`) blendest du sie aus. Beim Update-Hinweis entspricht das **Später**; die automatische Verbindungsprüfung läuft auch nach dem Schließen weiter.
+Kurze App-Meldungen (Toasts) erscheinen auf schmalen Bildschirmen oben mittig unter der Kopfzeile, auf breiten Bildschirmen unten rechts. Das gilt auch bei geöffnetem Control Center. Verbindungs- und Update-Hinweise bleiben unten rechts. Mit **Meldung schließen** (`×`) blendest du Meldungen aus. Beim Update-Hinweis entspricht das **Später**; die automatische Verbindungsprüfung läuft auch nach dem Schließen weiter.
 
 Der globale Bereich **Benachrichtigungen** zeigt eine chronologische Liste. Sein Zähler zählt ausschließlich ungelesene Hinweise. Die schwebende Control-Center-Schaltfläche öffnet bei vorhandenem Zähler direkt diese Liste; sonst die zuletzt verwendete App.
 

@@ -14,9 +14,10 @@
   line-height: 1.1;
 }
 
-.app-shell {
+:root {
   --app-floating-control-size: 48px;
   --app-floating-control-inset: 12px;
+  --app-top-session-tabs-height: 33px;
 }
 
 .app-shell--chat > .q-page-container,
@@ -35,11 +36,12 @@
 .app-notices {
   --notice-right: max(12px, env(safe-area-inset-right));
   --notice-left: max(12px, env(safe-area-inset-left));
+  --notice-width: min(380px, calc(100% - var(--notice-left) - var(--notice-right)));
   position: fixed;
   z-index: 3000;
   right: var(--notice-right);
   bottom: max(12px, env(safe-area-inset-bottom));
-  width: min(380px, calc(100% - var(--notice-left) - var(--notice-right)));
+  width: var(--notice-width);
   &:not(:has(.app-notice-card)) { display: none; }
   display: grid;
   gap: 6px;
@@ -105,6 +107,25 @@
   }
 }
 
+@media (width < 1024px) {
+  // Move only transient Quasar toasts; persistent notices stay at the bottom.
+  .app-notices #q-notify {
+    position: fixed;
+    top: calc(env(safe-area-inset-top) + var(--app-floating-control-size) + 2 * var(--app-floating-control-inset));
+    left: var(--notice-left);
+    right: var(--notice-right);
+    width: var(--notice-width);
+    margin-inline: auto;
+    max-height: min(48dvh, 300px);
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+
+  body:has(.app-shell--top-session-tabs) .app-notices #q-notify {
+    margin-top: var(--app-top-session-tabs-height);
+  }
+}
+
 .app-notice {
   display: flex;
   align-items: flex-start;
@@ -128,7 +149,7 @@
 }
 
 .app-shell--top-session-tabs .app-floating-controls {
-  top: calc(33px + var(--app-floating-control-inset) + env(safe-area-inset-top));
+  top: calc(var(--app-top-session-tabs-height) + var(--app-floating-control-inset) + env(safe-area-inset-top));
 }
 
 .app-shell--chat .app-floating-controls {
