@@ -39,7 +39,7 @@ def test_browser_tool_starts_without_app_or_viewer(env, monkeypatch):
     registry = ToolRegistry([]).effective(integrations)
     result = env.client.portal.call(registry.execute, call, context)
     assert not result.is_error, result.content
-    assert env.session.control_center == {"tabs": []}
+    assert any(tab["app_id"] == "browser" for tab in env.session.control_center["tabs"])
     connection = env.coordinator.current_for(env.session.id, env.agent.id)
     assert connection is not None and not connection.sockets
     with env.client.websocket_connect(env.url, headers=ORIGIN) as socket:
